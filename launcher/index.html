@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0b0d12" />
+    <meta
+      name="description"
+      content="PortsLauncher — lanzador unificado de ports de juegos a PC, Linux y Android."
+    />
+    <title>PortsLauncher</title>
+
+    <!-- Preconexión a las CDN de Google Fonts (spec v5) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
+    <link rel="dns-prefetch" href="https://fonts.gstatic.com" />
+
+    <!-- Google Fonts: Chakra Petch (display) · DM Sans (texto) · JetBrains Mono (código) -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      />
+    </noscript>
+
+    <style>
+      /* ---------------------------------------------------------------------
+         Spec v5 — fuentes con fallback local.
+         Si las familias de Google Fonts no están disponibles (offline, CSP o
+         bloqueo de red), se resuelven las copias instaladas en el sistema vía
+         local(). Los alias `*-Local` se colocan antes de los fallbacks
+         genéricos para conservar métrica y aspecto del diseño.
+         --------------------------------------------------------------------- */
+      @font-face {
+        font-family: 'Chakra Petch Local';
+        font-style: normal;
+        font-weight: 400 700;
+        font-display: swap;
+        src: local('Chakra Petch'), local('ChakraPetch-Regular'),
+          local('ChakraPetch-Medium'), local('ChakraPetch-SemiBold'),
+          local('ChakraPetch-Bold');
+      }
+      @font-face {
+        font-family: 'DM Sans Local';
+        font-style: normal;
+        font-weight: 400 700;
+        font-display: swap;
+        src: local('DM Sans'), local('DMSans-Regular'), local('DMSans-Medium'),
+          local('DMSans-Bold'), local('DMSans-Italic');
+      }
+      @font-face {
+        font-family: 'JetBrains Mono Local';
+        font-style: normal;
+        font-weight: 400 700;
+        font-display: swap;
+        src: local('JetBrains Mono'), local('JetBrainsMono-Regular'),
+          local('JetBrainsMono-Medium'), local('JetBrainsMono-Bold');
+      }
+
+      :root {
+        --pl-font-display: 'Chakra Petch', 'Chakra Petch Local', 'Rajdhani',
+          'Segoe UI Semibold', system-ui, -apple-system, 'Segoe UI', sans-serif;
+        --pl-font-body: 'DM Sans', 'DM Sans Local', 'Inter', system-ui,
+          -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        --pl-font-mono: 'JetBrains Mono', 'JetBrains Mono Local', 'Fira Code',
+          ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono',
+          monospace;
+
+        --pl-bg: #0b0d12;
+        --pl-fg: #e8ecf4;
+        --pl-muted: #8b94a7;
+      }
+
+      html,
+      body {
+        height: 100%;
+      }
+
+      body {
+        margin: 0;
+        background: var(--pl-bg);
+        color: var(--pl-fg);
+        font-family: var(--pl-font-body);
+        font-size: 15px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+      }
+
+      h1,
+      h2,
+      h3,
+      h4,
+      h5,
+      h6,
+      .pl-display {
+        font-family: var(--pl-font-display);
+      }
+
+      code,
+      kbd,
+      pre,
+      samp,
+      .pl-mono {
+        font-family: var(--pl-font-mono);
+      }
+
+      /* Placeholder de arranque hasta que src/main.ts monta la aplicación */
+      #app:empty::after {
+        content: 'Cargando PortsLauncher…';
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        font-family: var(--pl-font-mono);
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--pl-muted);
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="app"></div>
+
+    <noscript>
+      <p style="padding: 2rem; text-align: center">
+        PortsLauncher necesita JavaScript para funcionar.
+      </p>
+    </noscript>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,1191 @@
+/* ==========================================================================
+   PortsLauncher · Fase 3 · media.css
+   Los 16 estilos de cartucho / disco (§8 y §8.1 de la spec v5).
+
+   Contrato de marcado (idéntico para los 16):
+
+     <div class="media n64 plat-n64" style="--w:132px;--h:120px">
+       <span class="body"></span>        <!-- silueta: clip-path + fondo -->
+       <span class="grill"></span>       <!-- estrías / rugosidad -->
+       <span class="label"></span>       <!-- etiqueta física -->
+       <span class="notch"></span>       <!-- muesca / lengüeta -->
+       <span class="slot"></span>        <!-- ranura de contacto -->
+       <span class="umd"></span>         <!-- ventana (sólo PSP) -->
+       <span class="hole"></span>        <!-- agujero central (discos) -->
+       <span class="shine"></span>       <!-- iridiscencia / reflejo -->
+       <span class="flag"></span>        <!-- insignia de aviso -->
+     </div>
+
+   Los spans sobrantes son inertes (width/height 0): un mismo componente
+   puede renderizar los 16 sin ramas en el código de plantilla.
+   Dimensiones: --w / --h en px (base) escaladas por --mz (zoom 1 = 100 %).
+   ========================================================================== */
+
+/* ==========================================================================
+   1. Contenedor genérico
+   ========================================================================== */
+
+.media {
+  --w: 132px;
+  --h: 120px;
+  --mz: 1;
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+  flex: 0 0 auto;
+  width: calc(var(--w) * var(--mz));
+  height: calc(var(--h) * var(--mz));
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.5))
+    drop-shadow(0 18px 26px rgba(0, 0, 0, 0.28));
+  transition: filter var(--dur) var(--ease), transform var(--dur) var(--ease);
+  transform: translateZ(0);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.media > span {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+/* Elementos opcionales invisibles por defecto. */
+.media > .grill,
+.media > .notch,
+.media > .slot,
+.media > .umd,
+.media > .hole,
+.media > .shine,
+.media > .flag:empty {
+  opacity: 0;
+}
+
+.media > .body {
+  inset: 0;
+  background: linear-gradient(160deg, var(--plat-body), #14121F 88%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.45);
+}
+
+.media:hover {
+  filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.55))
+    drop-shadow(0 22px 34px rgba(0, 0, 0, 0.34))
+    drop-shadow(0 0 14px color-mix(in srgb, var(--plat-neon) 32%, transparent));
+}
+
+.media.is-active,
+.media:focus-visible {
+  filter: drop-shadow(0 0 0 rgba(0, 0, 0, 0))
+    drop-shadow(0 0 18px color-mix(in srgb, var(--plat-neon) 55%, transparent));
+}
+
+/* Etiqueta genérica: la sobrescribe cada plataforma. */
+.media > .label {
+  left: 12%;
+  right: 12%;
+  top: 18%;
+  bottom: 24%;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--plat-sticker), #0E0C1C);
+  box-shadow: inset 0 0 0 1px rgba(243, 241, 255, 0.16),
+    inset 0 6px 12px rgba(0, 0, 0, 0.35);
+}
+
+/* ==========================================================================
+   2. Insignia de aviso (.flag)
+   Círculo 24px desplazado -9px, borde 2px del color de fondo.
+   ========================================================================== */
+
+.media > .flag,
+.flag {
+  position: absolute;
+  top: -9px;
+  left: -9px;
+  right: auto;
+  bottom: auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+  background: var(--warn);
+  color: #14041A;
+  font-family: var(--f-display);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  opacity: 1;
+  z-index: 3;
+  box-shadow: var(--shadow-s);
+}
+
+.flag[data-kind='danger'],
+.media > .flag[data-kind='danger'] {
+  background: var(--danger);
+  color: #220408;
+}
+
+.flag[data-kind='info'],
+.media > .flag[data-kind='info'] {
+  background: var(--accent2);
+  color: #04161A;
+}
+
+.flag[data-kind='ok'],
+.media > .flag[data-kind='ok'] {
+  background: var(--st-playable);
+  color: #06210F;
+}
+
+/* ==========================================================================
+   3. N64 — cartucho ancho, dos lengüetas superiores y ranura inferior
+   ========================================================================== */
+
+.media.n64 {
+  --w: 138px;
+  --h: 120px;
+}
+
+.media.n64 > .body {
+  clip-path: polygon(
+    0% 7%,
+    4% 2%,
+    26% 2%,
+    30% 0%,
+    70% 0%,
+    74% 2%,
+    96% 2%,
+    100% 7%,
+    100% 90%,
+    94% 100%,
+    6% 100%,
+    0% 90%
+  );
+  background: linear-gradient(165deg, #4A4F6E 0%, #3A3F5C 46%, #23263A 100%);
+}
+
+.media.n64 > .grill {
+  opacity: 0.55;
+  left: 8%;
+  right: 8%;
+  top: 6%;
+  height: 8%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.42) 0 2px,
+    transparent 2px 6px
+  );
+  clip-path: polygon(0 0, 100% 0, 96% 100%, 4% 100%);
+}
+
+.media.n64 > .label {
+  left: 13%;
+  right: 13%;
+  top: 22%;
+  bottom: 30%;
+  border-radius: 2px;
+  background: linear-gradient(170deg, #24305A, #161E3C 70%, #0E1226);
+  box-shadow: inset 0 0 0 1px rgba(143, 227, 107, 0.45),
+    inset 0 0 18px rgba(143, 227, 107, 0.12);
+}
+
+.media.n64 > .label::after {
+  content: '';
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  top: 22%;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--p-n64-neon),
+    transparent
+  );
+  opacity: 0.8;
+}
+
+.media.n64 > .notch {
+  opacity: 1;
+  left: 42%;
+  right: 42%;
+  bottom: 4%;
+  height: 6%;
+  border-radius: 2px;
+  background: #0B0A14;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+/* ==========================================================================
+   4. SNES — caja alta con arco superior, franja violeta y rejilla
+   ========================================================================== */
+
+.media.snes {
+  --w: 128px;
+  --h: 120px;
+}
+
+.media.snes > .body {
+  border-radius: 14px 14px 8px 8px;
+  clip-path: polygon(
+    0% 14%,
+    8% 3%,
+    92% 3%,
+    100% 14%,
+    100% 88%,
+    94% 100%,
+    6% 100%,
+    0% 88%
+  );
+  background: linear-gradient(170deg, #7E7AA6 0%, #6E6A93 40%, #3B3856 100%);
+}
+
+.media.snes > .grill {
+  opacity: 0.7;
+  left: 10%;
+  right: 10%;
+  bottom: 8%;
+  height: 14%;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.32) 0 2px,
+    transparent 2px 5px
+  );
+  border-radius: 3px;
+}
+
+.media.snes > .label {
+  left: 12%;
+  right: 12%;
+  top: 20%;
+  bottom: 28%;
+  border-radius: 4px;
+  background: linear-gradient(175deg, #322B62, #241F49 60%, #171330);
+  box-shadow: inset 0 0 0 1px rgba(176, 124, 255, 0.5),
+    inset 0 0 20px rgba(176, 124, 255, 0.16);
+}
+
+.media.snes > .label::before {
+  content: '';
+  position: absolute;
+  inset: 8% 6%;
+  border-radius: 2px;
+  border: 1px solid rgba(176, 124, 255, 0.35);
+  border-style: solid none none none;
+}
+
+/* ==========================================================================
+   5. NES — cartucho rectangular con franja roja y estrías laterales
+   ========================================================================== */
+
+.media.nes {
+  --w: 122px;
+  --h: 120px;
+}
+
+.media.nes > .body {
+  border-radius: 5px 5px 3px 3px;
+  clip-path: polygon(
+    1% 0%,
+    99% 0%,
+    100% 5%,
+    100% 95%,
+    97% 100%,
+    3% 100%,
+    0% 95%,
+    0% 5%
+  );
+  background: linear-gradient(168deg, #585169 0%, #4A4356 45%, #2C2738 100%);
+}
+
+.media.nes > .grill {
+  opacity: 0.85;
+  left: 5%;
+  right: 5%;
+  top: 10%;
+  height: 6%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.5) 0 2px,
+    rgba(255, 255, 255, 0.05) 2px 4px
+  );
+}
+
+.media.nes > .label {
+  left: 10%;
+  right: 10%;
+  top: 24%;
+  bottom: 26%;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #3A1C24 0%, #4A1A1A 55%, #2A0E12 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 107, 107, 0.55),
+    inset 0 -14px 20px rgba(0, 0, 0, 0.35);
+}
+
+.media.nes > .notch {
+  opacity: 1;
+  left: 12%;
+  right: 12%;
+  bottom: 10%;
+  height: 8%;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #1A1724, #0C0A12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* ==========================================================================
+   6. Mega Drive — cartucho cuadrado biselado, etiqueta roja y asa superior
+   ========================================================================== */
+
+.media.md {
+  --w: 126px;
+  --h: 120px;
+}
+
+.media.md > .body {
+  clip-path: polygon(
+    10% 0%,
+    90% 0%,
+    100% 9%,
+    100% 100%,
+    0% 100%,
+    0% 9%
+  );
+  background: linear-gradient(160deg, #2E3463 0%, #24284A 50%, #14162A 100%);
+}
+
+.media.md > .grill {
+  opacity: 0.8;
+  left: 0;
+  right: 0;
+  top: 4%;
+  height: 5%;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.6), transparent);
+}
+
+.media.md > .label {
+  left: 11%;
+  right: 11%;
+  top: 18%;
+  bottom: 22%;
+  border-radius: 3px;
+  background: linear-gradient(172deg, #1B2B62 0%, #122048 60%, #0A1230 100%);
+  box-shadow: inset 0 0 0 1px rgba(61, 123, 255, 0.55),
+    inset 0 8px 16px rgba(61, 123, 255, 0.1);
+}
+
+.media.md > .label::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 26%;
+  border-radius: 0 0 3px 3px;
+  background: linear-gradient(180deg, rgba(61, 123, 255, 0.22), transparent);
+}
+
+.media.md > .slot {
+  opacity: 1;
+  left: 14%;
+  right: 14%;
+  bottom: 8%;
+  height: 4px;
+  border-radius: 2px;
+  background: #05050C;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* ==========================================================================
+   7. GBA — cartucho pequeño con esquina superior izquierda recortada
+   ========================================================================== */
+
+.media.gba {
+  --w: 108px;
+  --h: 116px;
+}
+
+.media.gba > .body {
+  clip-path: polygon(
+    18% 0%,
+    100% 0%,
+    100% 100%,
+    0% 100%,
+    0% 18%
+  );
+  background: linear-gradient(165deg, #33336A 0%, #2A2A50 52%, #171730 100%);
+}
+
+.media.gba > .grill {
+  opacity: 0.6;
+  left: 6%;
+  right: 6%;
+  bottom: 6%;
+  height: 10%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.45) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.media.gba > .label {
+  left: 12%;
+  right: 12%;
+  top: 14%;
+  bottom: 32%;
+  border-radius: 2px;
+  background: linear-gradient(175deg, #23235C, #171740 62%, #0D0D26);
+  box-shadow: inset 0 0 0 1px rgba(123, 123, 255, 0.5);
+}
+
+.media.gba > .notch {
+  opacity: 1;
+  left: 0;
+  top: 0;
+  width: 18%;
+  height: 18%;
+  background: linear-gradient(
+    135deg,
+    transparent calc(50% - 1px),
+    rgba(123, 123, 255, 0.45) calc(50% - 1px),
+    rgba(123, 123, 255, 0.45) calc(50% + 1px),
+    transparent calc(50% + 1px)
+  );
+}
+
+/* ==========================================================================
+   8. Game Boy — cartucho estrecho, esquinas vivas y muesca inferior
+   ========================================================================== */
+
+.media.gb {
+  --w: 100px;
+  --h: 116px;
+}
+
+.media.gb > .body {
+  border-radius: 8px 8px 3px 3px;
+  clip-path: polygon(
+    6% 0%,
+    94% 0%,
+    100% 6%,
+    100% 92%,
+    94% 100%,
+    6% 100%,
+    0% 92%,
+    0% 6%
+  );
+  background: linear-gradient(168deg, #A2A28C 0%, #8C8C7A 46%, #5D5D50 100%);
+}
+
+.media.gb > .grill {
+  opacity: 0.9;
+  left: 8%;
+  right: 8%;
+  top: 5%;
+  height: 5%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.45) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.media.gb > .label {
+  left: 11%;
+  right: 11%;
+  top: 17%;
+  bottom: 28%;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(180deg, #2C3A14, #1F2A0E 55%, #131A08);
+  box-shadow: inset 0 0 0 1px rgba(155, 188, 15, 0.55);
+}
+
+.media.gb > .label::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 30%;
+  height: 34%;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(155, 188, 15, 0.16) 0 1px,
+    transparent 1px 4px
+  );
+}
+
+.media.gb > .slot {
+  opacity: 1;
+  left: 20%;
+  right: 20%;
+  bottom: 6%;
+  height: 5%;
+  border-radius: 0 0 3px 3px;
+  background: #22221A;
+  box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.75);
+}
+
+/* ==========================================================================
+   9. NDS — cartucho bajo con esquinas superiores biseladas
+   ========================================================================== */
+
+.media.nds {
+  --w: 116px;
+  --h: 116px;
+}
+
+.media.nds > .body {
+  clip-path: polygon(
+    0% 10%,
+    10% 0%,
+    90% 0%,
+    100% 10%,
+    100% 90%,
+    90% 100%,
+    10% 100%,
+    0% 90%
+  );
+  background: linear-gradient(165deg, #55546E 0%, #4B4A63 50%, #2B2A3C 100%);
+}
+
+.media.nds > .grill {
+  opacity: 0.75;
+  left: 10%;
+  right: 10%;
+  top: 4%;
+  height: 6%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.5) 0 3px,
+    transparent 3px 7px
+  );
+}
+
+.media.nds > .label {
+  left: 14%;
+  right: 14%;
+  top: 20%;
+  bottom: 26%;
+  border-radius: 2px;
+  background: linear-gradient(175deg, #3B1A3E, #2A0F2C 60%, #17061A);
+  box-shadow: inset 0 0 0 1px rgba(255, 93, 162, 0.5);
+}
+
+.media.nds > .label::after {
+  content: '';
+  position: absolute;
+  inset: auto 12% 12% 12%;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--p-nds-neon), transparent);
+  opacity: 0.75;
+}
+
+/* ==========================================================================
+   10. 3DS — cartucho con pestaña superior derecha y lengüeta lateral
+   ========================================================================== */
+
+.media.n3ds {
+  --w: 120px;
+  --h: 112px;
+}
+
+.media.n3ds > .body {
+  clip-path: polygon(
+    0% 8%,
+    6% 0%,
+    76% 0%,
+    82% 6%,
+    100% 6%,
+    100% 94%,
+    94% 100%,
+    6% 100%,
+    0% 92%
+  );
+  background: linear-gradient(168deg, #4A3E6E 0%, #3B3358 48%, #221D36 100%);
+}
+
+.media.n3ds > .grill {
+  opacity: 0.6;
+  left: 8%;
+  right: 8%;
+  bottom: 7%;
+  height: 8%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.4) 0 2px,
+    transparent 2px 6px
+  );
+}
+
+.media.n3ds > .label {
+  left: 12%;
+  right: 22%;
+  top: 22%;
+  bottom: 28%;
+  border-radius: 2px;
+  background: linear-gradient(175deg, #3A1436, #2C0F2A 58%, #170614);
+  box-shadow: inset 0 0 0 1px rgba(255, 79, 163, 0.55);
+}
+
+.media.n3ds > .notch {
+  opacity: 1;
+  right: 0;
+  top: 18%;
+  width: 6%;
+  height: 40%;
+  border-radius: 2px 0 0 2px;
+  background: #0C0916;
+  box-shadow: inset 1px 0 2px rgba(0, 0, 0, 0.8);
+}
+
+/* ==========================================================================
+   11. Switch — cartucho mini con muesca inferior derecha
+   ========================================================================== */
+
+.media.nsw {
+  --w: 96px;
+  --h: 112px;
+}
+
+.media.nsw > .body {
+  clip-path: polygon(
+    4% 0%,
+    96% 0%,
+    100% 4%,
+    100% 82%,
+    82% 100%,
+    4% 100%,
+    0% 96%,
+    0% 4%
+  );
+  background: linear-gradient(165deg, #3A2A44 0%, #2B2036 52%, #17101F 100%);
+}
+
+.media.nsw > .grill {
+  opacity: 0.65;
+  left: 10%;
+  right: 10%;
+  top: 5%;
+  height: 5%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 60, 60, 0.5) 0 2px,
+    transparent 2px 6px
+  );
+}
+
+.media.nsw > .label {
+  left: 14%;
+  right: 14%;
+  top: 18%;
+  bottom: 26%;
+  border-radius: 2px;
+  background: linear-gradient(175deg, #3C1120, #2A0B12 60%, #14040A);
+  box-shadow: inset 0 0 0 1px rgba(255, 60, 60, 0.5);
+}
+
+.media.nsw > .notch {
+  opacity: 1;
+  right: 0;
+  bottom: 0;
+  width: 18%;
+  height: 18%;
+  background: linear-gradient(
+    45deg,
+    transparent calc(50% - 1px),
+    rgba(255, 60, 60, 0.4) calc(50% - 1px),
+    rgba(255, 60, 60, 0.4) calc(50% + 1px),
+    transparent calc(50% + 1px)
+  );
+}
+
+/* ==========================================================================
+   12. PSP — UMD: carcasa cuadrada con ventana circular iridiscente
+   ========================================================================== */
+
+.media.psp {
+  --w: 116px;
+  --h: 116px;
+}
+
+.media.psp > .body {
+  border-radius: 8px;
+  clip-path: polygon(
+    8% 0%,
+    92% 0%,
+    100% 8%,
+    100% 92%,
+    92% 100%,
+    8% 100%,
+    0% 92%,
+    0% 8%
+  );
+  background: linear-gradient(160deg, #2E3A4C 0%, #26303F 48%, #121820 100%);
+}
+
+.media.psp > .umd {
+  opacity: 1;
+  left: 14%;
+  top: 14%;
+  width: 72%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+      circle at 34% 28%,
+      rgba(255, 255, 255, 0.42),
+      transparent 42%
+    ),
+    conic-gradient(
+      from 210deg,
+      #3DE8FF,
+      #7A5CFF,
+      #FF4FA3,
+      #FFC857,
+      #5CF08A,
+      #3DE8FF
+    );
+  box-shadow: inset 0 0 0 2px rgba(10, 9, 18, 0.85),
+    inset 0 0 22px rgba(0, 0, 0, 0.45), 0 0 14px rgba(61, 232, 255, 0.22);
+}
+
+.media.psp > .hole {
+  opacity: 1;
+  left: 42%;
+  top: 42%;
+  width: 16%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, #0A0912 0 55%, #1C1938 100%);
+  box-shadow: inset 0 0 0 2px rgba(243, 241, 255, 0.35);
+}
+
+.media.psp > .slot {
+  opacity: 1;
+  left: 12%;
+  bottom: 5%;
+  right: 12%;
+  height: 4%;
+  border-radius: 2px;
+  background: #05070C;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+/* ==========================================================================
+   13. CD — disco genérico con iridiscencia y agujero central
+   ========================================================================== */
+
+.media.cd {
+  --w: 116px;
+  --h: 116px;
+}
+
+.media.cd > .body {
+  border-radius: 50%;
+  background: radial-gradient(
+      circle at 50% 50%,
+      transparent 0 17%,
+      rgba(255, 255, 255, 0.1) 17.5% 18.5%,
+      transparent 19%
+    ),
+    conic-gradient(
+      from 0deg,
+      #CBD5E1,
+      #94A3B8,
+      #E2E8F0,
+      #A5B4FC,
+      #C7D2FE,
+      #CBD5E1
+    );
+  box-shadow: inset 0 0 0 1px rgba(243, 241, 255, 0.25),
+    inset 0 0 26px rgba(0, 0, 0, 0.28);
+}
+
+.media.cd > .shine {
+  opacity: 1;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 40deg,
+    transparent 0deg 42deg,
+    rgba(61, 232, 255, 0.35) 55deg,
+    rgba(255, 79, 163, 0.32) 78deg,
+    rgba(255, 200, 87, 0.28) 96deg,
+    transparent 118deg
+  );
+  mix-blend-mode: screen;
+}
+
+.media.cd > .hole {
+  opacity: 1;
+  left: 41%;
+  top: 41%;
+  width: 18%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--bg) 0 52%, #C9C4E0 53% 76%, #8E89B0 80%, transparent 82%);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+}
+
+/* ==========================================================================
+   14. PS1 — disco negro con etiqueta plateada y anillo de licencia
+   ========================================================================== */
+
+.media.ps1 {
+  --w: 116px;
+  --h: 116px;
+}
+
+.media.ps1 > .body {
+  border-radius: 50%;
+  background: radial-gradient(
+      circle at 50% 50%,
+      transparent 0 18%,
+      rgba(255, 255, 255, 0.08) 18.5% 19.5%,
+      transparent 20%
+    ),
+    conic-gradient(
+      from 120deg,
+      #1A1830,
+      #2A2748,
+      #141227,
+      #221F3A,
+      #1A1830
+    );
+  box-shadow: inset 0 0 0 1px rgba(201, 196, 224, 0.28),
+    inset 0 0 28px rgba(0, 0, 0, 0.55);
+}
+
+.media.ps1 > .label {
+  left: 26%;
+  right: 26%;
+  top: 26%;
+  bottom: 26%;
+  border-radius: 50%;
+  background: radial-gradient(
+      circle at 38% 32%,
+      rgba(255, 255, 255, 0.22),
+      transparent 55%
+    ),
+    linear-gradient(170deg, #4A4670, #2A2748 60%, #171432);
+  box-shadow: inset 0 0 0 1px rgba(201, 196, 224, 0.45);
+}
+
+.media.ps1 > .shine {
+  opacity: 0.8;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 200deg,
+    transparent 0deg 60deg,
+    rgba(201, 196, 224, 0.28) 70deg,
+    rgba(122, 92, 255, 0.24) 92deg,
+    transparent 108deg
+  );
+  mix-blend-mode: screen;
+}
+
+.media.ps1 > .hole {
+  opacity: 1;
+  left: 43%;
+  top: 43%;
+  width: 14%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--bg) 0 52%, #C9C4E0 53% 74%, #6E6A93 78%, transparent 80%);
+}
+
+/* ==========================================================================
+   15. GameCube — miniDVD índigo (80 mm)
+   ========================================================================== */
+
+.media.gcn {
+  --w: 94px;
+  --h: 94px;
+}
+
+.media.gcn > .body {
+  border-radius: 50%;
+  background: radial-gradient(
+      circle at 50% 50%,
+      transparent 0 20%,
+      rgba(255, 255, 255, 0.1) 21% 22%,
+      transparent 23%
+    ),
+    conic-gradient(
+      from 60deg,
+      #3A2C6E,
+      #7A5CFF,
+      #4A3490,
+      #2A1F55,
+      #3A2C6E
+    );
+  box-shadow: inset 0 0 0 1px rgba(122, 92, 255, 0.45),
+    inset 0 0 22px rgba(0, 0, 0, 0.4);
+}
+
+.media.gcn > .shine {
+  opacity: 1;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 10deg,
+    transparent 0deg 50deg,
+    rgba(122, 92, 255, 0.45) 64deg,
+    rgba(61, 232, 255, 0.3) 84deg,
+    transparent 104deg
+  );
+  mix-blend-mode: screen;
+}
+
+.media.gcn > .hole {
+  opacity: 1;
+  left: 40%;
+  top: 40%;
+  width: 20%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--bg) 0 50%, #C9C4E0 51% 72%, #5C4C9E 76%, transparent 78%);
+}
+
+/* ==========================================================================
+   16. Xbox — disco verde translúcido con anillo interior
+   ========================================================================== */
+
+.media.xbox {
+  --w: 116px;
+  --h: 116px;
+}
+
+.media.xbox > .body {
+  border-radius: 50%;
+  background: radial-gradient(
+      circle at 50% 50%,
+      transparent 0 19%,
+      rgba(92, 240, 138, 0.28) 20% 21%,
+      transparent 22%
+    ),
+    conic-gradient(
+      from 300deg,
+      #0E2A1A,
+      #1C4A2C,
+      #0A1F14,
+      #226B3A,
+      #0E2A1A
+    );
+  box-shadow: inset 0 0 0 1px rgba(92, 240, 138, 0.4),
+    inset 0 0 26px rgba(0, 0, 0, 0.45);
+}
+
+.media.xbox > .shine {
+  opacity: 0.9;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 150deg,
+    transparent 0deg 55deg,
+    rgba(92, 240, 138, 0.4) 68deg,
+    rgba(61, 232, 255, 0.22) 90deg,
+    transparent 110deg
+  );
+  mix-blend-mode: screen;
+}
+
+.media.xbox > .hole {
+  opacity: 1;
+  left: 42%;
+  top: 42%;
+  width: 16%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--bg) 0 50%, #5CF08A 51% 70%, #1C4A2C 74%, transparent 76%);
+}
+
+/* Xbox conserva el .label como "sello" central opcional. */
+.media.xbox > .label {
+  left: 34%;
+  right: 34%;
+  top: 34%;
+  bottom: 34%;
+  border-radius: 50%;
+  opacity: 0.9;
+  background: radial-gradient(circle at 36% 30%, #2C7A46, #0B2A18 70%);
+  box-shadow: inset 0 0 0 1px rgba(92, 240, 138, 0.5);
+}
+
+/* ==========================================================================
+   17. PS2 — CD-ROM azul con franja de datos
+   ========================================================================== */
+
+.media.ps2 {
+  --w: 116px;
+  --h: 116px;
+}
+
+.media.ps2 > .body {
+  border-radius: 50%;
+  background: radial-gradient(
+      circle at 50% 50%,
+      transparent 0 18%,
+      rgba(160, 190, 255, 0.22) 19% 20%,
+      transparent 21%
+    ),
+    conic-gradient(
+      from 240deg,
+      #101A44,
+      #2A46A0,
+      #152A6B,
+      #0A1230,
+      #101A44
+    );
+  box-shadow: inset 0 0 0 1px rgba(79, 124, 255, 0.45),
+    inset 0 0 26px rgba(0, 0, 0, 0.42);
+}
+
+.media.ps2 > .shine {
+  opacity: 1;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 80deg,
+    transparent 0deg 48deg,
+    rgba(79, 124, 255, 0.45) 62deg,
+    rgba(61, 232, 255, 0.3) 82deg,
+    rgba(255, 79, 163, 0.16) 96deg,
+    transparent 116deg
+  );
+  mix-blend-mode: screen;
+}
+
+.media.ps2 > .label {
+  left: 30%;
+  right: 30%;
+  top: 30%;
+  bottom: 30%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 32%, #E8EEFF, #AFC2FF 46%, #4F7CFF 92%);
+  opacity: 0.92;
+}
+
+.media.ps2 > .hole {
+  opacity: 1;
+  left: 43%;
+  top: 43%;
+  width: 14%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--bg) 0 52%, #AFC2FF 53% 74%, #29418C 78%, transparent 80%);
+}
+
+/* ==========================================================================
+   18. Xbox 360 — disco claro con anillo lima
+   ========================================================================== */
+
+.media.x360 {
+  --w: 116px;
+  --h: 116px;
+}
+
+.media.x360 > .body {
+  border-radius: 50%;
+  background: radial-gradient(
+      circle at 50% 50%,
+      transparent 0 19%,
+      rgba(180, 232, 92, 0.24) 20% 21%,
+      transparent 22%
+    ),
+    conic-gradient(
+      from 20deg,
+      #E6EFDC,
+      #C6D8B4,
+      #F2F8EA,
+      #B8D49A,
+      #E6EFDC
+    );
+  box-shadow: inset 0 0 0 1px rgba(180, 232, 92, 0.5),
+    inset 0 0 24px rgba(0, 0, 0, 0.22);
+}
+
+.media.x360 > .shine {
+  opacity: 1;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 260deg,
+    transparent 0deg 52deg,
+    rgba(180, 232, 92, 0.5) 64deg,
+    rgba(61, 232, 255, 0.26) 86deg,
+    rgba(255, 79, 163, 0.18) 100deg,
+    transparent 120deg
+  );
+  mix-blend-mode: screen;
+}
+
+.media.x360 > .label {
+  left: 32%;
+  right: 32%;
+  top: 32%;
+  bottom: 32%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 30%, #F6FBEF, #CBE39C 48%, #7FA845 96%);
+  opacity: 0.94;
+}
+
+.media.x360 > .hole {
+  opacity: 1;
+  left: 43%;
+  top: 43%;
+  width: 14%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--bg) 0 52%, #DCEBC6 53% 74%, #7FA845 78%, transparent 80%);
+}
+
+/* ==========================================================================
+   19. Modificadores de tamaño y accesibilidad
+   ========================================================================== */
+
+.media.sz-s { --mz: 0.62; }
+.media.sz-m { --mz: 0.82; }
+.media.sz-l { --mz: 1.18; }
+.media.sz-xl { --mz: 1.55; }
+
+.media.is-ghost {
+  filter: grayscale(1) brightness(0.7) drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
+  opacity: 0.7;
+}
+
+.media.is-ghost > .flag {
+  filter: none;
+  opacity: 1;
+}
+
+/* Zona de aterrizaje / placeholder */
+.media.is-empty > .body {
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(45, 41, 88, 0.6) 0 6px,
+    rgba(28, 25, 56, 0.6) 6px 12px
+  );
+  clip-path: none;
+  border-radius: var(--r-m);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.media.is-empty > .label {
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .media,
+  .media:hover {
+    transition: none;
+    filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.5));
+  }
+}

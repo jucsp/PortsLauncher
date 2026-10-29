@@ -1,0 +1,610 @@
+/* ==========================================================================
+   PortsLauncher · Fase 3 · tokens.css
+   Sistema de diseño v5 — capa de tokens (única fuente de verdad).
+   No define componentes: sólo variables, resets neutros y utilidades de color.
+   ========================================================================== */
+
+:root {
+  /* --- Paleta base ------------------------------------------------------ */
+  --bg: #0A0912;
+  --panel: #13112A;
+  --panel2: #1C1938;
+  --line: #2D2958;
+  --text: #F3F1FF;
+  --muted: #A9A4D4;
+  --accent: #FF4FA3;
+  --accent2: #3DE8FF;
+  --onaccent: #1A0516;
+  --warn: #FFC857;
+  --danger: #FF5A5A;
+
+  /* --- Tipografías ------------------------------------------------------ */
+  /* Cadena completa: Google Fonts -> alias local (@font-face local()) ->
+     sustituto libre -> pila del sistema. */
+  --f-display: 'Chakra Petch', 'Chakra Petch Local', 'Rajdhani',
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --f-body: 'DM Sans', 'DM Sans Local', 'Inter',
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --f-mono: 'JetBrains Mono', 'JetBrains Mono Local', 'Fira Code',
+    ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+
+  --f-w-display: 700;
+  --f-w-body: 400;
+  --f-w-strong: 700;
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-s: 12px;
+  --fs-m: 14px;
+  --fs-l: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 26px;
+  --fs-3xl: 34px;
+  --lh-tight: 1.15;
+  --lh-body: 1.5;
+  --ls-caps: 0.12em;
+
+  /* --- Fondo radial global --------------------------------------------- */
+  --bg-gradient:
+    radial-gradient(1120px 640px at 10% -10%, rgba(255, 79, 163, 0.17), transparent 62%),
+    radial-gradient(940px 580px at 94% 2%, rgba(61, 232, 255, 0.13), transparent 60%),
+    radial-gradient(860px 560px at 50% 112%, rgba(122, 92, 255, 0.16), transparent 66%),
+    radial-gradient(620px 420px at 76% 84%, rgba(255, 200, 87, 0.06), transparent 68%),
+    linear-gradient(180deg, #0A0912 0%, #0B0A16 46%, #08070F 100%);
+
+  /* Retícula tenue para dar profundidad arcade al fondo. */
+  --bg-grid: repeating-linear-gradient(
+      to right,
+      rgba(45, 41, 88, 0.35) 0 1px,
+      transparent 1px 64px
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(45, 41, 88, 0.22) 0 1px,
+      transparent 1px 64px
+    );
+
+  /* --- Superficies derivadas ------------------------------------------- */
+  --panel-hi: #221E46;
+  --panel-lo: #0F0D22;
+  --glass: rgba(19, 17, 42, 0.72);
+  --scrim: rgba(5, 4, 12, 0.66);
+  --line-soft: rgba(45, 41, 88, 0.55);
+  --line-hi: rgba(169, 164, 212, 0.24);
+
+  /* --- Estados de desarrollo (§ color de estado) ------------------------ */
+  --st-playable: #5CF08A;
+  --st-bugs: #FF9A3D;
+  --st-wip: #7DB7FF;
+  --st-exp: #C58CFF;
+  --st-abandoned: #9A96B8;
+  --st-nodata: #9A96B8;
+
+  /* Aliases semánticos (evitan recordar el nombre corto). */
+  --st-experimental: var(--st-exp);
+  --st-playable-ink: #06210F;
+  --st-bugs-ink: #2A1400;
+  --st-wip-ink: #04182E;
+  --st-exp-ink: #1D0A33;
+  --st-neutral-ink: #14041A;
+
+  /* --- Colores por plataforma (PLAT) ------------------------------------ */
+  /* Cada plataforma expone tres tokens:
+       --plat-neon     : color de neón / repisa / halo
+       --plat-sticker  : fondo de la "pegatina" de la etiqueta
+       --plat-ink      : tinta sobre la pegatina
+     y su alias genérico reasignado por las clases .plat-* del final. */
+
+  /* N64 — azul acero con verde lima de logotipo. */
+  --p-n64-neon: #8FE36B;
+  --p-n64-sticker: #1D2A52;
+  --p-n64-ink: #E9F5FF;
+  --p-n64-body: #3A3F5C;
+
+  /* SNES — violeta/gris de la consola PAL. */
+  --p-snes-neon: #B07CFF;
+  --p-snes-sticker: #2A2450;
+  --p-snes-ink: #F4EEFF;
+  --p-snes-body: #6E6A93;
+
+  /* NES — rojo de la franja frontal. */
+  --p-nes-neon: #FF6B6B;
+  --p-nes-sticker: #2B1A2B;
+  --p-nes-ink: #FFECEC;
+  --p-nes-body: #4A4356;
+
+  /* Mega Drive — azul SEGA. */
+  --p-md-neon: #3D7BFF;
+  --p-md-sticker: #14204A;
+  --p-md-ink: #E6EEFF;
+  --p-md-body: #24284A;
+
+  /* GBA — índigo del cartucho. */
+  --p-gba-neon: #7B7BFF;
+  --p-gba-sticker: #1B1B3C;
+  --p-gba-ink: #EDECFF;
+  --p-gba-body: #2A2A50;
+
+  /* Game Boy — verde LCD. */
+  --p-gb-neon: #9BBC0F;
+  --p-gb-sticker: #1F2A0E;
+  --p-gb-ink: #E8F5B6;
+  --p-gb-body: #8C8C7A;
+
+  /* NDS — gris con magenta de marca. */
+  --p-nds-neon: #FF5DA2;
+  --p-nds-sticker: #33163A;
+  --p-nds-ink: #FFE9F4;
+  --p-nds-body: #4B4A63;
+
+  /* 3DS — morado Nintendo Network. */
+  --p-n3ds-neon: #FF4FA3;
+  --p-n3ds-sticker: #2C0F2A;
+  --p-n3ds-ink: #FFE6F4;
+  --p-n3ds-body: #3B3358;
+
+  /* Switch — rojo Joy-Con. */
+  --p-nsw-neon: #FF3C3C;
+  --p-nsw-sticker: #2A0B12;
+  --p-nsw-ink: #FFEDED;
+  --p-nsw-body: #2B2036;
+
+  /* PSP — cian del UMD. */
+  --p-psp-neon: #3DE8FF;
+  --p-psp-sticker: #0C2233;
+  --p-psp-ink: #E4FBFF;
+  --p-psp-body: #26303F;
+
+  /* PS1 — gris joya CD. */
+  --p-ps1-neon: #C9C4E0;
+  --p-ps1-sticker: #1A1830;
+  --p-ps1-ink: #F2F0FF;
+  --p-ps1-body: #221F3A;
+
+  /* PS2 — azul del CD-ROM. */
+  --p-ps2-neon: #4F7CFF;
+  --p-ps2-sticker: #101A44;
+  --p-ps2-ink: #E7EEFF;
+  --p-ps2-body: #1C2550;
+
+  /* GameCube — índigo morado. */
+  --p-gcn-neon: #7A5CFF;
+  --p-gcn-sticker: #1B1240;
+  --p-gcn-ink: #EDE8FF;
+  --p-gcn-body: #2A2150;
+
+  /* Xbox — verde. */
+  --p-xbox-neon: #5CF08A;
+  --p-xbox-sticker: #0B2A18;
+  --p-xbox-ink: #E6FFEE;
+  --p-xbox-body: #1E2B22;
+
+  /* Xbox 360 — verde lima. */
+  --p-x360-neon: #B4E85C;
+  --p-x360-sticker: #1E2A0E;
+  --p-x360-ink: #F1FFE0;
+  --p-x360-body: #26301C;
+
+  /* PC — ámbar de "compatible". */
+  --p-pc-neon: #FFC857;
+  --p-pc-sticker: #2B2210;
+  --p-pc-ink: #FFF4DC;
+  --p-pc-body: #2A2A3A;
+
+  /* Genérico (plataforma desconocida / 'other'). */
+  --p-other-neon: var(--muted);
+  --p-other-sticker: #1A1830;
+  --p-other-ink: var(--text);
+  --p-other-body: #1C1938;
+
+  /* Alias activo — lo reasignan las clases .plat-* y los data-plat. */
+  --plat-neon: var(--p-other-neon);
+  --plat-sticker: var(--p-other-sticker);
+  --plat-ink: var(--p-other-ink);
+  --plat-body: var(--p-other-body);
+
+  /* --- Distribución / estrategia --------------------------------------- */
+  --dist-github: #B9A6FF;
+  --dist-external: var(--warn);
+  --dist-quiver: var(--accent2);
+  --dist-local: #5CF08A;
+  --dist-info: var(--muted);
+
+  /* --- Radios, espaciado, sombras -------------------------------------- */
+  --r-xs: 4px;
+  --r-s: 8px;
+  --r-m: 12px;
+  --r-l: 16px;
+  --r-xl: 22px;
+  --r-pill: 999px;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 22px;
+  --sp-6: 28px;
+  --sp-7: 40px;
+
+  --shadow-s: 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow-m: 0 10px 26px rgba(0, 0, 0, 0.42);
+  --shadow-l: 0 26px 60px rgba(0, 0, 0, 0.55);
+  --glow-accent: 0 0 0 1px rgba(255, 79, 163, 0.55), 0 0 22px rgba(255, 79, 163, 0.32);
+  --glow-accent2: 0 0 0 1px rgba(61, 232, 255, 0.5), 0 0 22px rgba(61, 232, 255, 0.28);
+  --ring: 0 0 0 2px rgba(61, 232, 255, 0.65), 0 0 0 5px rgba(61, 232, 255, 0.16);
+
+  /* --- Movimiento ------------------------------------------------------- */
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 340ms;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* --- Capas ------------------------------------------------------------ */
+  --z-base: 1;
+  --z-side: 40;
+  --z-top: 50;
+  --z-bnav: 60;
+  --z-drawer: 80;
+  --z-modal: 100;
+  --z-toast: 120;
+
+  /* --- Métricas de layout ---------------------------------------------- */
+  --side-w: 248px;
+  --side-w-rail: 76px;
+  --top-h: 64px;
+  --bnav-h: 58px;
+  --maxw: 1440px;
+
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   Reset mínimo y base tipográfica
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: var(--f-body);
+  font-size: var(--fs-m);
+  line-height: var(--lh-body);
+  color: var(--text);
+  background-color: var(--bg);
+  background-image: var(--bg-gradient);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  font-family: var(--f-display);
+  font-weight: var(--f-w-display);
+  line-height: var(--lh-tight);
+  letter-spacing: 0.01em;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--accent2);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--f-mono);
+  font-size: 0.92em;
+}
+
+img,
+svg,
+video,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+::selection {
+  background: rgba(255, 79, 163, 0.35);
+  color: var(--text);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--r-s);
+}
+
+/* Scrollbars discretas. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--r-pill);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
+}
+
+/* ==========================================================================
+   Utilidades transversales
+   ========================================================================== */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mono {
+  font-family: var(--f-mono);
+  font-size: var(--fs-s);
+  letter-spacing: 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.caps {
+  font-family: var(--f-display);
+  font-size: var(--fs-xs);
+  font-weight: var(--f-w-strong);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Colores de estado listos para usar. */
+.st-playable { color: var(--st-playable); }
+.st-bugs { color: var(--st-bugs); }
+.st-wip { color: var(--st-wip); }
+.st-exp { color: var(--st-exp); }
+.st-abandoned { color: var(--st-abandoned); }
+.st-nodata { color: var(--st-nodata); }
+
+.bg-st-playable { background: var(--st-playable); color: var(--st-playable-ink); }
+.bg-st-bugs { background: var(--st-bugs); color: var(--st-bugs-ink); }
+.bg-st-wip { background: var(--st-wip); color: var(--st-wip-ink); }
+.bg-st-exp { background: var(--st-exp); color: var(--st-exp-ink); }
+.bg-st-abandoned { background: var(--st-abandoned); color: var(--st-neutral-ink); }
+.bg-st-nodata { background: var(--st-nodata); color: var(--st-neutral-ink); }
+
+/* ==========================================================================
+   Activación de color por plataforma
+   Uso: <div class="plat n64">…</div>  ó  <div data-plat="n64">…</div>
+   ========================================================================== */
+
+.plat-n64,
+[data-plat='n64'],
+[data-plat='N64'] {
+  --plat-neon: var(--p-n64-neon);
+  --plat-sticker: var(--p-n64-sticker);
+  --plat-ink: var(--p-n64-ink);
+  --plat-body: var(--p-n64-body);
+}
+
+.plat-snes,
+[data-plat='snes'],
+[data-plat='SNES'] {
+  --plat-neon: var(--p-snes-neon);
+  --plat-sticker: var(--p-snes-sticker);
+  --plat-ink: var(--p-snes-ink);
+  --plat-body: var(--p-snes-body);
+}
+
+.plat-nes,
+[data-plat='nes'],
+[data-plat='NES'] {
+  --plat-neon: var(--p-nes-neon);
+  --plat-sticker: var(--p-nes-sticker);
+  --plat-ink: var(--p-nes-ink);
+  --plat-body: var(--p-nes-body);
+}
+
+.plat-md,
+[data-plat='md'],
+[data-plat='MD'] {
+  --plat-neon: var(--p-md-neon);
+  --plat-sticker: var(--p-md-sticker);
+  --plat-ink: var(--p-md-ink);
+  --plat-body: var(--p-md-body);
+}
+
+.plat-gba,
+[data-plat='gba'],
+[data-plat='GBA'] {
+  --plat-neon: var(--p-gba-neon);
+  --plat-sticker: var(--p-gba-sticker);
+  --plat-ink: var(--p-gba-ink);
+  --plat-body: var(--p-gba-body);
+}
+
+.plat-gb,
+[data-plat='gb'],
+[data-plat='GB'] {
+  --plat-neon: var(--p-gb-neon);
+  --plat-sticker: var(--p-gb-sticker);
+  --plat-ink: var(--p-gb-ink);
+  --plat-body: var(--p-gb-body);
+}
+
+.plat-nds,
+[data-plat='nds'],
+[data-plat='NDS'] {
+  --plat-neon: var(--p-nds-neon);
+  --plat-sticker: var(--p-nds-sticker);
+  --plat-ink: var(--p-nds-ink);
+  --plat-body: var(--p-nds-body);
+}
+
+.plat-n3ds,
+[data-plat='n3ds'],
+[data-plat='N3DS'] {
+  --plat-neon: var(--p-n3ds-neon);
+  --plat-sticker: var(--p-n3ds-sticker);
+  --plat-ink: var(--p-n3ds-ink);
+  --plat-body: var(--p-n3ds-body);
+}
+
+.plat-nsw,
+[data-plat='nsw'],
+[data-plat='NSW'] {
+  --plat-neon: var(--p-nsw-neon);
+  --plat-sticker: var(--p-nsw-sticker);
+  --plat-ink: var(--p-nsw-ink);
+  --plat-body: var(--p-nsw-body);
+}
+
+.plat-psp,
+[data-plat='psp'],
+[data-plat='PSP'] {
+  --plat-neon: var(--p-psp-neon);
+  --plat-sticker: var(--p-psp-sticker);
+  --plat-ink: var(--p-psp-ink);
+  --plat-body: var(--p-psp-body);
+}
+
+.plat-ps1,
+[data-plat='ps1'],
+[data-plat='PS1'] {
+  --plat-neon: var(--p-ps1-neon);
+  --plat-sticker: var(--p-ps1-sticker);
+  --plat-ink: var(--p-ps1-ink);
+  --plat-body: var(--p-ps1-body);
+}
+
+.plat-ps2,
+[data-plat='ps2'],
+[data-plat='PS2'] {
+  --plat-neon: var(--p-ps2-neon);
+  --plat-sticker: var(--p-ps2-sticker);
+  --plat-ink: var(--p-ps2-ink);
+  --plat-body: var(--p-ps2-body);
+}
+
+.plat-gcn,
+[data-plat='gcn'],
+[data-plat='GCN'] {
+  --plat-neon: var(--p-gcn-neon);
+  --plat-sticker: var(--p-gcn-sticker);
+  --plat-ink: var(--p-gcn-ink);
+  --plat-body: var(--p-gcn-body);
+}
+
+.plat-xbox,
+[data-plat='xbox'],
+[data-plat='XBOX'] {
+  --plat-neon: var(--p-xbox-neon);
+  --plat-sticker: var(--p-xbox-sticker);
+  --plat-ink: var(--p-xbox-ink);
+  --plat-body: var(--p-xbox-body);
+}
+
+.plat-x360,
+[data-plat='x360'],
+[data-plat='X360'] {
+  --plat-neon: var(--p-x360-neon);
+  --plat-sticker: var(--p-x360-sticker);
+  --plat-ink: var(--p-x360-ink);
+  --plat-body: var(--p-x360-body);
+}
+
+.plat-pc,
+[data-plat='pc'],
+[data-plat='PC'] {
+  --plat-neon: var(--p-pc-neon);
+  --plat-sticker: var(--p-pc-sticker);
+  --plat-ink: var(--p-pc-ink);
+  --plat-body: var(--p-pc-body);
+}
+
+.plat-other,
+[data-plat='other'] {
+  --plat-neon: var(--p-other-neon);
+  --plat-sticker: var(--p-other-sticker);
+  --plat-ink: var(--p-other-ink);
+  --plat-body: var(--p-other-body);
+}
+
+/* ==========================================================================
+   Accesibilidad: contraste y movimiento
+   ========================================================================== */
+
+@media (prefers-contrast: more) {
+  :root {
+    --muted: #CFCBEF;
+    --line: #4A4478;
+    --line-soft: rgba(74, 68, 120, 0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 1ms;
+    --dur: 1ms;
+    --dur-slow: 1ms;
+  }
+}
