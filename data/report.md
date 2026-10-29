@@ -1,6 +1,6 @@
 # Catálogo unificado — informe de construcción
 
-- **Generado:** 2026-10-29T18:23:17Z
+- **Generado:** 2026-10-29T19:04:35Z
 - **Versión:** 1.0.0 (schema 1.0.0)
 - **Hash semántico:** `sha256:506dc84c563ae2bff924ab434a0c07e8e567447e687e2d6652e58252d0aea7d4`
 - **Modo:** offline (fixtures)
