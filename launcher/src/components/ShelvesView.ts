@@ -23,9 +23,9 @@
 import type { LibraryState, PortItem, SourcePlatform } from '../services/types';
 import { CATALOG_PLATFORMS, LIBRARY_STATE_LABELS, PLATFORM_LABELS } from '../services/types';
 import { esc } from './Icons';
-import { MEDIA, flagFor, mediaHTML, platNeon, styleFor } from './Media';
+import { MEDIA, flagFor, platNeon, styleFor } from './Media';
 import type { ViewShared } from './PostersView';
-import { delegatePortEvents, devChip, gearButton, stateOf } from './PostersView';
+import { delegatePortEvents, devChip, gearButton, mediaMarkup, stateOf } from './PostersView';
 
 /* -------------------------------------------------------------------------- */
 /* Tipos                                                                      */
@@ -118,11 +118,11 @@ export function shelfItem(port: PortItem, shared: ShelvesOptions = {}): string {
     LIBRARY_STATE_LABELS[state];
 
   return (
-    `<div class="slot" style="--w:${width}px" data-pid="${esc(port.pid)}" data-act="open" ` +
+    `<div class="slot" style="--w: ${width}px" data-pid="${esc(port.pid)}" data-act="open" ` +
     `tabindex="0" role="link" aria-label="${esc(label)}">` +
-    mediaHTML(port, style, { flag: mediaFlagOf(state) }) +
-    `<div class="cap" title="${esc(port.name)}">${esc(port.name)}</div>` +
-    `<div class="foot">${devChip(port, { title: true })}${gearButton(port, state, 'btn sm ico')}</div>` +
+    mediaMarkup(style, { port, flag: flagFor(state) }) +
+    `<div class="cap">${esc(port.name)}</div>` +
+    `<div class="foot">${devChip(port)}${gearButton(port, state)}</div>` +
     '</div>'
   );
 }
@@ -131,23 +131,20 @@ export function shelfItem(port: PortItem, shared: ShelvesOptions = {}): string {
 /* Repisa y vista                                                             */
 /* -------------------------------------------------------------------------- */
 
-/** Repisa individual (`.shelf`), markup del prototipo. */
+/**
+ * Repisa individual (`.shelf`), markup exacto del prototipo: línea de neón
+ * (`--n`) arriba del riel, `.items` en flujo `flex-wrap` y tabla `.board`.
+ */
 export function shelf(group: ShelfGroup, shared: ShelvesOptions = {}): string {
   const neon = platNeon(group.platform);
   const items = group.ports.map((port) => shelfItem(port, shared)).join('');
-  const more =
-    group.total > group.ports.length
-      ? `<button type="button" class="more" data-more="${esc(group.platform)}" ` +
-        `title="Ver los ${group.total} puertos de ${esc(group.label)}">` +
-        `Ver todos (${group.total})</button>`
-      : '';
-  const counter =
-    `<span class="mono muted" style="font-size:12px;font-weight:400">${group.ports.length} ports</span>`;
 
   return (
     `<section class="shelf" data-plat="${esc(group.platform)}" aria-label="${esc(group.label)}">` +
-    `<h2>${esc(group.label.toUpperCase())}${counter}${more}</h2>` +
-    `<div class="rail" style="--n:${neon}">` +
+    `<h2>${esc(group.label.toUpperCase())}` +
+    '<span class="mono muted" style="font-size:12px;font-weight:400;margin-left:12px">' +
+    `${group.total} ports</span></h2>` +
+    `<div class="rail" style="--n: ${neon}">` +
     `<div class="items">${items}</div>` +
     '<div class="board"></div>' +
     '</div></section>'

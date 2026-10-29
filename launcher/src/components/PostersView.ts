@@ -34,7 +34,7 @@ import {
 } from '../services/types';
 import { catalogService } from '../services/catalogService';
 import { esc, icon } from './Icons';
-import { artCss, coverTitle, mediaHTML, platNeon, styleFor, subjectOf } from './Media';
+import { artCss, coverTitle, cssUrl, mediaHTML, platNeon, styleFor, subjectOf } from './Media';
 
 /* -------------------------------------------------------------------------- */
 /* Tipos compartidos                                                          */
@@ -170,7 +170,7 @@ export function statePill(state: LibraryState, opts: { hideNotInstalled?: boolea
 
 /** Pegatina `.tag` de la plataforma de origen (misma que el prototipo). */
 export function platTag(port: PortItem): string {
-  return `<span class="tag">${esc(PLATFORM_SHORT[port.sourcePlatform] ?? port.sourcePlatform)}</span>`;
+  return `<span class="tag">${esc(PLATFORM_SHORT[port.sourcePlatform] || port.sourcePlatform)}</span>`;
 }
 
 /** Píldora de plataforma de origen con el neón correspondiente. */
@@ -199,11 +199,29 @@ export function versionText(port: PortItem): string {
   return `v${v.replace(/^v/i, '')}`;
 }
 
-/** Línea «proyecto · versión» del prototipo. */
+/**
+ * Línea «proyecto · versión» del prototipo.
+ *
+ * `project` debería ser `string`, pero en datos heredados llega como objeto
+ * (`{'key': …}`): se normaliza a su nombre/clave y NUNCA se imprime el objeto
+ * (que además rompería `String.prototype.trim()`).
+ */
 export function metaText(port: PortItem): string {
   const version = versionText(port);
-  const project = (port.project ?? '').trim();
+  const project = projectName(port.project);
   return [project, version].filter(Boolean).join(' · ') || PLATFORM_LABELS[port.sourcePlatform] || '';
+}
+
+/** Nombre legible de `project`: `string` o `{ name | key }`. */
+function projectName(project: PortItem['project']): string {
+  const raw = project as unknown;
+  if (raw === null || raw === undefined) return '';
+  if (typeof raw === 'string') return raw.trim();
+  if (typeof raw !== 'object') return String(raw).trim();
+  const obj = raw as { name?: unknown; key?: unknown };
+  const name = typeof obj.name === 'string' ? obj.name : '';
+  const key = typeof obj.key === 'string' ? obj.key : '';
+  return (name || key).trim();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -441,19 +459,24 @@ export function posterCard(port: PortItem, shared: ViewShared = {}): string {
   const label =
     `${port.name} · ${PLATFORM_SHORT[port.sourcePlatform] ?? port.sourcePlatform} · ` +
     LIBRARY_STATE_LABELS[state];
-  const cover = port.coverUrl
-    ? `<img class="cimg" src="${esc(port.coverUrl)}" alt="" loading="lazy" decoding="async" ` +
-      'referrerpolicy="no-referrer" onerror="this.remove()">'
-    : '';
+
+  /* Con carátula real: la imagen va de fondo del `.poster` (`cover` centrado) y
+     NO se pinta el texto de carátula, que taparía el arte. Sin carátula: fondo
+     generativo + título. */
+  const cover = (port.coverUrl ?? '').trim();
+  const posterStyle = cover
+    ? `background-image: url('${cssUrl(cover)}'); ` +
+      'background-size: cover; background-position: center;'
+    : `background: ${artBackground(port)}`;
+  const title = cover ? '' : `<span class="t">${esc(coverTitle(port.name))}</span>`;
 
   return (
     `<article class="card" data-pid="${esc(port.pid)}" data-act="open" tabindex="0" ` +
     `role="link" aria-label="${esc(label)}">` +
-    `<div class="poster" style="background:${artBackground(port)}">` +
-    cover +
+    `<div class="poster" style="${posterStyle}">` +
     platTag(port) +
     `<span class="devp">${devChip(port, { short: true })}</span>` +
-    `<span class="t">${esc(coverTitle(port.name))}</span>` +
+    title +
     '</div>' +
     gearButton(port, state) +
     '<div class="meta">' +

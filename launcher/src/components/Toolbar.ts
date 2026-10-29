@@ -108,7 +108,8 @@ export const VIEW_BUTTONS: ReadonlyArray<{ id: ViewMode; label: string; icon: st
 export const DEFAULT_TOOLBAR_STATE: ToolbarState = {
   title: 'Catálogo',
   query: '',
-  view: 'posters',
+  /* Por defecto se entra en la estantería de cartuchos y discos. */
+  view: 'shelves',
   library: 'all',
   dev: 'all',
   dest: 'Linux',

@@ -228,14 +228,36 @@ export interface ArtSubject {
 }
 
 /**
- * Fondo de la etiqueta: la carátula real si existe (encima) y el arte
- * generativo debajo como respaldo.
+ * URL lista para `url("…")` dentro de un atributo `style="…"`.
+ *
+ * Codifica lo que cerraría la cadena CSS (`"`, `'`, `(`, `)`) o rompería el
+ * atributo (barra invertida, saltos de línea) y neutraliza los espacios; el
+ * `&` se escapa para el parser HTML (se decodifica de vuelta a `&`).
+ */
+export function cssUrl(url: string): string {
+  const clean = String(url ?? '').trim();
+  if (!clean) return '';
+  return clean
+    .replace(/["'()\\]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)
+    .replace(/[\r\n\t]/g, '')
+    .replace(/ /g, '%20')
+    .replace(/&/g, '&amp;');
+}
+
+/**
+ * Fondo de la etiqueta: la carátula real si existe (encima, `center/cover`) y
+ * el arte generativo debajo como respaldo, de modo que una portada que no
+ * carga nunca deja el hueco vacío.
+ *
+ * La etiqueta que lo consume (`CART[style].lab`) ya lleva
+ * `border-radius:${c.rad}` + `overflow:hidden`, así que la carátula queda
+ * recortada **exactamente** al marco del cartucho.
  */
 function labelBackground(subject: ArtSubject): string {
   const art = artCss(subject);
   const url = typeof subject.coverUrl === 'string' ? subject.coverUrl.trim() : '';
   if (!url) return art;
-  return `url("${url.replace(/"/g, '%22')}") center/cover no-repeat,${art}`;
+  return `url("${cssUrl(url)}") center/cover no-repeat,${art}`;
 }
 
 /* -------------------------------------------------------------------------- */

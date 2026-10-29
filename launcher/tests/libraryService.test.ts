@@ -172,7 +172,7 @@ describe('libraryService · estado inicial seguro', () => {
 
     const settings = svc.getSettings();
     expect(settings.media).toBe(false);
-    expect(settings.view).toBe('posters');
+    expect(settings.view).toBe('shelves');
     expect(settings.mediaMap).toEqual({ n64: 'md' });
   });
 });
@@ -480,14 +480,14 @@ describe('libraryService · ajustes', () => {
       romMode: 'move' as never,
     });
 
-    expect(settings.view).toBe('posters');
+    expect(settings.view).toBe('shelves');
     expect(settings.mediaMode).toBe('auto');
     expect(settings.mediaDef).toBe('cd');
     expect(settings.dest).toBe('Linux');
     expect(settings.romMode).toBe('link');
 
     const persisted = store.parsed() as { settings: Settings };
-    expect(persisted.settings.view).toBe('posters');
+    expect(persisted.settings.view).toBe('shelves');
     expect(persisted.settings.dest).toBe('Linux');
   });
 
@@ -514,7 +514,7 @@ describe('libraryService · ajustes', () => {
     settings.view = 'table';
     settings.mediaMap.n64 = 'gb';
 
-    expect(svc.getSettings().view).toBe('posters');
+    expect(svc.getSettings().view).toBe('shelves');
     expect(svc.getSettings().mediaMap.n64).toBeUndefined();
   });
 });

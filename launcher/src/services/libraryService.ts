@@ -194,6 +194,22 @@ function sanitizeSettings(raw: unknown): Settings {
   return settings;
 }
 
+/**
+ * Migración de ajustes guardados por versiones anteriores.
+ *
+ * v1 → v2: la vista por defecto pasó de `posters` a `shelves` (estantería de
+ * cartuchos, como el prototipo). Si la biblioteca se guardó con el esquema 1 y
+ * la vista sigue siendo la antigua por defecto `posters`, se asciende a la
+ * nueva; una elección explícita posterior ya queda marcada con el esquema 2.
+ */
+function migrateSettings(settings: Settings, storedVersion: unknown): Settings {
+  const version = typeof storedVersion === 'number' ? storedVersion : 0;
+  if (version < 2 && settings.view === 'posters') {
+    settings.view = DEFAULT_SETTINGS.view;
+  }
+  return settings;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Eventos                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -243,11 +259,13 @@ export class LibraryService {
           games[pid] = sanitizeGame(pid, value);
         }
       }
+      const storedVersion = parsed['version'];
+      const settings = migrateSettings(sanitizeSettings(parsed['settings']), storedVersion);
       return {
         version: typeof parsed['version'] === 'number' ? parsed['version'] : LIBRARY_SCHEMA_VERSION,
         updatedAt: typeof parsed['updatedAt'] === 'string' ? parsed['updatedAt'] : nowIso(),
         games,
-        settings: sanitizeSettings(parsed['settings']),
+        settings,
       };
     } catch {
       // JSON corrupto: no perdemos la sesión, arrancamos limpio.

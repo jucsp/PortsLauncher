@@ -541,7 +541,8 @@ export const DEFAULT_SETTINGS: Settings = {
   mediaMode: 'auto',
   mediaDef: 'cd',
   mediaMap: {},
-  view: 'posters',
+  /* Vista por defecto: estantería de cartuchos y discos (prototipo de Claude). */
+  view: 'shelves',
   dest: 'Linux',
   installDir: '~/PortsLauncher/ports',
   romDir: '~/PortsLauncher/roms',

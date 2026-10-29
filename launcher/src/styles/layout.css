@@ -2380,7 +2380,8 @@ textarea.in-txt {
   }
 
   .card:hover .cover,
-  .bcard:hover {
+  .bcard:hover,
+  .slot:hover {
     transform: none;
   }
 
@@ -2395,4 +2396,142 @@ textarea.in-txt {
   .scrim {
     backdrop-filter: none;
   }
+}
+
+/* ==========================================================================
+   19. Prototipo: carátulas, estanterías y rieles (reglas exactas)
+   --------------------------------------------------------------------------
+   Este bloque va AL FINAL de la hoja a propósito: con la misma especificidad
+   que las secciones 5 (`.grid`/`.card`) y 7 (`.shelves`/`.rail`), es el que
+   manda. Se transcribe tal cual el prototipo para que no falte nada.
+   ========================================================================== */
+
+.poster { position: relative; aspect-ratio: 3/4; display: flex; align-items: flex-end; padding: 14px; background-size: cover; background-position: center; overflow: hidden; border-radius: 14px; }
+.poster::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 55%, rgba(10,9,18,.7)); pointer-events: none; }
+.poster .t { font: 700 22px/1 var(--f-display); text-shadow: 0 2px 12px rgba(0,0,0,.6); white-space: pre-line; position: relative; z-index: 1; }
+.poster .tag { position: absolute; top: 10px; left: 10px; z-index: 2; font: 500 11px var(--f-mono); padding: 3px 8px; border-radius: 8px; background: rgba(10,9,18,.75); color: var(--text); }
+.poster .devp { position: absolute; top: 40px; left: 10px; z-index: 2; }
+.shelf { margin-bottom: 34px; }
+.shelf h2 { font-size: 18px; letter-spacing: .04em; display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; font-family: var(--f-display); }
+.rail { position: relative; padding-top: 30px; }
+.rail::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; border-radius: 3px; background: var(--n, var(--accent)); box-shadow: 0 0 22px 3px var(--n, var(--accent)); }
+.rail .items { display: flex; flex-wrap: wrap; gap: 26px; align-items: flex-start; padding: 0 8px 16px; }
+.board { height: 16px; border-radius: 6px; background: linear-gradient(180deg,#2A2650,#1C1938 55%,#13112A); box-shadow: 0 14px 22px rgba(0,0,0,.5); }
+.slot { display: flex; flex-direction: column; align-items: center; gap: 12px; cursor: pointer; transition: transform .2s; position: relative; background: none; border: 0; padding: 0; }
+.slot:hover { transform: translateY(-14px); }
+.slot .cap { max-width: var(--w, 168px); min-height: 30px; text-align: center; font-size: 12px; font-weight: 600; line-height: 1.25; color: var(--text); }
+.slot .foot { display: flex; align-items: center; justify-content: center; gap: 6px; height: 32px; max-width: calc(var(--w, 168px) + 24px); }
+
+/* --------------------------------------------------------------------------
+   19.1 Reconciliación con las secciones 5 y 7
+   --------------------------------------------------------------------------
+   El riel era un carrusel horizontal (`grid-auto-flow: column`) con la repisa
+   pintada por `::after`; el prototipo lo quiere en flujo `flex-wrap`, con la
+   tabla `.board` como repisa y el neón en `::before`. Se neutralizan los restos
+   para que las reglas de 19 sean realmente las que se aplican.
+   -------------------------------------------------------------------------- */
+
+.rail { display: block; overflow: visible; padding: 30px 0 0; }
+.rail > * { scroll-snap-align: none; }
+.rail::before { bottom: auto; opacity: 1; }
+.rail::after { content: none; }
+.shelves { gap: 0; }
+.shelf { gap: 0; min-width: 0; }
+.shelf h2 { margin: 0 0 12px; }
+
+/* Nombre del soporte: dos líneas máximo (el pie queda alineado a 32px). */
+.slot .cap {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* El `<span class="t">` sólo se pinta cuando NO hay carátula real; con portada
+   el `.poster` la muestra de fondo y el velo de `::after` da contraste. */
+.poster > .t { pointer-events: none; }
+.poster .tag,
+.poster .devp { pointer-events: none; }
+
+/* --------------------------------------------------------------------------
+   19.2 Chip de desarrollo `.dev` (lo emite `devChip()`)
+   --------------------------------------------------------------------------
+   No existía como regla en esta hoja: se define aquí, coloreado por el `--c`
+   que el componente inyecta en línea (`style="--c:<color>"`).
+   -------------------------------------------------------------------------- */
+
+.dev {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font: 600 10px/1.4 var(--f-mono);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--c, var(--text));
+  background: color-mix(in srgb, var(--c, var(--accent)) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c, var(--accent)) 45%, transparent);
+}
+
+.dev.lg {
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+/* --------------------------------------------------------------------------
+   19.3 Piezas que tampoco existían en la hoja
+   --------------------------------------------------------------------------
+   `.gear` (botón ⚙ que emiten las tarjetas y los slots) y `.meta` (bloque de
+   texto bajo la carátula). Sin estas reglas el botón salía con el estilo por
+   defecto del navegador y el pie de la tarjeta se desalineaba.
+   -------------------------------------------------------------------------- */
+
+.gear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: rgba(10, 9, 18, 0.72);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+.gear:hover {
+  color: var(--text);
+  border-color: var(--accent2);
+  background: var(--panel2);
+}
+
+/* En la tarjeta de carátula flota sobre la esquina superior derecha. */
+.card > .gear {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+}
+
+.card > .meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.card > .meta > b {
+  font-family: var(--f-display);
+  font-size: var(--fs-s);
+  line-height: 1.2;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
