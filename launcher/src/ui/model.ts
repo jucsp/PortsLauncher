@@ -302,14 +302,31 @@ export function flagOf(game: Game): [string, string] | null {
 /* Soportes: estilo por plataforma y por ajustes                              */
 /* -------------------------------------------------------------------------- */
 
-/** `styleOf(k)` del prototipo: medio de una plataforma según los ajustes. */
+/**
+ * `styleOf(k)` del prototipo: medio de una plataforma según los ajustes.
+ *
+ * Cadena de reserva completa: override del usuario → medio propio de la
+ * plataforma → estilo por defecto → `cd`. Es importante que NUNCA devuelva
+ * `undefined`: plataformas como `PC` u `OTRAS` no tienen entrada en
+ * `PLATMEDIA`, y un estilo vacío rompía `MEDIA[styleFor(...)]` al pintar las
+ * estanterías (el Catálogo se quedaba sin cartuchos ni discos).
+ */
 export function styleOf(key: PlatKey, settings: Settings): MediaStyle {
-  return settings.mediaMap[TO_PLATFORM[key]] || PLATMEDIA[key] || settings.mediaDef || 'cd';
+  const mapped = settings.mediaMap ? settings.mediaMap[TO_PLATFORM[key]] : undefined;
+  return mapped || PLATMEDIA[key] || settings.mediaDef || 'cd';
 }
 
 /** `styleFor(g)` del prototipo: un solo estilo o el de su plataforma. */
 export function styleFor(game: Game, settings: Settings): MediaStyle {
-  return settings.mediaMode === 'single' ? settings.mediaDef : styleOf(game.pl, settings);
+  const style = settings.mediaMode === 'single' ? settings.mediaDef : styleOf(game.pl, settings);
+  if (style && MEDIA[style]) return style;
+  return settings.mediaDef && MEDIA[settings.mediaDef] ? settings.mediaDef : 'cd';
+}
+
+/** Ancho del soporte en píxeles, con reserva segura si el estilo no existe. */
+export function mediaWidth(style: MediaStyle): number {
+  const info = MEDIA[style] ?? MEDIA.cd;
+  return info.w;
 }
 
 /** Cuerpo de la carcasa cuando el cartucho no declara `bg`. */

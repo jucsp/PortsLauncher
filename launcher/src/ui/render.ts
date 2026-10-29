@@ -13,7 +13,7 @@
  * ========================================================================== */
 
 import type { MediaStyle, PortItem, Settings } from '../services/types';
-import { esc, devChip as chipOf, flagOf, PROG, statusOf, styleFor, styleOf, artOf } from './model';
+import { esc, devChip as chipOf, flagOf, PROG, statusOf, styleFor, styleOf, artOf, mediaWidth } from './model';
 import type { Game } from './model';
 import { IC, sv } from './icons';
 import { mediaHTML, miniIcon } from './media';
@@ -148,26 +148,55 @@ const ORD: Record<string, number> = {
   ext: 6,
 };
 
+/** Texto sobre el que busca el campo `#q` (título, proyecto, plataforma, alias). */
+function searchBlobOf(game: Game): string {
+  const port = game.port ?? ({} as PortItem);
+  const extras = [
+    ...(Array.isArray(port.tags) ? port.tags : []),
+    ...(Array.isArray(port.gameNames) ? port.gameNames : []),
+    ...(Array.isArray(port.searchAliases) ? port.searchAliases : []),
+  ].filter((value): value is string => typeof value === 'string');
+
+  return `${game.t} ${game.pr} ${PLAT[game.pl].name} ${game.pl} ${game.id} ${extras.join(' ')}`
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+/**
+ * Listado del ámbito activo.
+ *
+ * El CATÁLOGO enseña todos los ports del índice que pasen la búsqueda, la
+ * plataforma y el estado de desarrollo: incluidos los de estrategia
+ * `external`, que hoy son la totalidad del índice real. Excluirlos dejaba la
+ * pantalla en «Sin resultados» (el catálogo se veía completamente vacío).
+ *
+ * La BIBLIOTECA es el único ámbito restringido: solo lo instalado.
+ */
 export function filtered(kind: 'library' | 'catalog'): Game[] {
-  const query = B.q.trim().toLowerCase();
+  const query = B.q.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const list = S.games.filter((game) => {
-    const status = statusOf(game).k;
     if (kind === 'library' && !game.inst) return false;
     if (B.plat !== 'all' && game.pl !== B.plat) return false;
     if (B.dev !== 'all' && game.dev.k !== B.dev) return false;
-    if (
-      query &&
-      !`${game.t} ${game.pr} ${PLAT[game.pl].name} ${game.pl}`.toLowerCase().includes(query)
-    ) {
-      return false;
+    if (query && !searchBlobOf(game).includes(query)) return false;
+
+    switch (B.filter) {
+      /* Catálogo: presencia en la biblioteca local. */
+      case 'new':
+        return !game.inst;
+      case 'inst':
+        return game.inst;
+      /* Biblioteca: estado de la instalación. */
+      case 'ready':
+        return statusOf(game).k === 'ready';
+      case 'rom':
+        return statusOf(game).k === 'rom';
+      case 'upd':
+        return statusOf(game).k === 'upd';
+      default:
+        return true;
     }
-    const filter = B.filter;
-    if (filter === 'ready' && status !== 'ready') return false;
-    if (filter === 'rom' && status !== 'rom') return false;
-    if (filter === 'upd' && status !== 'upd') return false;
-    if (filter === 'new' && game.inst) return false;
-    if (filter === 'inst' && !game.inst) return false;
-    return true;
   });
 
   const comparators: Record<SortKey, (a: Game, b: Game) => number> = {
@@ -316,13 +345,17 @@ export function shelves(list: Game[]): string {
     .map((key) => {
       const items = list.filter((game) => game.pl === key);
       const slots = items
-        .map(
-          (game) =>
-            `<div class="slot" style="--w:${MEDIA[styleFor(game, S.settings)].w}px" data-act="open" data-id="${game.id}" tabindex="0" role="link" aria-label="${esc(game.t)}">` +
-            `${mediaHTML(game, styleFor(game, S.settings), flagOf(game))}` +
+        .map((game) => {
+          /* PC, «Otras» y cualquier plataforma sin medio propio caen en el
+           * estilo por defecto (`settings.mediaDef`) o en el disco genérico. */
+          const style = styleFor(game, S.settings) ?? S.settings.mediaDef ?? 'cd';
+          return (
+            `<div class="slot" style="--w:${mediaWidth(style)}px" data-act="open" data-id="${game.id}" tabindex="0" role="link" aria-label="${esc(game.t)}">` +
+            `${mediaHTML(game, style, flagOf(game))}` +
             `<div class="cap">${esc(game.t)}</div>` +
             `<div class="foot">${devChip(game)}${gearBtn(game, 'btn sm ico')}</div></div>`
-        )
+          );
+        })
         .join('');
       return (
         '<section class="shelf">' +
@@ -524,20 +557,26 @@ export function renderHome(): string {
   const hero = heroHTML();
 
   const slots = recent
-    .map(
-      (game) =>
-        `<div class="slot" style="--w:${MEDIA[styleFor(game, S.settings)].w}px" data-act="open" data-id="${game.id}" tabindex="0" role="link" aria-label="${esc(game.t)}">` +
-        `${mediaHTML(game, styleFor(game, S.settings), flagOf(game))}` +
+    .map((game) => {
+      const style = styleFor(game, S.settings) ?? S.settings.mediaDef ?? 'cd';
+      return (
+        `<div class="slot" style="--w:${mediaWidth(style)}px" data-act="open" data-id="${game.id}" tabindex="0" role="link" aria-label="${esc(game.t)}">` +
+        `${mediaHTML(game, style, flagOf(game))}` +
         `<div class="cap">${esc(game.t)}</div>` +
         `<div class="foot">${devChip(game)}</div></div>`
-    )
+      );
+    })
     .join('');
 
-  const fresh = S.games
-    .filter((game) => !game.inst && game.strategy !== 'external')
-    .slice(0, 6)
-    .map(posterCard)
-    .join('');
+  /* «Nuevo en el catálogo» = todo lo que el usuario aún no tiene. Filtrar por
+   * estrategia (`external`) vaciaba la sección con el índice real. */
+  const fresh = S.games.filter((game) => !game.inst).slice(0, 6).map(posterCard).join('');
+
+  const recentBody = slots
+    ? `<div class="rail" style="--n:var(--accent)"><div class="items">${slots}</div></div>`
+    : '<div class="empty" style="padding:22px"><b style="color:var(--text)">Tu estantería está vacía</b><br>' +
+      'Instala un port desde el Catálogo y aparecerá aquí.' +
+      '<br><button class="btn sm" style="margin-top:12px" data-act="nav" data-to="catalog">Ir al Catálogo</button></div>';
 
   return paintMain(
     '<div class="top"><h1>Inicio</h1></div>' +
@@ -548,8 +587,7 @@ export function renderHome(): string {
     stat(installed.filter((game) => kind(game) === 'rom').length, 'esperan tu ROM', 'var(--warn)') +
     stat(updateCount(), 'actualizaciones', 'var(--accent)') +
     '</div>' +
-    '<section class="shelf"><h2>RECIENTES</h2>' +
-    `<div class="rail" style="--n:var(--accent)"><div class="items">${slots}</div></div></section>` +
+    `<section class="shelf"><h2>RECIENTES</h2>${recentBody}</section>` +
     '<h2 style="font-size:18px;margin-bottom:12px">NUEVO EN EL CATÁLOGO</h2>' +
     `<div class="grid">${fresh}</div>`
   );
@@ -561,9 +599,12 @@ export function renderUpdates(): string {
   const attention = S.games.filter(
     (game) => game.inst && statusOf(game).k !== 'upd' && ['abandoned', 'bugs'].includes(game.dev.k)
   );
-  const news = S.games
-    .filter((game) => !game.inst && game.strategy !== 'external' && game.months <= 1)
-    .slice(0, 8);
+  /* Novedades = ports sin instalar con actividad reciente. El filtro por
+   * estrategia `external` dejaba la sección vacía con el índice real; si
+   * tampoco hay cambios en el último mes, se muestran los más cercanos. */
+  const freshPorts = S.games.filter((game) => !game.inst).sort((a, b) => a.months - b.months);
+  const recentNews = freshPorts.filter((game) => game.months <= 1);
+  const news = (recentNews.length > 0 ? recentNews : freshPorts).slice(0, 8);
 
   const section = (title: string, subtitle: string, body: string): string =>
     `<section style="margin-bottom:30px"><h2 style="font-size:18px">${title}</h2>` +
@@ -985,7 +1026,7 @@ export function renderSettings(): string {
     demo
       .map(
         (game) =>
-          `<div class="slot" style="--w:${MEDIA[styleFor(game, settings)].w}px;cursor:default">` +
+          `<div class="slot" style="--w:${mediaWidth(styleFor(game, settings))}px;cursor:default">` +
           `${mediaHTML(game, styleFor(game, settings), false)}<div class="cap">${esc(game.t)}</div></div>`
       )
       .join('') +
