@@ -3,40 +3,38 @@
  * launcher/src/components/PostersView.ts
  *
  * Vista de carátulas (`.grid` > `.card`) **y piezas compartidas** por el resto
- * de vistas: chip de desarrollo, píldora de estado, carátula generativa,
- * soporte (cartucho/disco), acción primaria y delegación de eventos.
+ * de vistas: chip de desarrollo (`.dev`), píldora de estado (`.pill`), pegatina
+ * de plataforma (`.tag`), carátula generativa y delegación de eventos.
  *
- * Contract CSS (`launcher/src/styles/layout.css`):
- *   .grid > .card > .cover (.badges / .media-slot) / .ct / .cs
+ * Fidelidad: la tarjeta reproduce el markup del prototipo de Claude
+ * (`posterCard()` del prototipo, líneas 376-381):
+ *
+ *   article.card[data-act=open]
+ *     div.poster            ← `background: art(c,p)` + <img> si hay coverUrl
+ *       span.tag            ← plataforma (z-index por encima de la portada)
+ *       span.devp           ← chip de desarrollo (z-index por encima)
+ *       span.t              ← texto de carátula
+ *     button.gear           ← sólo si está instalado (regla v4)
+ *     div.meta
+ *       b                   ← nombre
+ *       span.muted          ← proyecto · versión
+ *       div                 ← píldora de estado + acción primaria
  *
  * Todos los componentes devuelven **cadenas HTML** y delegan los clics por
  * atributos (`data-pid` + `data-act`), de modo que el llamante puede usar
- * `delegatePortEvents()` o su propio manejador:
- *
- *   <div class="card" data-pid="…" data-act="open" tabindex="0">
- *     <button data-act="install">Instalar</button>
- *     <button data-act="gear">⚙</button>
- *   </div>
- *
- * `closest('[data-act]')` resuelve primero el botón interno, así que el clic
- * en una acción nunca se confunde con "abrir ficha".
+ * `delegatePortEvents()` o su propio manejador.
  * ========================================================================== */
 
-import type {
-  DevTag,
-  DevTagInfo,
-  LibraryState,
-  MediaStyle,
-  PortItem,
-  Settings,
-} from '../services/types';
+import type { DevTag, DevTagInfo, LibraryState, MediaStyle, PortItem, Settings } from '../services/types';
 import {
   INSTALL_STRATEGY_LABELS,
   LIBRARY_STATE_LABELS,
+  PLATFORM_LABELS,
   PLATFORM_SHORT,
 } from '../services/types';
 import { catalogService } from '../services/catalogService';
-import { esc, icon, styleAttr } from './Icons';
+import { esc, icon } from './Icons';
+import { artCss, coverTitle, mediaHTML, platNeon, styleFor, subjectOf } from './Media';
 
 /* -------------------------------------------------------------------------- */
 /* Tipos compartidos                                                          */
@@ -56,7 +54,7 @@ export type PortActionKind =
 export interface PortAction {
   kind: PortActionKind;
   label: string;
-  /** Clase del botón (`btn pri sm`, `btn sm warn`…). */
+  /** Clase del botón (`btn sm pri`, `btn sm warn`…). */
   cls: string;
   disabled: boolean;
   iconName: string;
@@ -114,25 +112,26 @@ export function devInfo(port: PortItem): DevTagInfo {
 }
 
 /**
- * Chip de desarrollo: color de estado + glifo + texto.
- * Nunca es sólo icono (requisito de accesibilidad de la spec).
+ * Chip de desarrollo `.dev` con el color de estado, el glifo y el texto
+ * (exactamente como `devChip()` del prototipo).
  */
-export function devChip(port: PortItem, opts: { short?: boolean; title?: boolean } = {}): string {
+export function devChip(
+  port: PortItem,
+  opts: { short?: boolean; large?: boolean; title?: boolean; cls?: string } = {}
+): string {
   const info = devInfo(port);
   const tag: DevTag = info.tag;
   const text = opts.short ? info.text : info.label;
   const title =
     opts.title === false
       ? ''
-      : `${info.label} · confianza ${info.conf}` +
-        (info.pct > 0 ? ` · ${info.pct}% recomendado` : '') +
-        (info.why ? ` — ${info.why}` : '');
+      : `${info.label} · confianza ${info.conf}${info.why ? ` — ${info.why}` : ''}`;
+  const cls = `dev${opts.large ? ' lg' : ''}${opts.cls ? ` ${opts.cls}` : ''}`;
   return (
-    `<span class="pill st-${tag}" data-dev="${tag}"` +
+    `<span class="${esc(cls)}" data-dev="${tag}" style="--c:${info.color}"` +
     (title ? ` title="${esc(title)}"` : '') +
     ` aria-label="${esc(`${info.label}, confianza ${info.conf}`)}">` +
-    `<span aria-hidden="true" style="font-size:9px;line-height:1">${esc(info.glyph)}</span>` +
-    `<span>${esc(text)}</span></span>`
+    `<span aria-hidden="true">${esc(info.glyph)}</span> ${esc(text)}</span>`
   );
 }
 
@@ -153,31 +152,33 @@ const STATE_COLOR: Record<LibraryState, string> = {
   Installing: 'var(--st-wip)',
   Installed: 'var(--accent2)',
   NeedsRom: 'var(--warn)',
-  Ready: 'var(--st-playable)',
-  UpdateAvailable: 'var(--accent2)',
+  Ready: 'var(--accent2)',
+  UpdateAvailable: 'var(--accent)',
   Broken: 'var(--danger)',
 };
 
-/** Píldora del estado local (biblioteca). */
+/** Píldora del estado local (biblioteca), con el `--c` del prototipo. */
 export function statePill(state: LibraryState, opts: { hideNotInstalled?: boolean } = {}): string {
   if (opts.hideNotInstalled && state === 'NotInstalled') return '';
   const color = STATE_COLOR[state];
   return (
-    `<span class="pill" data-state="${state}" ` +
-    `style="color:${color};border-color:${color}" ` +
+    `<span class="pill" data-state="${state}" style="--c:${color}" ` +
     `title="${esc(LIBRARY_STATE_LABELS[state])}">` +
-    `<span aria-hidden="true" style="font-size:10px;line-height:1">${esc(STATE_GLYPH[state])}</span>` +
-    `<span>${esc(LIBRARY_STATE_LABELS[state])}</span></span>`
+    `<span aria-hidden="true">${esc(STATE_GLYPH[state])}</span> ${esc(LIBRARY_STATE_LABELS[state])}</span>`
   );
+}
+
+/** Pegatina `.tag` de la plataforma de origen (misma que el prototipo). */
+export function platTag(port: PortItem): string {
+  return `<span class="tag">${esc(PLATFORM_SHORT[port.sourcePlatform] ?? port.sourcePlatform)}</span>`;
 }
 
 /** Píldora de plataforma de origen con el neón correspondiente. */
 export function platPill(port: PortItem): string {
   const plat = port.sourcePlatform;
   return (
-    `<span class="pill plat" data-plat="${plat}" ` +
-    styleAttr({ '--plat-neon': `var(--p-${plat}-neon, var(--accent))` }) +
-    ` title="${esc(port.sourcePlatform)}">${esc(PLATFORM_SHORT[plat] ?? plat)}</span>`
+    `<span class="pill" data-plat="${esc(plat)}" style="--c:${platNeon(plat)}" ` +
+    `title="${esc(PLATFORM_LABELS[plat] ?? plat)}">${esc(PLATFORM_SHORT[plat] ?? plat)}</span>`
   );
 }
 
@@ -191,11 +192,18 @@ export function strategyChip(port: PortItem, opts: { icon?: boolean } = {}): str
   );
 }
 
-/** Versión verificada/publicada (o la instalada) como texto mono. */
+/** Versión verificada/publicada como texto mono. */
 export function versionText(port: PortItem): string {
   const v = port.verifiedRelease?.version;
   if (!v) return '';
   return `v${v.replace(/^v/i, '')}`;
+}
+
+/** Línea «proyecto · versión» del prototipo. */
+export function metaText(port: PortItem): string {
+  const version = versionText(port);
+  const project = (port.project ?? '').trim();
+  return [project, version].filter(Boolean).join(' · ') || PLATFORM_LABELS[port.sourcePlatform] || '';
 }
 
 /* -------------------------------------------------------------------------- */
@@ -209,21 +217,21 @@ export function versionText(port: PortItem): string {
 export function portAction(port: PortItem, state: LibraryState): PortAction {
   switch (state) {
     case 'Ready':
-      return { kind: 'play', label: 'Jugar', cls: 'btn pri sm', disabled: false, iconName: 'play' };
+      return { kind: 'play', label: 'Jugar', cls: 'btn sm pri', disabled: false, iconName: 'play' };
     case 'Installed':
       return portNeedsRomHint(port)
-        ? { kind: 'rom', label: 'Añadir ROM', cls: 'btn pri sm', disabled: false, iconName: 'rom' }
-        : { kind: 'play', label: 'Jugar', cls: 'btn pri sm', disabled: false, iconName: 'play' };
+        ? { kind: 'rom', label: 'Añadir ROM', cls: 'btn sm pri', disabled: false, iconName: 'rom' }
+        : { kind: 'play', label: 'Jugar', cls: 'btn sm pri', disabled: false, iconName: 'play' };
     case 'NeedsRom':
-      return { kind: 'rom', label: 'Añadir ROM', cls: 'btn pri sm', disabled: false, iconName: 'rom' };
+      return { kind: 'rom', label: 'Añadir ROM', cls: 'btn sm warn', disabled: false, iconName: 'rom' };
     case 'Downloading':
       return { kind: 'install', label: 'Descargando…', cls: 'btn sm', disabled: true, iconName: 'spinner' };
     case 'Installing':
       return { kind: 'install', label: 'Instalando…', cls: 'btn sm', disabled: true, iconName: 'spinner' };
     case 'UpdateAvailable':
-      return { kind: 'update', label: 'Actualizar', cls: 'btn warn sm', disabled: false, iconName: 'upd' };
+      return { kind: 'update', label: 'Actualizar', cls: 'btn sm warn', disabled: false, iconName: 'upd' };
     case 'Broken':
-      return { kind: 'retry', label: 'Reinstalar', cls: 'btn dng sm', disabled: false, iconName: 'retry' };
+      return { kind: 'retry', label: 'Reinstalar', cls: 'btn sm dng', disabled: false, iconName: 'retry' };
     case 'NotInstalled':
     default:
       break;
@@ -236,7 +244,7 @@ export function portAction(port: PortItem, state: LibraryState): PortAction {
   if (strategy === 'recipe' || strategy === 'source-only' || strategy === 'needsChoice') {
     return { kind: 'details', label: 'Cómo instalar', cls: 'btn sm', disabled: false, iconName: 'info' };
   }
-  return { kind: 'install', label: 'Instalar', cls: 'btn pri sm', disabled: false, iconName: 'download' };
+  return { kind: 'install', label: 'Instalar', cls: 'btn sm pri', disabled: false, iconName: 'download' };
 }
 
 function portNeedsRomHint(port: PortItem): boolean {
@@ -249,14 +257,14 @@ function portNeedsRomHint(port: PortItem): boolean {
   );
 }
 
-/** Botón de acción primaria listo para insertar. */
+/** Botón de acción primaria listo para insertar (`actBtn()` del prototipo). */
 export function actionButton(port: PortItem, state: LibraryState): string {
   const action = portAction(port, state);
   return (
     `<button type="button" class="${esc(action.cls)}" data-act="${action.kind}" ` +
     `data-pid="${esc(port.pid)}" ${attrDisabled(action.disabled)} ` +
     `title="${esc(action.label)}">` +
-    `${icon(action.iconName, { size: 15 })}<span>${esc(action.label)}</span></button>`
+    `${action.kind === 'play' ? icon('play', { size: 14 }) : ''}<span>${esc(action.label)}</span></button>`
   );
 }
 
@@ -265,10 +273,10 @@ function attrDisabled(disabled: boolean): string {
 }
 
 /** Botón ⚙ (sólo cuando la ficha tiene algo instalado, regla v4). */
-export function gearButton(port: PortItem, state: LibraryState): string {
+export function gearButton(port: PortItem, state: LibraryState, cls = 'gear'): string {
   if (!isInstalledState(state)) return '';
   return (
-    `<button type="button" class="btn ico sm" data-act="gear" data-pid="${esc(port.pid)}" ` +
+    `<button type="button" class="${esc(cls)}" data-act="gear" data-pid="${esc(port.pid)}" ` +
     `title="Ajustes de ${esc(port.name)}" aria-label="Ajustes de ${esc(port.name)}">` +
     `${icon('gear', { size: 15 })}</button>`
   );
@@ -278,133 +286,76 @@ export function gearButton(port: PortItem, state: LibraryState): string {
 /* Carátula generativa                                                        */
 /* -------------------------------------------------------------------------- */
 
-function hash32(value: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < value.length; i += 1) {
-    h ^= value.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h >>> 0;
-}
-
-function monogram(name: string): string {
-  const words = String(name ?? '')
-    .replace(/[^\p{L}\p{N} ]+/gu, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length > 1 || /\d/.test(w));
-  const out = words.slice(0, 2).map((w) => w.charAt(0).toUpperCase()).join('');
-  return out || String(name ?? '?').slice(0, 2).toUpperCase();
-}
-
 /**
- * Carátula generativa (`art(c, p)` de la spec): degradados deterministas
- * derivados del `pid`, con el neón/pegatina de la plataforma y el monograma
- * del título. Se usa cuando `coverUrl` falta o falla.
+ * Capa de arte generativo (`art(c, p)`) como bloque absoluto que rellena su
+ * contenedor. Es lo que usan las miniaturas y la ficha de detalle.
  */
-export function art(port: PortItem, opts: { compact?: boolean } = {}): string {
-  const plat = port.sourcePlatform;
-  const seed = hash32(`${port.pid}|${port.name}`);
-  const ax = 8 + (seed % 78);
-  const ay = 6 + ((seed >>> 7) % 72);
-  const angle = 20 + ((seed >>> 13) % 120);
-  const neon = `var(--p-${plat}-neon, var(--accent))`;
-  const sticker = `var(--p-${plat}-sticker, var(--accent2))`;
-  const bg = [
-    `radial-gradient(120% 90% at ${ax}% ${ay}%, color-mix(in srgb, ${neon} 46%, transparent), transparent 62%)`,
-    `radial-gradient(90% 70% at ${100 - ax}% ${100 - ay}%, color-mix(in srgb, ${sticker} 58%, transparent), transparent 68%)`,
-    `repeating-linear-gradient(${angle}deg, rgba(255,255,255,.055) 0 2px, transparent 2px 7px)`,
-    'linear-gradient(160deg, var(--panel2), #0A0912 92%)',
-  ].join(',');
-
+export function art(port: PortItem, opts: { cover?: string; compact?: boolean } = {}): string {
+  const subject = subjectOf(port);
+  /** `compact` reduce el monograma; por defecto se mantiene el tamaño original. */
+  const fs = opts.compact ? 16 : 22;
   return (
-    `<span class="fallback" aria-hidden="true"${styleAttr({ background: bg })}>` +
-    `<b style="font-size:${opts.compact ? '22px' : '34px'};letter-spacing:.02em;` +
-    `text-shadow:0 2px 12px rgba(0,0,0,.55)">${esc(monogram(port.name))}</b>` +
-    `<i style="font-family:var(--f-mono);font-size:10px;font-style:normal;color:var(--muted);` +
-    `letter-spacing:.14em;margin-top:2px">${esc(PLATFORM_SHORT[plat] ?? plat)}</i>` +
+    '<span class="art" aria-hidden="true" style="position:absolute;inset:0;display:grid;' +
+    `place-items:center;background:${artCss(subject)}">` +
+    `<b style="font:700 ${fs}px/1 var(--f-display);color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.6);` +
+    `white-space:pre-line;text-align:center">${esc(opts.cover ?? coverTitle(port.name))}</b>` +
     '</span>'
   );
 }
 
-/** `<img>` de portada con la carátula generativa como respaldo. */
-export function coverMarkup(port: PortItem, opts: { big?: boolean; compact?: boolean } = {}): string {
+/** Fondo CSS de carátula de una ficha (para `style="background:…"`). */
+export function artBackground(port: PortItem): string {
+  return artCss(subjectOf(port));
+}
+
+/** `<img>` de portada con el arte generativo como respaldo. */
+export function coverMarkup(port: PortItem, opts: { cls?: string } = {}): string {
   const img = port.coverUrl
-    ? `<img src="${esc(port.coverUrl)}" alt="" loading="lazy" decoding="async" ` +
-      `referrerpolicy="no-referrer" onerror="this.remove()">`
+    ? `<img class="${esc(opts.cls ?? 'cimg')}" src="${esc(port.coverUrl)}" alt="" loading="lazy" ` +
+      'decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">'
     : '';
-  return art(port, { compact: opts.compact ?? opts.big ?? false }) + img;
+  return art(port) + img;
 }
 
 /* -------------------------------------------------------------------------- */
 /* Soportes (cartuchos y discos)                                              */
 /* -------------------------------------------------------------------------- */
 
-/** Spans que necesita cada silueta (los opcionales quedan invisibles si faltan). */
-export const MEDIA_SPANS: Record<MediaStyle, readonly string[]> = {
-  n64: ['body', 'grill', 'label', 'notch'],
-  snes: ['body', 'grill', 'label'],
-  nes: ['body', 'grill', 'label', 'notch'],
-  md: ['body', 'grill', 'label', 'slot'],
-  gba: ['body', 'grill', 'label', 'notch'],
-  gb: ['body', 'grill', 'label', 'slot'],
-  nds: ['body', 'grill', 'label'],
-  n3ds: ['body', 'grill', 'label', 'notch'],
-  nsw: ['body', 'grill', 'label', 'notch'],
-  psp: ['body', 'umd', 'hole', 'label'],
-  cd: ['body', 'hole', 'shine'],
-  ps1: ['body', 'hole', 'shine'],
-  gcn: ['body', 'hole', 'shine'],
-  xbox: ['body', 'hole', 'shine'],
-  ps2: ['body', 'hole', 'shine'],
-  x360: ['body', 'hole', 'shine'],
-};
-
-/** Orden de pintado canónico (el `.body` primero, la `.shine` al final). */
-const SPAN_ORDER = ['body', 'grill', 'label', 'notch', 'slot', 'umd', 'hole', 'shine'] as const;
-
-export type MediaSize = 'sz-s' | 'sz-m' | 'sz-l' | 'sz-xl';
-
-export interface MediaOptions {
-  size?: MediaSize;
-  /** Texto de la etiqueta (por defecto la plataforma corta). */
-  label?: string;
-  /** Insignia de aviso en la esquina (-9px): texto y tipo. */
-  flag?: { text: string; kind?: 'warn' | 'danger' | 'info' | 'ok' };
-  /** Zoom fino (`--mz`), multiplica el tamaño base de la silueta. */
-  mz?: number;
-  /** Clases extra para el contenedor. */
-  cls?: string;
-  /** Atributos extra ya escapados (p. ej. `title`). */
-  extra?: string;
+/** Estilo de soporte efectivo de un port según los ajustes activos. */
+export function mediaStyleOf(port: PortItem, settings?: Settings | null): MediaStyle {
+  return styleFor(port, settings ?? null);
 }
 
 /**
- * Soporte completo (`.media.<estilo>`) con sus spans y la insignia opcional.
- * El tamaño base lo pone el CSS de cada silueta; `size`/`mz` lo escalan.
+ * Soporte completo (cartucho o disco) de una ficha, con la carátula real si la
+ * hay y la insignia de aviso opcional. Delega en el port de `mediaHTML()`.
  */
-export function mediaMarkup(style: MediaStyle, opts: MediaOptions = {}): string {
-  const spans = MEDIA_SPANS[style] ?? MEDIA_SPANS.cd;
-  const label = opts.label ?? '';
-  const body = SPAN_ORDER.filter((name) => spans.includes(name))
-    .map((name) => {
-      if (name === 'label') return `<span class="label">${esc(label)}</span>`;
-      return `<span class="${name}"></span>`;
-    })
-    .join('');
-  const flag = opts.flag
-    ? `<span class="flag" data-kind="${opts.flag.kind ?? 'warn'}">${esc(opts.flag.text)}</span>`
-    : '';
-  const cls = `media ${style}${opts.size ? ` ${opts.size}` : ''}${opts.cls ? ` ${opts.cls}` : ''}`;
-  const styleAttrValue = opts.mz ? styleAttr({ '--mz': String(opts.mz) }) : '';
-  return (
-    `<div class="${esc(cls)}"${styleAttrValue} aria-hidden="true"${opts.extra ?? ''}>` +
-    `${body}${flag}</div>`
-  );
-}
-
-/** Estilo de soporte efectivo de un port según los ajustes activos. */
-export function mediaStyleOf(port: PortItem, settings?: Settings | null): MediaStyle {
-  return catalogService.getMediaStyle(port, settings ?? null);
+export function mediaMarkup(
+  style: MediaStyle,
+  opts: {
+    port?: PortItem | null;
+    label?: string;
+    flag?: { text: string; color: string } | null;
+    mz?: number;
+    cover?: string;
+    cls?: string;
+    extra?: string;
+    size?: string;
+  } = {}
+): string {
+  const subject = opts.port
+    ? subjectOf(opts.port)
+    : { pid: `style-${style}`, name: style.toUpperCase(), sourcePlatform: 'other' as const };
+  /** `size` (`.sz-s`, `.sz-m`, `.sz-l`, `.sz-xl`…) se suma a las clases del soporte. */
+  const cls = [opts.cls, opts.size].filter(Boolean).join(' ');
+  return mediaHTML(subject, style, {
+    label: opts.label,
+    flag: opts.flag ?? null,
+    mz: opts.mz,
+    cover: opts.cover,
+    cls: cls || undefined,
+    extra: opts.extra,
+  });
 }
 
 /** Slot de soporte que se superpone a la carátula (posters y lista). */
@@ -413,9 +364,9 @@ export function mediaSlot(port: PortItem, shared: ViewShared = {}): string {
   if (!enabled) return '';
   const style = mediaStyleOf(port, shared.settings);
   return (
-    `<div class="media-slot">` +
+    '<div class="media-slot">' +
     mediaMarkup(style, {
-      size: 'sz-s',
+      port,
       mz: 0.62,
       label: PLATFORM_SHORT[port.sourcePlatform] ?? '',
     }) +
@@ -484,37 +435,34 @@ export function delegatePortEvents(root: HTMLElement, shared: ViewShared = {}): 
 /* Tarjeta                                                                    */
 /* -------------------------------------------------------------------------- */
 
-/** Tarjeta de carátula individual (`.card`). */
+/** Tarjeta de carátula individual (`.card`), markup del prototipo. */
 export function posterCard(port: PortItem, shared: ViewShared = {}): string {
   const state = stateOf(port.pid, shared);
-  const version = versionText(port);
   const label =
     `${port.name} · ${PLATFORM_SHORT[port.sourcePlatform] ?? port.sourcePlatform} · ` +
     LIBRARY_STATE_LABELS[state];
-  const meta = [
-    PLATFORM_SHORT[port.sourcePlatform] ?? port.sourcePlatform,
-    version,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const cover = port.coverUrl
+    ? `<img class="cimg" src="${esc(port.coverUrl)}" alt="" loading="lazy" decoding="async" ` +
+      'referrerpolicy="no-referrer" onerror="this.remove()">'
+    : '';
 
   return (
-    `<div class="card" data-pid="${esc(port.pid)}" data-act="open" tabindex="0" ` +
-    `role="article" aria-label="${esc(label)}">` +
-    '<div class="cover">' +
-    `<div class="badges">${platPill(port)}${devChip(port, { short: true })}</div>` +
-    coverMarkup(port) +
-    mediaSlot(port, shared) +
+    `<article class="card" data-pid="${esc(port.pid)}" data-act="open" tabindex="0" ` +
+    `role="link" aria-label="${esc(label)}">` +
+    `<div class="poster" style="background:${artBackground(port)}">` +
+    cover +
+    platTag(port) +
+    `<span class="devp">${devChip(port, { short: true })}</span>` +
+    `<span class="t">${esc(coverTitle(port.name))}</span>` +
     '</div>' +
-    `<div class="ct" title="${esc(port.name)}">${esc(port.name)}</div>` +
-    `<div class="cs"><span class="nm">${esc(meta)}</span>` +
-    `<span class="sep" aria-hidden="true">·</span>` +
-    `<span class="nm">${esc(INSTALL_STRATEGY_LABELS[port.installStrategy] ?? '')}</span></div>` +
-    '<div class="cs" style="justify-content:space-between;gap:6px">' +
-    actionButton(port, state) +
     gearButton(port, state) +
-    '</div>' +
-    '</div>'
+    '<div class="meta">' +
+    `<b title="${esc(port.name)}">${esc(port.name)}</b>` +
+    `<span class="muted" style="font-size:12px">${esc(metaText(port))}</span>` +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:space-between">' +
+    statePill(state) +
+    actionButton(port, state) +
+    '</div></div></article>'
   );
 }
 

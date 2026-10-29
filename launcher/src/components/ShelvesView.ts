@@ -2,37 +2,30 @@
  * PortsLauncher · Fase 3
  * launcher/src/components/ShelvesView.ts
  *
- * Estantería de soportes (`.shelves` > `.shelf` > `.rail`): una repisa por
- * plataforma de origen, con la línea de neón y el pie de 32 px que define el
- * CSS, y un ítem por port con su cartucho/disco (los 16 estilos de §8).
+ * Estantería de soportes: **estructura exacta del prototipo de Claude**
+ * (`shelves()` del prototipo, líneas 393-395).
  *
- * Contrato con el CSS (`launcher/src/styles/layout.css` + `media.css`):
- *   .shelves > .shelf > .shead (h2 + .more) / .rail > *
- *   .rail  → grid auto-columns 132–148 px, scroll-snap y padding-bottom 32 px
- *   .media.<estilo> → spans .body/.grill/.label/.notch/.slot/.umd/.hole/.shine
+ *   div.shelves
+ *     section.shelf
+ *       h2                      ← nombre de la plataforma + «N ports»
+ *       div.rail[style="--n:<neón>"]
+ *         div.items             ← flex-wrap, gap 26px
+ *           div.slot[style="--w:<px>"]
+ *             <mediaHTML>       ← cartucho/disco con arte y etiqueta
+ *             div.cap           ← nombre (máx. 2 líneas, centrado)
+ *             div.foot          ← chip de desarrollo + ⚙ (pie de 32 px)
+ *         div.board             ← tabla inferior de la repisa
  *
- * El ítem reaprovecha `.card` / `.ct` / `.cs` para no duplicar estilos; el
- * marco de carátula se neutraliza en línea (`.cover` transparente) para que
- * el protagonista sea el soporte, no un póster 3:4.
+ * El neón de la repisa (`--n`) sale de la plataforma de origen y la línea
+ * superior la pinta `.rail::before` en `media.css`.
  * ========================================================================== */
 
 import type { LibraryState, PortItem, SourcePlatform } from '../services/types';
-import {
-  CATALOG_PLATFORMS,
-  LIBRARY_STATE_LABELS,
-  PLATFORM_LABELS,
-  PLATFORM_SHORT,
-} from '../services/types';
-import { esc, styleAttr } from './Icons';
+import { CATALOG_PLATFORMS, LIBRARY_STATE_LABELS, PLATFORM_LABELS } from '../services/types';
+import { esc } from './Icons';
+import { MEDIA, flagFor, mediaHTML, platNeon, styleFor } from './Media';
 import type { ViewShared } from './PostersView';
-import {
-  delegatePortEvents,
-  gearButton,
-  mediaMarkup,
-  mediaStyleOf,
-  stateOf,
-  statePill,
-} from './PostersView';
+import { delegatePortEvents, devChip, gearButton, stateOf } from './PostersView';
 
 /* -------------------------------------------------------------------------- */
 /* Tipos                                                                      */
@@ -98,7 +91,6 @@ export function groupByPlatform(
   };
 
   for (const platform of order) push(platform);
-  // Plataformas fuera del orden canónico (p. ej. `other` si no estaba).
   for (const platform of buckets.keys()) push(platform);
 
   return groups;
@@ -108,63 +100,29 @@ export function groupByPlatform(
 /* Ítem                                                                       */
 /* -------------------------------------------------------------------------- */
 
-const COVER_RESET = styleAttr({
-  'aspect-ratio': 'auto',
-  background: 'none',
-  border: '0',
-  'box-shadow': 'none',
-  overflow: 'visible',
-  display: 'grid',
-  'place-items': 'center',
-  padding: '6px 0 0',
-});
-
-const FOOT_STYLE = styleAttr({
-  height: '32px',
-  'min-height': '32px',
-  'justify-content': 'center',
-  gap: '6px',
-});
-
-/** Insignia del soporte según el estado local. */
-function mediaFlag(state: LibraryState): { text: string; kind: 'warn' | 'danger' | 'info' | 'ok' } | null {
-  switch (state) {
-    case 'NeedsRom':
-      return { text: '!', kind: 'warn' };
-    case 'Broken':
-      return { text: '✕', kind: 'danger' };
-    case 'UpdateAvailable':
-      return { text: '↑', kind: 'info' };
-    case 'Ready':
-      return { text: '✓', kind: 'ok' };
-    default:
-      return null;
-  }
+/** Insignia de aviso del soporte según el estado local. */
+export function mediaFlagOf(state: LibraryState): { text: string; color: string } | null {
+  return flagFor(state);
 }
 
-/** Ítem de repisa: soporte + nombre (2 líneas) + pie de 32 px. */
-export function shelfItem(port: PortItem, shared: ViewShared = {}): string {
+/**
+ * Ítem de repisa: soporte + nombre en dos líneas + pie de 32 px.
+ * Markup idéntico al `.slot` del prototipo.
+ */
+export function shelfItem(port: PortItem, shared: ShelvesOptions = {}): string {
   const state = stateOf(port.pid, shared);
-  const style = mediaStyleOf(port, shared.settings);
-  const flag = mediaFlag(state);
+  const style = styleFor(port, shared.settings);
+  const width = (MEDIA[style] ?? MEDIA.cd).w;
   const label =
-    `${port.name} · ${PLATFORM_SHORT[port.sourcePlatform]} · ${LIBRARY_STATE_LABELS[state]}`;
+    `${port.name} · ${PLATFORM_LABELS[port.sourcePlatform] ?? port.sourcePlatform} · ` +
+    LIBRARY_STATE_LABELS[state];
 
   return (
-    `<div class="card" data-pid="${esc(port.pid)}" data-act="open" tabindex="0" ` +
-    `role="article" aria-label="${esc(label)}">` +
-    `<div class="cover"${COVER_RESET}>` +
-    mediaMarkup(style, {
-      size: 'sz-m',
-      label: PLATFORM_SHORT[port.sourcePlatform],
-      flag: flag ?? undefined,
-    }) +
-    '</div>' +
-    `<div class="ct" style="text-align:center">${esc(port.name)}</div>` +
-    `<div class="cs"${FOOT_STYLE}>` +
-    statePill(state) +
-    gearButton(port, state) +
-    '</div>' +
+    `<div class="slot" style="--w:${width}px" data-pid="${esc(port.pid)}" data-act="open" ` +
+    `tabindex="0" role="link" aria-label="${esc(label)}">` +
+    mediaHTML(port, style, { flag: mediaFlagOf(state) }) +
+    `<div class="cap" title="${esc(port.name)}">${esc(port.name)}</div>` +
+    `<div class="foot">${devChip(port, { title: true })}${gearButton(port, state, 'btn sm ico')}</div>` +
     '</div>'
   );
 }
@@ -173,39 +131,27 @@ export function shelfItem(port: PortItem, shared: ViewShared = {}): string {
 /* Repisa y vista                                                             */
 /* -------------------------------------------------------------------------- */
 
-/** Repisa individual (`.shelf`). */
+/** Repisa individual (`.shelf`), markup del prototipo. */
 export function shelf(group: ShelfGroup, shared: ShelvesOptions = {}): string {
+  const neon = platNeon(group.platform);
   const items = group.ports.map((port) => shelfItem(port, shared)).join('');
   const more =
     group.total > group.ports.length
-      ? `<button type="button" class="more" data-more="${group.platform}" ` +
+      ? `<button type="button" class="more" data-more="${esc(group.platform)}" ` +
         `title="Ver los ${group.total} puertos de ${esc(group.label)}">` +
         `Ver todos (${group.total})</button>`
       : '';
-  return (
-    `<section class="shelf" data-plat="${group.platform}" aria-label="${esc(group.label)}">` +
-    '<div class="shead">' +
-    `<h2>${esc(group.label)}</h2>` +
-    platDot(group.platform) +
-    `<span class="mono" style="color:var(--muted);font-size:var(--fs-2xs)">` +
-    `${group.ports.length}/${group.total}</span>` +
-    more +
-    '</div>' +
-    `<div class="rail" role="list">${items}</div>` +
-    '</section>'
-  );
-}
+  const counter =
+    `<span class="mono muted" style="font-size:12px;font-weight:400">${group.ports.length} ports</span>`;
 
-function platDot(platform: SourcePlatform): string {
-  const neon = `var(--p-${platform}-neon, var(--muted))`;
-  const style = styleAttr({
-    width: '8px',
-    height: '8px',
-    'border-radius': '50%',
-    background: neon,
-    'box-shadow': `0 0 8px ${neon}`,
-  });
-  return `<span${style} aria-hidden="true"></span>`;
+  return (
+    `<section class="shelf" data-plat="${esc(group.platform)}" aria-label="${esc(group.label)}">` +
+    `<h2>${esc(group.label.toUpperCase())}${counter}${more}</h2>` +
+    `<div class="rail" style="--n:${neon}">` +
+    `<div class="items">${items}</div>` +
+    '<div class="board"></div>' +
+    '</div></section>'
+  );
 }
 
 /** Estantería completa (`.shelves`). */

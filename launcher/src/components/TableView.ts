@@ -2,18 +2,14 @@
  * PortsLauncher · Fase 3
  * launcher/src/components/TableView.ts
  *
- * Vista de tabla (`.twrap` > `table.tbl`) con columnas ordenables:
- * Port · Plataforma · Estrategia · Desarrollo · Estado · Acción · ⚙.
+ * Vista de tabla (`.twrap` > `table`), markup y estilo del prototipo de Claude
+ * (`tableView()`, líneas 390-392): cabeceras en mayúsculas ordenables, filas
+ * clicables y columnas Port · Plataforma · Destino · Estrategia · Versión ·
+ * Desarrollo · Estado · Acción · ⚙.
  *
- * Contrato con el CSS (`launcher/src/styles/layout.css`):
- *   .twrap → contenedor con scroll
- *   .tbl thead th[data-sort]  → cabecera clicable (flecha por `aria-sort`)
- *   .tbl tbody tr.on          → fila seleccionada
- *   .tbl .nm / .num           → celdas destacadas / numéricas
- *
- * El componente ordena él mismo (salvo `opts.sort === false`) y, además,
- * notifica cada clic con `onSortColumn(column, dir)` para que el contenedor
- * pueda persistir la preferencia o reordenar contra el catálogo completo.
+ * El componente ordena él mismo (salvo `opts.sort === false`) y notifica cada
+ * clic con `onSortColumn(column, dir)` para que el contenedor pueda persistir
+ * la preferencia o reordenar contra el catálogo completo.
  * ========================================================================== */
 
 import type { LibraryState, PortItem } from '../services/types';
@@ -24,9 +20,10 @@ import {
   LIBRARY_STATE_LABELS,
   PLATFORM_LABELS,
   PLATFORM_SHORT,
+  TARGET_LABELS,
 } from '../services/types';
 import { catalogService } from '../services/catalogService';
-import { esc, icon, styleAttr } from './Icons';
+import { esc, styleAttr } from './Icons';
 import type { ViewShared } from './PostersView';
 import {
   actionButton,
@@ -35,6 +32,7 @@ import {
   gearButton,
   stateOf,
   statePill,
+  versionText,
 } from './PostersView';
 
 /* -------------------------------------------------------------------------- */
@@ -44,7 +42,9 @@ import {
 export type TableColumn =
   | 'name'
   | 'platform'
+  | 'target'
   | 'strategy'
+  | 'version'
   | 'dev'
   | 'state'
   | 'action'
@@ -75,14 +75,16 @@ export interface TableOptions extends ViewShared {
   onSelect?: (pid: string) => void;
 }
 
-/** Definición canónica de columnas. */
+/** Definición canónica de columnas (rótulos del prototipo en mayúsculas). */
 export const TABLE_COLUMNS: readonly TableColumnDef[] = [
-  { id: 'name', label: 'Port', sortable: true, align: 'left' },
-  { id: 'platform', label: 'Plataforma', sortable: true, align: 'left' },
-  { id: 'strategy', label: 'Estrategia', sortable: true, align: 'left' },
-  { id: 'dev', label: 'Desarrollo', sortable: true, align: 'left' },
-  { id: 'state', label: 'Estado', sortable: true, align: 'left' },
-  { id: 'action', label: 'Acción', sortable: false, align: 'right' },
+  { id: 'name', label: 'PORT', sortable: true, align: 'left' },
+  { id: 'platform', label: 'PLATAFORMA ORIGEN', sortable: true, align: 'left' },
+  { id: 'target', label: 'DESTINO', sortable: true, align: 'left' },
+  { id: 'strategy', label: 'ESTRATEGIA', sortable: true, align: 'left' },
+  { id: 'version', label: 'VERSIÓN', sortable: true, align: 'left' },
+  { id: 'dev', label: 'DESARROLLO', sortable: true, align: 'left' },
+  { id: 'state', label: 'ESTADO', sortable: true, align: 'left' },
+  { id: 'action', label: 'ACCIÓN', sortable: false, align: 'right' },
   { id: 'gear', label: '⚙', sortable: false, align: 'right' },
 ];
 
@@ -111,12 +113,20 @@ function stateIndex(state: LibraryState): number {
 }
 
 /** Valor comparable de una ficha para una columna dada. */
-export function columnValue(port: PortItem, column: TableColumn, shared: ViewShared = {}): number | string {
+export function columnValue(
+  port: PortItem,
+  column: TableColumn,
+  shared: ViewShared = {}
+): number | string {
   switch (column) {
     case 'platform':
       return platformIndex(port);
+    case 'target':
+      return text((port.targetPlatforms ?? []).join(' '));
     case 'strategy':
       return text(INSTALL_STRATEGY_LABELS[port.installStrategy] ?? port.installStrategy);
+    case 'version':
+      return text(port.verifiedRelease?.version ?? '');
     case 'dev':
       return devIndex(port);
     case 'state':
@@ -157,19 +167,17 @@ function headCell(def: TableColumnDef, opts: TableOptions): string {
   const ariaSort = active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none';
   const align = def.align ?? 'left';
   const style = styleAttr({ 'text-align': align });
-  const sortAttr = def.sortable ? ` data-sort="${def.id}" data-col="${def.id}"` : '';
+  const arrow = active ? (dir === 'asc' ? ' ↑' : ' ↓') : '';
   const title = def.sortable
     ? `Ordenar por ${def.label}${active ? ` (${dir === 'asc' ? 'asc' : 'desc'})` : ''}`
     : def.label;
+
   const inner = def.sortable
-    ? `<button type="button" class="thbtn" data-sortcol="${def.id}" ` +
-      `style="all:unset;cursor:pointer;display:inline-flex;gap:4px;align-items:center">` +
-      `${esc(def.label)}${active ? icon(dir === 'asc' ? 'arrowUp' : 'arrowDown', { size: 12 }) : ''}` +
-      '</button>'
+    ? `<span data-sortcol="${def.id}" style="cursor:pointer">${esc(def.label)}${arrow}</span>`
     : esc(def.label);
+
   return (
-    `<th scope="col"${sortAttr} aria-sort="${ariaSort}"${style} title="${esc(title)}">` +
-    `${inner}</th>`
+    `<th scope="col" aria-sort="${ariaSort}"${style} title="${esc(title)}">${inner}</th>`
   );
 }
 
@@ -191,26 +199,27 @@ export function tableRow(port: PortItem, shared: ViewShared = {}): string {
   const label =
     `${port.name} · ${PLATFORM_SHORT[port.sourcePlatform]} · ${LIBRARY_STATE_LABELS[state]}`;
   const strategy = INSTALL_STRATEGY_LABELS[port.installStrategy] ?? port.installStrategy;
+  const dest = shared.settings?.dest ?? 'Linux';
+  const targets = (port.targetPlatforms ?? []).slice(0, 2).map((t) => TARGET_LABELS[t] ?? t);
+  const version = versionText(port);
 
   return (
     `<tr data-pid="${esc(port.pid)}" data-act="open" tabindex="0" ` +
     `class="${selected ? 'on' : ''}" aria-selected="${selected ? 'true' : 'false'}" ` +
     `aria-label="${esc(label)}">` +
     cell(
-      `<span class="nm" title="${esc(port.name)}">${esc(port.name)}</span>` +
-        (port.project ? `<span style="opacity:.6"> · ${esc(port.project)}</span>` : ''),
+      `<b>${esc(port.name)}</b>` +
+        (port.project ? `<div class="muted" style="font-size:12px">${esc(port.project)}</div>` : ''),
       'left'
     ) +
-    cell(
-      `<span class="nm" title="${esc(PLATFORM_LABELS[port.sourcePlatform])}">` +
-        `${esc(PLATFORM_SHORT[port.sourcePlatform])}</span>`,
-      'left'
-    ) +
-    cell(esc(strategy), 'left') +
-    cell(devChip(port, { short: true }), 'left') +
+    cell(`<span class="mono" style="font-size:12px">${esc(PLATFORM_SHORT[port.sourcePlatform])}</span>`, 'left') +
+    cell(`${esc(dest)}${targets.length > 0 ? ` <span class="muted" style="font-size:11px">(${esc(targets.join(', '))})</span>` : ''}`, 'left') +
+    cell(`<span class="mono muted" style="font-size:12px">${esc(strategy)}</span>`, 'left') +
+    cell(`<span class="mono" style="font-size:12px">${esc(version || '—')}</span>`, 'left') +
+    cell(devChip(port), 'left') +
     cell(statePill(state), 'left') +
     cell(actionButton(port, state), 'right') +
-    cell(gearButton(port, state), 'right') +
+    cell(gearButton(port, state, 'btn sm ico'), 'right') +
     '</tr>'
   );
 }
@@ -219,7 +228,7 @@ export function tableRow(port: PortItem, shared: ViewShared = {}): string {
 /* Vista                                                                      */
 /* -------------------------------------------------------------------------- */
 
-/** Tabla completa (`.twrap` > `.tbl`). */
+/** Tabla completa (`.twrap` > `table`). */
 export function renderTable(ports: readonly PortItem[], opts: TableOptions = {}): string {
   const columns = (opts.columns ?? TABLE_COLUMNS.map((c) => c.id))
     .map((id) => TABLE_COLUMNS.find((c) => c.id === id))
@@ -236,7 +245,7 @@ export function renderTable(ports: readonly PortItem[], opts: TableOptions = {})
 
   return (
     '<div class="twrap" data-view="table">' +
-    `<table class="tbl" aria-label="Catálogo de puertos" aria-rowcount="${rowsIn.length}">` +
+    `<table aria-label="Catálogo de puertos" aria-rowcount="${rowsIn.length}">` +
     `<caption class="sr-only">${esc(summary)}</caption>` +
     `<thead><tr>${head}</tr></thead>` +
     `<tbody>${body}</tbody>` +

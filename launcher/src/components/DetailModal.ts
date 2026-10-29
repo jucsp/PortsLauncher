@@ -7,8 +7,13 @@
  * Estructura (spec v5 §10):
  *   .mhead            → nombre + botón de cierre
  *   .dhero            → portada/banner con degradado + metadatos + CTA
- *   .tabs             → Resumen · Versiones · Comunidad · Fuentes
+ *   .tabs             → Resumen · Versiones · Fuentes
  *   .dbody (grid)     → contenido de la pestaña + `.sbox` lateral
+ *
+ * **Sin sección de comunidad**: no hay pestaña de reseñas/opiniones ni caja
+ * lateral de valoraciones agregadas. El estado de desarrollo se explica con
+ * las señales objetivas del índice (regla aplicada, último cambio, bugs
+ * abiertos y confianza), nunca con cifras de opinión de terceros.
  *
  * Contrato con el CSS (`launcher/src/styles/layout.css`):
  *   .scrim / .modal.wide / .mhead / .mbody / .mfoot   (§9)
@@ -57,12 +62,11 @@ import {
 /* Tipos                                                                      */
 /* -------------------------------------------------------------------------- */
 
-export type DetailTab = 'summary' | 'versions' | 'community' | 'sources';
+export type DetailTab = 'summary' | 'versions' | 'sources';
 
 export const DETAIL_TABS: ReadonlyArray<{ id: DetailTab; label: string; icon: string }> = [
   { id: 'summary', label: 'Resumen', icon: 'info' },
   { id: 'versions', label: 'Versiones', icon: 'upd' },
-  { id: 'community', label: 'Comunidad', icon: 'star' },
   { id: 'sources', label: 'Fuentes', icon: 'external' },
 ];
 
@@ -411,51 +415,6 @@ function versionsTab(port: PortItem, opts: DetailRenderOptions): string {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Comunidad                                                                  */
-/* -------------------------------------------------------------------------- */
-
-function communityTab(port: PortItem): string {
-  const status = port.status;
-  const community = status?.community;
-  const reviews = Number(community?.reviews ?? port.playerFeedback?.reviewCount ?? 0) || 0;
-  const recommended = Number(community?.recommended ?? port.playerFeedback?.recommended ?? 0) || 0;
-  const bugs = Number(community?.bugReports ?? 0) || 0;
-  const pct = reviews > 0 ? Math.round((recommended / reviews) * 100) : 0;
-  const verdict = str(community?.verdict);
-
-  return (
-    '<div class="sbox">' +
-    '<h3>Agregados de comunidad</h3>' +
-    progressRow('Recomendación', pct) +
-    '<dl class="kv">' +
-    `<dt>Reseñas</dt><dd>${reviews}</dd>` +
-    `<dt>Recomiendan</dt><dd>${recommended}</dd>` +
-    `<dt>Bugs abiertos</dt><dd>${bugs}</dd>` +
-    `<dt>Ventana</dt><dd>${community?.windowDays ? `${community.windowDays} días` : 'no declarada'}</dd>` +
-    `<dt>Veredicto</dt><dd>${esc(verdict || 'sin veredicto textual')}</dd>` +
-    '</dl>' +
-    '</div>' +
-    '<p class="mono" style="font-size:var(--fs-2xs);color:var(--muted);margin:0">' +
-    'PortsHub sólo muestra datos agregados: no se importan reseñas ni comentarios individuales ' +
-    'de las fuentes. Las cifras provienen del índice generado a partir de GameWave y Quiver.' +
-    '</p>'
-  );
-}
-
-function progressRow(label: string, pct: number): string {
-  const safe = Math.max(0, Math.min(100, Math.round(pct)));
-  const color = safe >= 70 ? 'var(--st-playable)' : safe >= 40 ? 'var(--warn)' : 'var(--danger)';
-  return (
-    '<div class="set-row">' +
-    `<div class="sl"><b>${esc(label)}</b><span>${safe}% de las reseñas lo recomiendan</span></div>` +
-    '<div class="sr" style="flex:0 0 120px">' +
-    '<div class="bar" role="progressbar" aria-valuenow="' + safe + '" aria-valuemin="0" aria-valuemax="100" ' +
-    `aria-label="${esc(label)}"><i style="width:${safe}%;background:${color}"></i></div>` +
-    '</div></div>'
-  );
-}
-
-/* -------------------------------------------------------------------------- */
 /* Fuentes                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -608,17 +567,14 @@ function emptyBlock(iconName: string, title: string, text: string): string {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Caja lateral: Estado y comunidad                                           */
+/* Caja lateral: Estado de desarrollo                                         */
 /* -------------------------------------------------------------------------- */
 
 export function statusBox(port: PortItem, state?: LibraryState): string {
   const info = devInfo(port);
   const status = port.status;
   const community = status?.community;
-  const reviews = Number(community?.reviews ?? 0) || 0;
-  const recommended = Number(community?.recommended ?? 0) || 0;
   const bugs = Number(community?.bugReports ?? 0) || 0;
-  const pct = reviews > 0 ? Math.round((recommended / reviews) * 100) : info.pct;
   const lastChange = str(status?.computedAt) || latestSeen(port);
   const game = libraryService.getLibraryGame(port.pid);
   const localState = state ?? game.state;
@@ -643,14 +599,13 @@ export function statusBox(port: PortItem, state?: LibraryState): string {
   ];
 
   return (
-    '<aside class="sbox" aria-label="Estado y comunidad">' +
-    '<h3>Estado y comunidad</h3>' +
+    '<aside class="sbox" aria-label="Estado de desarrollo">' +
+    '<h3>Estado de desarrollo</h3>' +
     `<dl class="kv">${rows.filter(Boolean).join('')}</dl>` +
-    progressRow('Comunidad', pct) +
     `<p class="mono" style="margin:0;font-size:var(--fs-2xs);color:var(--muted)">` +
     `Procedencia: índice PortsHub ${esc(index?.version ?? '—')}` +
     `${index?.generatedAt ? ` · ${esc(formatDate(index.generatedAt))}` : ''}. ` +
-    'Datos agregados de GameWave y Quiver; no se muestran comentarios individuales.</p>' +
+    'Las etiquetas las calcula el indexador con las señales del repositorio.</p>' +
     '</aside>'
   );
 }
@@ -695,10 +650,8 @@ function heroMarkup(port: PortItem, state: LibraryState): string {
     'title="Elegir o cambiar la ROM">' +
     `${icon('rom', { size: 15 })}<span>ROM</span></button>` +
     '</div>' +
-    (info.pct > 0
-      ? `<div class="mono" style="font-size:var(--fs-2xs);color:var(--muted)">` +
-        `${info.pct}% recomendado · confianza ${esc(info.conf)}</div>`
-      : '') +
+    `<div class="mono" style="font-size:var(--fs-2xs);color:var(--muted)">` +
+    `Estado calculado por el índice · confianza ${esc(info.conf)}</div>` +
     '</div></div>'
   );
 }
@@ -719,8 +672,6 @@ export function detailTabBody(port: PortItem, tab: DetailTab, opts: DetailRender
   switch (tab) {
     case 'versions':
       return versionsTab(port, opts);
-    case 'community':
-      return communityTab(port);
     case 'sources':
       return sourcesTab(port);
     case 'summary':
