@@ -172,7 +172,7 @@ describe('libraryService · estado inicial seguro', () => {
 
     const settings = svc.getSettings();
     expect(settings.media).toBe(false);
-    expect(settings.view).toBe('shelves');
+    expect(settings.view).toBe('carts');
     expect(settings.mediaMap).toEqual({ n64: 'md' });
   });
 });
@@ -480,14 +480,14 @@ describe('libraryService · ajustes', () => {
       romMode: 'move' as never,
     });
 
-    expect(settings.view).toBe('shelves');
+    expect(settings.view).toBe('carts');
     expect(settings.mediaMode).toBe('auto');
     expect(settings.mediaDef).toBe('cd');
     expect(settings.dest).toBe('Linux');
     expect(settings.romMode).toBe('link');
 
     const persisted = store.parsed() as { settings: Settings };
-    expect(persisted.settings.view).toBe('shelves');
+    expect(persisted.settings.view).toBe('carts');
     expect(persisted.settings.dest).toBe('Linux');
   });
 
@@ -514,7 +514,7 @@ describe('libraryService · ajustes', () => {
     settings.view = 'table';
     settings.mediaMap.n64 = 'gb';
 
-    expect(svc.getSettings().view).toBe('shelves');
+    expect(svc.getSettings().view).toBe('carts');
     expect(svc.getSettings().mediaMap.n64).toBeUndefined();
   });
 });
@@ -550,13 +550,13 @@ describe('libraryService · exportación, importación y reseteo', () => {
       version: 1,
       updatedAt: ISO,
       games: { z: { ...createLibraryGame('z', 'release-archive'), state: 'Installed' } },
-      settings: { ...DEFAULT_SETTINGS, view: 'shelves' },
+      settings: { ...DEFAULT_SETTINGS, view: 'carts' },
     });
 
     expect(svc.importJson(payload)).toBe(true);
     expect(svc.getLibraryGame('z').state).toBe('Installed');
     expect(svc.getLibraryGame('z').installStrategy).toBe('release-archive');
-    expect(svc.getSettings().view).toBe('shelves');
+    expect(svc.getSettings().view).toBe('carts');
     expect(svc.has('a')).toBe(false); // el import sustituye, no fusiona
   });
 

@@ -1,1269 +1,709 @@
 /* ==========================================================================
- * PortsLauncher · Fase 3
- * launcher/src/main.ts
+ * PortsLauncher · main.ts
  *
- * Punto de entrada: construye el esqueleto del DOM, monta los componentes
- * persistentes (sidebar, toolbar, modales, cajón, toasts), carga el índice y
- * enruta por hash.
- *
- * Rutas:
- *   #inicio · #biblioteca · #catalogo · #actualizaciones · #ajustes
- *   #port-<pid>   → ficha de detalle (abre el modal sobre el catálogo)
- *
- * Ownership de eventos:
- *   - `delegatePortEvents()`  → acciones de ficha (open/install/play/rom/…)
- *   - `delegateSettingsEvents()` → cambios de ajustes y reset (sin `data-pid`)
- *   - `main.ts`               → `load-more`, botones de navegación interna,
- *                               `Escape` (cierra el overlay superior) y `/`
- *     Las tres delegaciones conviven en `#view` porque sus `data-act` son
- *     disjuntos: las dos primeras ignoran lo que no les corresponde.
+ * Controlador principal idéntico al prototipo interactivo
+ * (`Documentación/PortsHub Prototipo.html`), alimentado con los datos reales
+ * de `catalogService` y `libraryService`.
  * ========================================================================== */
 
-import '../src/styles/tokens.css';
-import '../src/styles/media.css';
-import '../src/styles/layout.css';
+import './styles/app.css';
 
-import type {
-  DevTag,
-  DestOS,
-  LibraryFilter,
-  LibraryState,
-  PortItem,
-  Settings,
-  SortKey,
-  SourcePlatform,
-  ViewMode,
-} from './services/types';
-import {
-  LIBRARY_STATE_LABELS,
-  PLATFORM_SHORT,
-  SORT_LABELS,
-  VIEW_MODES,
-} from './services/types';
+import type { DestOS, MediaStyle, PortItem, RomMode, Settings, ViewMode } from './services/types';
+import { DEFAULT_SETTINGS, LEGACY_VIEW_ALIASES } from './services/types';
 import { catalogService } from './services/catalogService';
 import { libraryService } from './services/libraryService';
-import { installerService, isCancelError } from './services/installerService';
-import { mountSidebar } from './components/Sidebar';
-import type { NavId, SidebarHandle } from './components/Sidebar';
-import { mountToolbar } from './components/Toolbar';
-import type { ToolbarHandle } from './components/Toolbar';
+import type { Game } from './ui/model';
+import { toGame, statusOf, esc } from './ui/model';
+import { MEDIA, PLAT } from './ui/platforms';
+import { B, D, R, S, setSnapshot, updateCount } from './ui/state';
+import type { Route } from './ui/state';
 import {
-  delegatePortEvents,
-  mediaMarkup,
-  mediaStyleOf,
-  renderPosters,
-} from './components/PostersView';
-import type { PortActionKind, ViewShared } from './components/PostersView';
-import { renderBigGrid } from './components/BigGridView';
-import { renderShelves } from './components/ShelvesView';
-import { renderList } from './components/ListView';
-import { renderTable } from './components/TableView';
-import { mountDetailModal } from './components/DetailModal';
-import type { DetailModalHandle } from './components/DetailModal';
-import { mountRomAssistant } from './components/RomAssistantModal';
-import type { RomAssistantHandle } from './components/RomAssistantModal';
-import { mountSettingsDrawer } from './components/SettingsDrawer';
-import type { SettingsDrawerHandle } from './components/SettingsDrawer';
-import { renderUpdates } from './components/UpdatesView';
-import { delegateSettingsEvents, renderSettings } from './components/SettingsView';
-import { esc, icon } from './components/Icons';
+  renderSide,
+  renderBottomNav,
+  renderHome,
+  renderBrowse,
+  refreshBrowse,
+  renderUpdates,
+  renderSettings,
+  renderGame,
+  resultsHTML,
+  heroHTML,
+  RT,
+  RT_INV,
+  bgOf,
+} from './ui/render';
+import { art } from './ui/model';
+
+const STORAGE_KEY = 'portshub-proto-v1';
+
+const $ = <T extends HTMLElement = HTMLElement>(sel: string): T | null =>
+  document.querySelector<T>(sel);
 
 /* -------------------------------------------------------------------------- */
-/* Constantes                                                                 */
+/* Capas modales: ROM, engranaje, desinstalación, lanzamiento                 */
 /* -------------------------------------------------------------------------- */
 
-/** Fichas por página (el catálogo tiene >1000 y se pinta bajo demanda). */
-export const PAGE_SIZE = 120;
-
-const ROUTE_TITLES: Record<NavId, string> = {
-  home: 'Inicio',
-  library: 'Biblioteca',
-  catalog: 'Catálogo',
-  updates: 'Actualizaciones',
-  settings: 'Ajustes',
-};
-
-const HASH_BY_ROUTE: Record<NavId, string> = {
-  home: '#inicio',
-  library: '#biblioteca',
-  catalog: '#catalogo',
-  updates: '#actualizaciones',
-  settings: '#ajustes',
-};
-
-const ROUTE_BY_HASH: Record<string, NavId> = {
-  '': 'home',
-  inicio: 'home',
-  biblioteca: 'library',
-  catalogo: 'catalog',
-  actualizaciones: 'updates',
-  ajustes: 'settings',
-};
-
-type ToastKind = 'info' | 'ok' | 'warn' | 'err';
-
-/* -------------------------------------------------------------------------- */
-/* Estado de la aplicación                                                    */
-/* -------------------------------------------------------------------------- */
-
-interface AppState {
-  route: NavId;
-  /** Ficha abierta por ruta profunda (`#port-<pid>`). */
-  pid: string | null;
-  query: string;
-  view: ViewMode;
-  library: LibraryFilter;
-  dev: DevTag | 'all';
-  sort: SortKey;
-  dest: DestOS;
-  platform: SourcePlatform | 'all';
-  /** Fichas visibles por página (paginación local). */
-  limit: number;
+interface LayerRom {
+  type: 'rom';
+  id: string;
 }
 
-function initialState(): AppState {
-  const settings = libraryService.getSettings();
-  return {
-    route: 'home',
-    pid: null,
-    query: '',
-    view: settings.view,
-    library: 'all',
-    dev: 'all',
-    sort: 'name-asc',
-    dest: settings.dest,
-    platform: 'all',
-    limit: PAGE_SIZE,
-  };
+interface LayerGear {
+  type: 'gear';
+  id: string;
 }
 
-const state = initialState();
-
-/* -------------------------------------------------------------------------- */
-/* DOM                                                                        */
-/* -------------------------------------------------------------------------- */
-
-interface Shell {
-  app: HTMLElement;
-  main: HTMLElement;
-  view: HTMLElement;
-  layer: HTMLElement;
-  toasts: HTMLElement;
+interface LayerUnins {
+  type: 'unins';
+  id: string;
 }
 
-function ensureDom(): Shell {
-  let app = document.getElementById('app');
-  if (!app) {
-    app = document.createElement('div');
-    app.id = 'app';
-    document.body.append(app);
-  }
-
-  let main = document.getElementById('main');
-  if (!main) {
-    main = document.createElement('main');
-    main.id = 'main';
-    app.append(main);
-  }
-
-  let view = document.getElementById('view');
-  if (!view) {
-    view = document.createElement('div');
-    view.id = 'view';
-    view.className = 'view';
-    main.append(view);
-  }
-
-  let layer = document.getElementById('layer');
-  if (!layer) {
-    layer = document.createElement('div');
-    layer.id = 'layer';
-    document.body.append(layer);
-  }
-
-  let toasts = document.getElementById('toast');
-  if (!toasts) {
-    toasts = document.createElement('div');
-    toasts.id = 'toast';
-    toasts.setAttribute('aria-live', 'polite');
-    toasts.setAttribute('aria-atomic', 'false');
-    document.body.append(toasts);
-  }
-
-  return { app, main, view, layer, toasts };
+interface LayerLaunch {
+  type: 'launch';
+  id: string;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
-const shell = ensureDom();
+type LayerState = LayerRom | LayerGear | LayerUnins | LayerLaunch | null;
 
-/* -------------------------------------------------------------------------- */
-/* Toasts                                                                     */
-/* -------------------------------------------------------------------------- */
+let L: LayerState = null;
 
-const TOAST_ICON: Record<ToastKind, string> = {
-  info: 'info',
-  ok: 'check',
-  warn: 'alert',
-  err: 'alert',
+interface RomWizardState {
+  file: { name: string; size: number } | null;
+  checks: Array<{ ok: boolean; t: string; v: string }>;
+  ok: boolean;
+  mode: RomMode;
+  fromInstall: boolean;
+}
+
+let W: RomWizardState = {
+  file: null,
+  checks: [],
+  ok: false,
+  mode: 'link',
+  fromInstall: false,
 };
 
-export function toast(message: string, kind: ToastKind = 'info', ms = 4800): void {
+export function toast(msg: string): void {
+  const container = $('#toast');
+  if (!container) return;
   const el = document.createElement('div');
-  el.className = `toast ${kind}`;
-  el.setAttribute('role', kind === 'err' ? 'alert' : 'status');
-  el.innerHTML =
-    `<span class="ti" aria-hidden="true">${icon(TOAST_ICON[kind], { size: 16 })}</span>` +
-    `<span class="tm">${esc(message)}</span>` +
-    '<button type="button" class="tx" aria-label="Cerrar aviso">✕</button>';
+  el.className = 'toast';
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 2600);
+}
 
-  const remove = (): void => {
-    el.classList.add('out');
-    window.setTimeout(() => el.remove(), 220);
+function fmtSize(bytes: number): string {
+  if (bytes > 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+  return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+}
+
+function validateRom(game: Game, name: string, size: number) {
+  const ext = (name.match(/\.[^.]+$/) ?? [''])[0].toLowerCase();
+  const allowed = game.rom ? game.rom.x : ['.iso', '.bin', '.rom', '.z64'];
+  const okExt = allowed.includes(ext);
+  const checks = [
+    {
+      ok: okExt,
+      t: okExt ? 'Extensión reconocida' : 'Extensión no reconocida',
+      v: okExt ? ext : 'se esperaba ' + allowed.join(' '),
+    },
+  ];
+  if (okExt) {
+    checks.push({ ok: true, t: 'Tamaño correcto', v: fmtSize(size) });
+    checks.push({
+      ok: true,
+      t: ext === '.v64' ? 'Orden de bytes: se convertirá' : 'Orden de bytes correcto',
+      v: ext === '.v64' ? 'byte-swapped' : 'big-endian',
+    });
+    checks.push({
+      ok: true,
+      t: 'Huella SHA-1 coincide',
+      v: (game.rom?.sha ?? 'validado') + ' (simulado)',
+    });
+  }
+  return checks;
+}
+
+function openRom(id: string, fromInstall = false): void {
+  W = {
+    file: null,
+    checks: [],
+    ok: false,
+    mode: S.settings.romMode,
+    fromInstall: !!fromInstall,
   };
+  L = { type: 'rom', id };
+  renderLayer();
+}
 
-  el.addEventListener('click', (event) => {
-    const target = event.target;
-    if (target instanceof Element && target.closest('.tx')) remove();
-  });
+function setFile(name: string, size: number): void {
+  if (!L || L.type !== 'rom') return;
+  const game = S.byId.get(L.id);
+  if (!game) return;
+  W.file = { name, size };
+  W.checks = validateRom(game, name, size);
+  W.ok = W.checks.every((c) => c.ok);
+  renderLayer();
+}
 
-  shell.toasts.append(el);
-  window.setTimeout(remove, ms);
+function romDest(game: Game): string {
+  const f = W.file ? W.file.name : `${game.id}${game.rom ? game.rom.x[0] : '.rom'}`;
+  return W.mode === 'link'
+    ? `~/Descargas/${f}`
+    : `${S.settings.romDir}/${game.t.replace(/[^A-Za-z0-9]+/g, '')}/${f}`;
+}
+
+function renderLayer(): void {
+  const el = $('#layer');
+  if (!el) return;
+  if (!L) {
+    el.innerHTML = '';
+    document.body.style.overflow = '';
+    return;
+  }
+  document.body.style.overflow = 'hidden';
+  const game = S.byId.get(L.id);
+  if (!game) {
+    closeL();
+    return;
+  }
+  let h = '';
+
+  if (L.type === 'rom') {
+    h = `<div class="scrim" data-act="closeL"></div><div class="modal" role="dialog" aria-modal="true" aria-label="Añadir ROM">
+    <div class="mhead"><div style="width:44px;height:44px;border-radius:50%;background:var(--accent2);color:#04202B;display:grid;place-items:center;font-weight:800;font-size:20px">${W.fromInstall ? '✓' : '↑'}</div><div><h2 style="font-size:22px">${W.fromInstall ? esc(game.t) + ' se instaló' : 'Añade tu ROM de ' + esc(game.t)}</h2><div class="muted">${W.fromInstall ? 'Un último paso: falta tu ROM para poder jugar.' : 'Elige tu copia del juego.'}</div></div></div>
+    <div class="mbody"><div class="drop" id="drop"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+     <b style="font-size:16px">${W.file ? esc(W.file.name) : 'Suelta aquí tu archivo de ROM'}</b><div class="muted">${game.rom ? game.rom.n + ' · ' + game.rom.x.join(' ') : 'Archivos de juego'}</div>
+     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button class="btn" data-act="pick">Elegir archivo…</button><button class="btn" data-act="sample">Usar ROM de ejemplo</button></div><input type="file" id="fpick" hidden><div class="muted" style="font-size:12px">Prototipo: solo se lee el nombre del archivo, nunca su contenido.</div></div>
+    ${W.checks.length ? `<div style="display:flex;flex-direction:column;gap:8px"><div class="lbl" style="padding:0">VALIDACIÓN</div>${W.checks.map((c) => `<div class="chk ${c.ok ? '' : 'bad'}"><i>${c.ok ? '✓' : '✕'}</i><span style="flex:1">${c.t}</span><span class="mono muted" style="font-size:12px">${esc(c.v)}</span></div>`).join('')}</div>` : ''}
+    <div><div class="lbl" style="padding:0;margin-bottom:10px">¿CÓMO LA USAMOS?</div><div style="display:flex;flex-wrap:wrap;gap:12px"><button class="opt" role="radio" aria-checked="${W.mode === 'link'}" data-act="wmode" data-k="link"><b>Usarla desde donde está</b><span class="muted">Se enlaza a <span class="mono" style="font-size:12px">${esc(W.file ? '~/Descargas/' + W.file.name : '~/Descargas/…')}</span>. No se mueve nada.</span></button><button class="opt" role="radio" aria-checked="${W.mode === 'copy'}" data-act="wmode" data-k="copy"><b>Copiarla a la carpeta del port</b><span class="muted">Se copia a <span class="mono" style="font-size:12px">${esc(S.settings.romDir)}/…</span></span></button></div><div class="muted" style="font-size:12px;margin-top:8px">El archivo original nunca se mueve ni se borra. Puedes cambiarlo luego en el engranaje ⚙.</div></div></div>
+    <div class="mfoot"><button class="btn" data-act="closeL">${W.fromInstall ? 'Hacerlo después' : 'Cancelar'}</button><button class="btn pri" data-act="saveRom" ${W.ok ? '' : 'disabled style="opacity:.45;cursor:not-allowed"'}>${W.fromInstall ? 'Guardar y jugar' : 'Guardar'}</button></div></div>`;
+  } else if (L.type === 'unins') {
+    h = `<div class="scrim" data-act="closeL"></div><div class="modal" style="width:min(460px,calc(100vw - 24px))" role="alertdialog" aria-modal="true"><div class="mbody"><h2 style="font-size:22px">¿Desinstalar ${esc(game.t)}?</h2><div class="muted">Se borra la carpeta del port. Tu ROM original no se toca.</div><label style="display:flex;gap:10px;align-items:center"><input type="checkbox" id="keep" checked> Conservar mis partidas guardadas</label></div><div class="mfoot"><button class="btn" data-act="closeL">Cancelar</button><button class="btn dng" data-act="doUnins">Desinstalar</button></div></div>`;
+  } else if (L.type === 'gear') {
+    const hasRom = !!game.rom;
+    h = `<div class="scrim" data-act="closeL"></div><aside class="drawer" role="dialog" aria-modal="true" aria-label="Configuración de ${esc(game.t)}">
+    <div style="display:flex;align-items:center;gap:14px"><div class="thumb" style="width:56px;height:56px;background:${bgOf(game)}"></div><div style="flex:1;min-width:0"><h2 style="font-size:22px">${esc(game.t)}</h2><div class="muted">${esc(game.pr)} · v${game.v ?? game.lv} · Configuración</div></div><button class="btn ico" data-act="closeL" aria-label="Cerrar">✕</button></div>
+    <section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">DIRECTORIO DE INSTALACIÓN</div><input class="in-txt" data-g="dir" value="${esc(game.dir)}" aria-label="Directorio de instalación"><div style="display:flex;gap:8px"><button class="btn sm" data-act="toast" data-m="Abriendo carpeta… (simulado)">Abrir carpeta</button><button class="btn sm" data-act="toast" data-m="Port movido a ${esc(game.dir)} (simulado)">Mover aquí</button></div></section>
+    ${hasRom ? `<section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">ROM</div><div style="display:flex;gap:8px"><div class="in-txt" style="display:flex;align-items:center;overflow:hidden;white-space:nowrap">${game.romOk ? esc(game.romPath) : 'Sin ROM'}</div><button class="btn" data-act="rom" data-id="${L.id}">Cambiar…</button></div>
+     <div class="seg" role="group" aria-label="Modo de ROM"><button style="flex:1;width:auto;font-weight:600" aria-pressed="${game.romMode === 'link'}" data-act="gmode" data-k="link">Usar donde está</button><button style="flex:1;width:auto;font-weight:600" aria-pressed="${game.romMode === 'copy'}" data-act="gmode" data-k="copy">Copiar a carpeta del port</button></div>
+     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><span style="color:${game.romOk ? 'var(--accent2)' : 'var(--warn)'};font-weight:600">${game.romOk ? '● Validada · SHA-1 coincide' : '● Falta la ROM'}</span><button class="btn sm" data-act="reval">Revalidar</button></div></section>` : '<section class="box"><b>Este port no necesita ROM.</b></section>'}
+    <section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">ACTUALIZACIONES</div>
+     <div class="chk" style="justify-content:space-between"><span>Actualizar automáticamente</span><button class="tog" role="switch" aria-checked="${game.auto}" data-act="gtog" data-k="auto" aria-label="Actualizar automáticamente"><i></i></button></div>
+     <div class="chk" style="justify-content:space-between"><span>Fijar versión <span class="mono warn" style="color:var(--warn)">v${game.v ?? game.lv}</span></span><button class="tog" role="switch" aria-checked="${game.pin}" data-act="gtog" data-k="pin" aria-label="Fijar versión"><i></i></button></div></section>
+    <section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">AVANZADO</div><label class="muted">Ejecutable<input class="in-txt" data-g="exe" value="${esc(game.exe || './' + game.t.replace(/[^A-Za-z0-9]+/g, '') + '.exe')}"></label><label class="muted">Argumentos<input class="in-txt" data-g="args" value="${esc(game.args)}"></label><label class="muted">Ejecutar con<br><select class="sel" data-g="runner" style="margin-top:6px"><option ${game.runner === 'Nativo' ? 'selected' : ''}>Nativo</option><option ${game.runner === 'Proton' ? 'selected' : ''}>Proton</option></select></label></section>
+    <div style="margin-top:auto;display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between"><button class="btn dng" data-act="unins">Desinstalar (conservar partidas)</button><button class="btn pri" data-act="closeL">Listo</button></div></aside>`;
+  } else if (L.type === 'launch') {
+    h = `<div class="launch"><div class="spin"></div><h2 style="font-size:30px">Iniciando ${esc(game.t)}…</h2><div class="muted">${esc(game.pr)} · ${game.runner} · simulación</div><button class="btn" data-act="closeL">Cancelar</button></div>`;
+  }
+
+  el.innerHTML = h;
+
+  const drop = $('#drop');
+  if (drop) {
+    ['dragover', 'dragenter'].forEach((e) =>
+      drop.addEventListener(e, (ev) => {
+        ev.preventDefault();
+        drop.classList.add('over');
+      })
+    );
+    ['dragleave', 'drop'].forEach((e) =>
+      drop.addEventListener(e, (ev) => {
+        ev.preventDefault();
+        drop.classList.remove('over');
+      })
+    );
+    drop.addEventListener('drop', (ev) => {
+      const dt = (ev as DragEvent).dataTransfer;
+      const file = dt && dt.files && dt.files[0];
+      if (file) setFile(file.name, file.size);
+    });
+    const fp = $('#fpick') as HTMLInputElement | null;
+    if (fp) {
+      fp.addEventListener('change', () => {
+        const file = fp.files && fp.files[0];
+        if (file) setFile(file.name, file.size);
+      });
+    }
+  }
+
+  const firstBtn = el.querySelector<HTMLButtonElement>(
+    '.modal button, .drawer button, .launch button'
+  );
+  if (firstBtn) firstBtn.focus({ preventScroll: true });
+}
+
+function closeL(): void {
+  if (L && L.type === 'launch' && L.timer) clearTimeout(L.timer);
+  const wasRom = L && L.type === 'rom' && W.fromInstall;
+  L = null;
+  renderLayer();
+  if (wasRom) toast('Podrás añadir la ROM cuando quieras desde el engranaje ⚙');
+  draw();
 }
 
 /* -------------------------------------------------------------------------- */
-/* Componentes persistentes                                                   */
+/* Acciones: simulación, ejecución y persistencia                             */
 /* -------------------------------------------------------------------------- */
 
-let sidebar: SidebarHandle;
-let toolbar: ToolbarHandle;
-let detail: DetailModalHandle;
-let romAssistant: RomAssistantHandle;
-let drawer: SettingsDrawerHandle;
+const PROG: Record<string, number> = {};
 
-/** Objeto compartido por todas las vistas (se actualiza antes de cada render). */
-const shared: ViewShared = {
-  states: libraryService.getStates(),
-  settings: libraryService.getSettings(),
-  callbacks: {
-    onOpen: (pid) => openDetail(pid),
-    onGear: (pid) => drawer.open(pid),
-    onAction: (pid, kind) => handlePortAction(pid, kind),
+function simulate(id: string, kind: 'install' | 'update'): void {
+  const game = S.byId.get(id);
+  if (!game || PROG[id] != null) return;
+  PROG[id] = 0;
+  draw();
+  const iv = setInterval(() => {
+    PROG[id] = Math.min(100, (PROG[id] ?? 0) + 4 + Math.random() * 9);
+    document.querySelectorAll<HTMLElement>(`[data-prog="${id}"]`).forEach((e) => {
+      e.style.width = PROG[id] + '%';
+    });
+    const stg = PROG[id] < 60 ? 'Descargando…' : PROG[id] < 85 ? 'Verificando huella…' : 'Instalando…';
+    document.querySelectorAll<HTMLElement>(`[data-stage="${id}"]`).forEach((e) => {
+      e.textContent = stg;
+    });
+    if (PROG[id] >= 100) {
+      clearInterval(iv);
+      delete PROG[id];
+      game.inst = true;
+      game.v = game.lv;
+      saveState();
+      draw();
+      if (kind === 'install' && game.rom && !game.romOk) {
+        openRom(id, true);
+      } else {
+        toast(game.t + (kind === 'update' ? ' actualizado a ' + game.lv : ' instalado'));
+      }
+    }
+  }, 140);
+}
+
+function play(id: string): void {
+  const game = S.byId.get(id);
+  if (!game) return;
+  S.last = id;
+  game.played = Date.now();
+  saveState();
+  L = {
+    type: 'launch',
+    id,
+    timer: setTimeout(() => {
+      L = null;
+      renderLayer();
+      toast('Sesión de ' + game.t + ' terminada (simulada)');
+      draw();
+    }, 2200),
+  };
+  renderLayer();
+}
+
+function primaryAction(id: string): void {
+  const game = S.byId.get(id);
+  if (!game) return;
+  const st = statusOf(game);
+  if (st.act === 'install') simulate(id, 'install');
+  else if (st.act === 'update') simulate(id, 'update');
+  else if (st.act === 'rom') openRom(id, false);
+  else if (st.act === 'play') play(id);
+  else if (st.act === 'detail') {
+    go('game', id);
+    toast('Compilar desde código: se mostraría la guía (simulado)');
+  } else if (st.act === 'ext') {
+    toast('Abriría la página del proyecto en una pestaña nueva (simulado)');
+  }
+}
+
+const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
+  open: (d) => d.id && go('game', d.id),
+  nav: (d) => d.to && go(d.to as Route),
+  primary: (d) => d.id && primaryAction(d.id),
+  gear: (d) => {
+    if (!d.id) return;
+    L = { type: 'gear', id: d.id };
+    renderLayer();
+  },
+  plat: (d) => {
+    B.plat = (d.k as any) || 'all';
+    if (!['library', 'catalog'].includes(R.name)) {
+      go('library');
+    } else {
+      draw();
+    }
+  },
+  filter: (d) => {
+    B.filter = (d.k as any) || 'all';
+    refreshBrowse();
+    renderSide();
+  },
+  clear: () => {
+    B.q = '';
+    B.filter = 'all';
+    B.plat = 'all';
+    B.dev = 'all';
+    draw();
+  },
+  dest: () => {
+    S.settings.dest = S.settings.dest === 'Linux' ? 'Windows' : 'Linux';
+    saveState();
+    draw();
+    toast('Destino: ' + S.settings.dest);
+  },
+  view: (d) => {
+    if (!d.k) return;
+    S.settings.view = d.k as ViewMode;
+    saveState();
+    if (R.name === 'settings') renderSettings();
+    else refreshBrowse();
+  },
+  sort: (d) => {
+    const k = d.k as any;
+    if (B.sort === k) B.dir = (B.dir * -1) as 1 | -1;
+    else {
+      B.sort = k;
+      B.dir = 1;
+    }
+    refreshBrowse();
+  },
+  tab: (d) => {
+    if (d.k) D.tab = d.k as any;
+    if (R.id) renderGame(R.id);
+  },
+  toast: (d) => d.m && toast(d.m),
+  ext: () => toast('Abriría la página del proyecto en una pestaña nueva (simulado)'),
+  media: (d) => {
+    if (!d.k) return;
+    if (S.settings.mediaMode === 'single') S.settings.media = true;
+    S.settings[S.settings.mediaMode === 'single' ? 'mediaDef' : 'mediaDef'] = d.k as MediaStyle;
+    saveState();
+    renderSettings();
+    toast('Estilo: ' + (MEDIA[d.k as MediaStyle]?.name ?? d.k));
+  },
+  mmode: (d) => {
+    if (d.k) S.settings.mediaMode = d.k as any;
+    saveState();
+    renderSettings();
+  },
+  rmode: (d) => {
+    if (d.k) S.settings.romMode = d.k as any;
+    saveState();
+    renderSettings();
+  },
+  reset: () => {
+    S.settings = { ...DEFAULT_SETTINGS };
+    saveState();
+    draw();
+    toast('Ajustes restablecidos');
+  },
+  updall: () => {
+    S.games
+      .filter((g) => statusOf(g).k === 'upd')
+      .forEach((g) => simulate(g.id, 'update'));
+  },
+  closeL: () => closeL(),
+  rom: (d) => d.id && openRom(d.id, false),
+  pick: () => $('#fpick')?.click(),
+  sample: () => {
+    if (!L || L.type !== 'rom') return;
+    const game = S.byId.get(L.id);
+    if (!game) return;
+    setFile(game.id + (game.rom ? game.rom.x[0] : '.iso'), 16777216);
+  },
+  wmode: (d) => {
+    if (d.k) W.mode = d.k as RomMode;
+    renderLayer();
+  },
+  saveRom: () => {
+    if (!W.ok || !L || L.type !== 'rom') return;
+    const id = L.id;
+    const game = S.byId.get(id);
+    if (!game) return;
+    const fi = W.fromInstall;
+    game.romOk = true;
+    game.romMode = W.mode;
+    game.romPath = romDest(game);
+    saveState();
+    L = null;
+    renderLayer();
+    draw();
+    if (fi) play(id);
+    else toast('ROM guardada y validada');
+  },
+  gmode: (d) => {
+    if (!L || L.type !== 'gear') return;
+    const game = S.byId.get(L.id);
+    if (!game || !d.k) return;
+    game.romMode = d.k as RomMode;
+    if (game.romOk) {
+      const f = game.romPath.split('/').pop() ?? '';
+      game.romPath =
+        d.k === 'link'
+          ? `~/Descargas/${f}`
+          : `${S.settings.romDir}/${game.t.replace(/[^A-Za-z0-9]+/g, '')}/${f}`;
+    }
+    saveState();
+    renderLayer();
+    toast(
+      d.k === 'copy'
+        ? 'ROM copiada a la carpeta del port (simulado)'
+        : 'Usando la ROM desde su ubicación original'
+    );
+  },
+  reval: () => {
+    toast('Revalidando…');
+    setTimeout(() => toast('ROM validada · SHA-1 coincide (simulado)'), 900);
+  },
+  gtog: (d) => {
+    if (!L || L.type !== 'gear') return;
+    const game = S.byId.get(L.id);
+    if (!game || !d.k) return;
+    if (d.k === 'auto') game.auto = !game.auto;
+    if (d.k === 'pin') game.pin = !game.pin;
+    saveState();
+    renderLayer();
+  },
+  unins: () => {
+    if (!L) return;
+    L = { type: 'unins', id: L.id };
+    renderLayer();
+  },
+  doUnins: () => {
+    if (!L || L.type !== 'unins') return;
+    const id = L.id;
+    const game = S.byId.get(id);
+    if (game) {
+      game.inst = false;
+      game.v = null;
+      game.romOk = false;
+      saveState();
+      L = null;
+      renderLayer();
+      toast(game.t + ' desinstalado');
+      if (R.name === 'game') renderGame(id);
+      draw();
+    }
   },
 };
 
 /* -------------------------------------------------------------------------- */
-/* Router                                                                     */
+/* Escuchadores globales de eventos                                           */
 /* -------------------------------------------------------------------------- */
 
-export function parseHash(hash: string = location.hash): { route: NavId; pid: string | null } {
-  const raw = hash.replace(/^#\/?/, '').trim();
-  if (raw.startsWith('port-')) {
-    const pid = raw.slice('port-'.length);
-    return { route: 'catalog', pid: pid || null };
+document.addEventListener('click', (e) => {
+  const target = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-act]');
+  if (!target) return;
+  const act = target.dataset.act;
+  if (act && ACT[act]) {
+    e.preventDefault();
+    ACT[act](target.dataset as Record<string, string | undefined>);
   }
-  return { route: ROUTE_BY_HASH[raw] ?? 'home', pid: null };
-}
+});
 
-function hashFor(route: NavId, pid?: string | null): string {
-  if (pid) return `#port-${encodeURIComponent(pid)}`;
-  return HASH_BY_ROUTE[route];
-}
-
-/** Cambia de vista (y opcionalmente abre una ficha). */
-export function navigate(route: NavId, pid?: string | null): void {
-  const target = hashFor(route, pid ?? null);
-  if (location.hash === target) {
-    applyHash();
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && L) {
+    closeL();
     return;
   }
-  location.hash = target;
-}
-
-function applyHash(): void {
-  const { route, pid } = parseHash();
-  const routeChanged = route !== state.route;
-  state.route = route;
-  state.pid = pid;
-  if (routeChanged) {
-    state.limit = PAGE_SIZE;
+  const target = e.target as HTMLElement | null;
+  if (
+    (e.key === 'Enter' || e.key === ' ') &&
+    target?.matches('[data-act]') &&
+    !/^(BUTTON|A|INPUT|SELECT)$/.test(target.tagName)
+  ) {
+    e.preventDefault();
+    const act = target.dataset.act;
+    if (act && ACT[act]) ACT[act](target.dataset as Record<string, string | undefined>);
   }
-  render();
-  if (pid) {
-    detail.open(pid);
-  } else if (detail.isOpen()) {
-    // Navegar fuera de `#port-…` cierra la ficha (y no rebota al cerrar).
-    suppressCloseRedirect = true;
-    detail.close();
-    suppressCloseRedirect = false;
-  }
-  if (routeChanged) window.scrollTo({ top: 0, behavior: 'auto' });
-}
-
-/* -------------------------------------------------------------------------- */
-/* Datos derivados                                                            */
-/* -------------------------------------------------------------------------- */
-
-function filteredPorts(): PortItem[] {
-  return catalogService.search(
-    state.query,
-    {
-      platform: state.platform,
-      dev: state.dev,
-      library: state.library,
-      onlyVisible: true,
-    },
-    state.sort
-  );
-}
-
-function libraryPorts(): PortItem[] {
-  const ports: PortItem[] = [];
-  for (const game of libraryService.getInstalledPorts()) {
-    const port = catalogService.getPortByPid(game.pid);
-    if (port) ports.push(port);
-  }
-  return ports;
-}
-
-function libraryCounts(): Record<LibraryFilter, number> {
-  const counts = libraryService.getStateCounts();
-  const total = Object.keys(libraryService.getState().games).length;
-  const visible = catalogService.getVisibleCount();
-  return {
-    all: visible,
-    installed: total,
-    'not-installed': Math.max(0, visible - total),
-    ready: counts.Ready,
-    'needs-rom': counts.NeedsRom,
-    updates: counts.UpdateAvailable,
-    broken: counts.Broken,
-  };
-}
-
-function pendingUpdateCount(): number {
-  const states = libraryService.getStateCounts();
-  const direct = states.UpdateAvailable;
-  // Además, instalados cuya versión publicada es más nueva.
-  let extra = 0;
-  for (const game of libraryService.getInstalledPorts()) {
-    if (game.state === 'UpdateAvailable') continue;
-    const port = catalogService.getPortByPid(game.pid);
-    const published = port?.verifiedRelease?.version;
-    if (!published || !game.installedVersion) continue;
-    if (published !== game.installedVersion && !game.pinnedVersion) extra += 1;
-  }
-  return direct + extra;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Render                                                                     */
-/* -------------------------------------------------------------------------- */
-
-let renderTimer: number | null = null;
-
-function scheduleRender(delay = 120): void {
-  if (renderTimer !== null) window.clearTimeout(renderTimer);
-  renderTimer = window.setTimeout(() => {
-    renderTimer = null;
-    render();
-  }, delay);
-}
-
-function render(): void {
-  shared.states = libraryService.getStates();
-  shared.settings = libraryService.getSettings();
-
-  const ports = state.route === 'catalog' ? filteredPorts() : [];
-  const total = catalogService.getVisibleCount();
-
-  paintSidebar();
-  paintToolbar(ports.length, total);
-  shell.view.innerHTML = renderRoute(ports);
-}
-
-function paintSidebar(): void {
-  sidebar.update({
-    route: state.route,
-    platform: state.platform,
-    updates: pendingUpdateCount(),
-    broken: libraryService.getStateCounts().Broken,
-    libraryCount: Object.keys(libraryService.getState().games).length,
-    catalogVersion: catalogService.getCatalogVersion(),
-    semanticHash: catalogService.getSemanticHash(),
-    generatedAt: catalogService.getGeneratedAt() ?? undefined,
-    totalPorts: catalogService.getVisibleCount(),
-  });
-}
-
-function paintToolbar(resultCount: number, totalCount: number): void {
-  toolbar.update({
-    title: ROUTE_TITLES[state.route],
-    subtitle:
-      state.route === 'catalog'
-        ? `${resultCount} de ${totalCount} puertos`
-        : state.route === 'library'
-          ? `${libraryPorts().length} instalados · ${totalCount} en el catálogo`
-          : undefined,
-    query: state.query,
-    view: state.view,
-    library: state.library,
-    dev: state.dev,
-    dest: state.dest,
-    sort: state.sort,
-    platform: state.platform,
-    counts: libraryCounts(),
-    loading: false,
-  });
-}
-
-function renderRoute(ports: PortItem[]): string {
-  switch (state.route) {
-    case 'library':
-      return renderLibrary();
-    case 'catalog':
-      return renderCatalog(ports);
-    case 'updates':
-      return renderUpdates(catalogService.getPorts(), {
-        states: libraryService.getStates(),
-        onUpdate: (pid) => handlePortAction(pid, 'update'),
-        onOpen: (pid) => openDetail(pid),
-      });
-    case 'settings':
-      return renderSettings({
-        settings: libraryService.getSettings(),
-        onSettings,
-        onReset,
-        onToast: toast,
-      });
-    case 'home':
-    default:
-      return renderHome();
-  }
-}
-
-/* ------------------------------- Inicio ---------------------------------- */
-
-function homeStats(): { total: number; platforms: number; installed: number; pending: number } {
-  return {
-    total: catalogService.getVisibleCount(),
-    platforms: catalogService.getPlatformsWithCounts().length,
-    installed: Object.keys(libraryService.getState().games).length,
-    pending: pendingUpdateCount(),
-  };
-}
-
-function homeBanner(): string {
-  const stats = homeStats();
-  const error = catalogService.lastError;
-  const notice = error
-    ? '<div class="sbox" style="border-color:var(--warn)">' +
-      '<h3>Índice no disponible</h3>' +
-      `<p style="margin:0;font-size:var(--fs-s)">${esc(error)}</p>` +
-      '</div>'
-    : '';
-
-  const button = (label: string, act: string, route: NavId, cls = 'btn sm') =>
-    `<button type="button" class="${cls}" data-act="${act}" data-route="${route}">` +
-    `${icon(routeIcon(route), { size: 15 })}<span>${esc(label)}</span></button>`;
-
-  return (
-    notice +
-    '<section class="sbox" style="gap:10px">' +
-    '<h3>PortsHub · biblioteca de ports</h3>' +
-    `<p style="margin:0;font-size:var(--fs-m)">` +
-    `<b>${stats.total}</b> ports indexados de <b>${stats.platforms}</b> plataformas · ` +
-    `<b>${stats.installed}</b> en tu biblioteca · <b>${stats.pending}</b> actualizaciones pendientes.` +
-    '</p>' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-    button('Explorar catálogo', 'goto', 'catalog', 'btn pri sm') +
-    button('Mi biblioteca', 'goto', 'library') +
-    button(`Actualizaciones (${stats.pending})`, 'goto', 'updates') +
-    button('Ajustes', 'goto', 'settings') +
-    '</div>' +
-    '</section>'
-  );
-}
-
-function routeIcon(route: NavId): string {
-  switch (route) {
-    case 'library':
-      return 'lib';
-    case 'catalog':
-      return 'cat';
-    case 'updates':
-      return 'upd';
-    case 'settings':
-      return 'set';
-    case 'home':
-    default:
-      return 'home';
-  }
-}
-
-/** Bloque de estantería con su rótulo (se omite si no hay fichas). */
-function homeShelf(title: string, ports: readonly PortItem[]): string {
-  if (ports.length === 0) return '';
-  return (
-    `<h2 style="margin:0;font-size:var(--fs-l);letter-spacing:var(--ls-caps);` +
-    `text-transform:uppercase;color:var(--muted)">${esc(title)}</h2>` +
-    renderShelves(ports, shared)
-  );
-}
-
-function renderHome(): string {
-  const all = catalogService.getPorts().filter((port) => port.visible !== false);
-
-  const ready = libraryPorts().filter((port) => {
-    const game = libraryService.getLibraryGame(port.pid);
-    return game.state === 'Ready' || game.state === 'Installed';
-  });
-
-  const recent = [...all]
-    .sort((a, b) => {
-      const da = Date.parse(a.verifiedRelease?.releasedAt ?? '') || 0;
-      const db = Date.parse(b.verifiedRelease?.releasedAt ?? '') || 0;
-      return db - da;
-    })
-    .slice(0, 14);
-
-  const best = [...all]
-    .filter((port) => catalogService.getDevTagInfo(port).tag === 'playable')
-    .sort((a, b) => catalogService.getDevTagInfo(b).pct - catalogService.getDevTagInfo(a).pct)
-    .slice(0, 14);
-
-  const blocks = [
-    homeShelf('Continuar jugando', ready),
-    homeShelf('Recién llegados', recent),
-    homeShelf('Mejor valorados por la comunidad', best),
-  ].filter(Boolean);
-
-  return (
-    '<div class="view" data-view="home">' +
-    homeBanner() +
-    (blocks.length > 0 && all.length > 0
-      ? blocks.join('')
-      : emptyState(
-          'cat',
-          'El índice está vacío',
-          'Ejecuta <span class="mono">python3 catalog-builder/builder.py --offline</span> y copia ' +
-            'el resultado en <span class="mono">launcher/public/data/</span>.'
-        )) +
-    '</div>'
-  );
-}
-
-/* ------------------------------ Biblioteca -------------------------------- */
-
-function renderLibrary(): string {
-  const ports = libraryPorts();
-  if (ports.length === 0) {
-    return (
-      '<div class="view" data-view="library">' +
-      emptyState(
-        'lib',
-        'Tu biblioteca está vacía',
-        'Instala un port desde el catálogo y aparecerá aquí con su estado y su ROM.'
-      ) +
-      '<div style="display:flex;justify-content:center">' +
-      '<button type="button" class="btn pri" data-act="goto" data-route="catalog">' +
-      `${icon('cat', { size: 16 })}<span>Explorar el catálogo</span></button>` +
-      '</div></div>'
-    );
-  }
-
-  const sorted = [...ports].sort((a, b) => a.name.localeCompare(b.name, 'es'));
-  return (
-    '<div class="view" data-view="library">' +
-    renderSummaryStrip(sorted) +
-    renderCollection(sorted, 'library') +
-    '</div>'
-  );
-}
-
-function renderSummaryStrip(ports: readonly PortItem[]): string {
-  const counts = new Map<LibraryState, number>();
-  for (const port of ports) {
-    const current = libraryService.getLibraryGame(port.pid).state;
-    counts.set(current, (counts.get(current) ?? 0) + 1);
-  }
-  const chips = [...counts.entries()]
-    .map(
-      ([stateName, count]) =>
-        '<span class="pill">' +
-        `<span aria-hidden="true" style="font-size:9px">●</span>` +
-        `${esc(LIBRARY_STATE_LABELS[stateName])} · ${count}</span>`
-    )
-    .join('');
-  return `<div class="chips" role="list" aria-label="Estados de tu biblioteca">${chips}</div>`;
-}
-
-/* ------------------------------- Catálogo -------------------------------- */
-
-function renderCatalog(ports: PortItem[]): string {
-  if (catalogService.lastError) {
-    return (
-      '<div class="view" data-view="catalog">' +
-      emptyState('alert', 'No se pudo cargar el índice', esc(catalogService.lastError)) +
-      '</div>'
-    );
-  }
-  if (ports.length === 0) {
-    return (
-      '<div class="view" data-view="catalog">' +
-      emptyState(
-        'search',
-        'Ningún port coincide',
-        'Prueba con otro texto, quita filtros o cambia la plataforma seleccionada.'
-      ) +
-      '<div style="display:flex;justify-content:center">' +
-      '<button type="button" class="btn sm" data-act="clear-filters">Limpiar filtros</button>' +
-      '</div></div>'
-    );
-  }
-  return (
-    '<div class="view" data-view="catalog">' +
-    renderCollection(ports, 'catalog') +
-    '</div>'
-  );
-}
-
-/** Colección con la vista activa + paginación. */
-function renderCollection(ports: readonly PortItem[], scope: 'catalog' | 'library'): string {
-  const total = ports.length;
-  const slice = ports.slice(0, state.limit);
-  let body: string;
-
-  switch (state.view) {
-    case 'big':
-      body = renderBigGrid(slice, shared);
-      break;
-    case 'shelves':
-      body = renderShelves(slice, shared);
-      break;
-    case 'list':
-      body = renderList(slice, shared);
-      break;
-    case 'table':
-      body = renderTable(slice, shared);
-      break;
-    case 'posters':
-    default:
-      body = renderPosters(slice, shared);
-      break;
-  }
-
-  const remaining = total - slice.length;
-  const more =
-    remaining > 0
-      ? '<div style="display:flex;justify-content:center;padding:var(--sp-3) 0">' +
-        '<button type="button" class="btn" data-act="load-more" ' +
-        `data-scope="${scope}" title="Mostrar más resultados">` +
-        `${icon('arrowDown', { size: 15 })}` +
-        `<span>Cargar más (${remaining} restantes)</span></button></div>`
-      : '';
-
-  const count =
-    total > slice.length
-      ? `<p class="mono" style="margin:0;font-size:var(--fs-2xs);color:var(--muted)">` +
-        `Mostrando ${slice.length} de ${total} · vista ${esc(VIEW_MODES.includes(state.view) ? state.view : 'posters')} · ` +
-        `orden ${esc(SORT_LABELS[state.sort])}</p>`
-      : '';
-
-  return count + body + more;
-}
-
-/* ------------------------------- Auxiliares ------------------------------- */
-
-function emptyState(iconName: string, title: string, textHtml: string): string {
-  return (
-    '<div class="empty">' +
-    `<span class="eico" aria-hidden="true">${icon(iconName, { size: 30 })}</span>` +
-    `<span class="etit">${esc(title)}</span>` +
-    `<span style="max-width:56ch;font-size:var(--fs-s)">${textHtml}</span>` +
-    '</div>'
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Overlay de lanzamiento                                                     */
-/* -------------------------------------------------------------------------- */
-
-interface LaunchOverlay {
-  el: HTMLElement;
-  set(pct: number, stage: string): void;
-  close(): void;
-}
-
-let launching: { overlay: LaunchOverlay; cancel?: () => void } | null = null;
-
-function showLaunch(
-  port: PortItem | null,
-  opts: { title: string; sub?: string; pct?: number; stage?: string; cancellable?: boolean; onCancel?: () => void }
-): LaunchOverlay {
-  closeLaunch();
-
-  const el = document.createElement('div');
-  el.className = 'launch';
-  el.setAttribute('role', 'dialog');
-  el.setAttribute('aria-modal', 'true');
-  el.setAttribute('aria-label', opts.title);
-
-  const media = port
-    ? mediaMarkup(mediaStyleOf(port, libraryService.getSettings()), {
-        size: 'sz-l',
-        label: PLATFORM_SHORT[port.sourcePlatform] ?? '',
-      })
-    : '';
-
-  el.innerHTML =
-    '<div class="lwrap">' +
-    `<div class="lart" aria-hidden="true">${media}</div>` +
-    `<div class="ltitle">${esc(opts.title)}</div>` +
-    `<div class="lsub">${esc(opts.sub ?? '')}</div>` +
-    `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" ` +
-    `aria-valuenow="${Math.round(opts.pct ?? 0)}"><i style="width:${Math.round(opts.pct ?? 0)}%"></i></div>` +
-    `<div class="lsub" data-stage>${esc(opts.stage ?? '')}</div>` +
-    (opts.cancellable
-      ? '<button type="button" class="btn sm" data-act="launch-cancel">Cancelar</button>'
-      : '') +
-    '</div>';
-
-  shell.layer.append(el);
-
-  const bar = el.querySelector<HTMLElement>('.prog > i');
-  const barHost = el.querySelector<HTMLElement>('.prog');
-  const stageEl = el.querySelector<HTMLElement>('[data-stage]');
-
-  function set(pct: number, stage: string): void {
-    const safe = Math.max(0, Math.min(100, Math.round(pct)));
-    if (bar) bar.style.width = `${safe}%`;
-    if (barHost) barHost.setAttribute('aria-valuenow', String(safe));
-    if (stageEl) stageEl.textContent = stage;
-  }
-
-  const onClick = (event: Event): void => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    if (!target.closest('[data-act="launch-cancel"]')) return;
-    event.preventDefault();
-    opts.onCancel?.();
-  };
-  el.addEventListener('click', onClick);
-
-  const overlay: LaunchOverlay = {
-    el,
-    set,
-    close(): void {
-      el.removeEventListener('click', onClick);
-      el.remove();
-    },
-  };
-
-  launching = { overlay, cancel: opts.onCancel };
-  return overlay;
-}
-
-function closeLaunch(): void {
-  if (!launching) return;
-  launching.overlay.close();
-  launching = null;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Acciones                                                                   */
-/* -------------------------------------------------------------------------- */
-
-let suppressCloseRedirect = false;
-
-function openDetail(pid: string): void {
-  if (state.route !== 'catalog') {
-    navigate('catalog', pid);
-    return;
-  }
-  if (location.hash !== `#port-${encodeURIComponent(pid)}`) {
-    history.replaceState(null, '', `#port-${encodeURIComponent(pid)}`);
-  }
-  state.pid = pid;
-  detail.open(pid);
-}
-
-function officialUrl(port: PortItem): string {
-  const repository = typeof port.repository === 'string' ? port.repository : '';
-  if (repository && /^[^/\s]+\/[^/\s]+$/.test(repository)) return `https://github.com/${repository}`;
-  const raw = port.raw ?? {};
-  for (const key of ['projectUrl', 'officialUrl', 'homepage', 'downloadPageUrl']) {
-    const value = raw[key];
-    if (typeof value === 'string' && /^https?:\/\//i.test(value)) return value;
-  }
-  return '';
-}
-
-function openExternal(pid: string): void {
-  const port = catalogService.getPortByPid(pid);
-  if (!port) return;
-  const url = officialUrl(port);
-  if (!url) {
-    toast(`${port.name} no declara una web oficial en el índice.`, 'warn');
-    return;
-  }
-  window.open(url, '_blank', 'noopener,noreferrer');
-}
-
-function isReadyState(value: LibraryState): boolean {
-  return value === 'Ready' || value === 'Installed';
-}
-
-function startInstall(pid: string, mode: 'install' | 'update' = 'install'): void {
-  const port = catalogService.getPortByPid(pid);
-  if (!port) {
-    toast('No se encontró la ficha en el índice.', 'err');
-    return;
-  }
-  if (installerService.isInstalling(pid)) {
-    toast(`${port.name} ya se está instalando.`, 'warn');
-    return;
-  }
-
-  const overlay = showLaunch(port, {
-    title: mode === 'update' ? `Actualizando ${port.name}` : `Instalando ${port.name}`,
-    sub: port.installStrategy,
-    cancellable: true,
-    onCancel: () => installerService.cancelInstall(pid),
-  });
-  overlay.set(0, 'Preparando…');
-
-  installerService
-    .installPort(port, (pct, stage) => overlay.set(pct, stage))
-    .then((game) => {
-      closeLaunch();
-      render();
-      if (game.state === 'NeedsRom') {
-        toast(`${port.name}: falta la ROM del juego original.`, 'warn');
-        romAssistant.open(pid, {
-          primaryLabel: 'Guardar y jugar',
-          secondaryLabel: 'Hacerlo después',
-          playAfterSave: true,
-        });
-        return;
-      }
-      toast(
-        mode === 'update' ? `${port.name} actualizado.` : `${port.name} instalado y listo.`,
-        'ok'
-      );
-    })
-    .catch((error: unknown) => {
-      closeLaunch();
-      render();
-      if (isCancelError(error)) {
-        toast('Instalación cancelada. No se ha modificado nada.', 'warn');
-        return;
-      }
-      toast(
-        `No se pudo completar: ${error instanceof Error ? error.message : String(error)}`,
-        'err'
-      );
-    });
-}
-
-async function updateAll(pids: readonly string[]): Promise<void> {
-  if (pids.length === 0) return;
-  const overlay = showLaunch(null, {
-    title: `Actualizando ${pids.length} ports`,
-    sub: 'Se procesan en serie',
-    cancellable: false,
-  });
-  let done = 0;
-  let failed = 0;
-  for (const pid of pids) {
-    const port = catalogService.getPortByPid(pid);
-    if (!port) continue;
-    try {
-      await installerService.installPort(port, (pct) => {
-        const global = ((done + pct / 100) / pids.length) * 100;
-        overlay.set(global, `${port.name} · ${done + 1}/${pids.length}`);
-      });
-      done += 1;
-    } catch (error) {
-      failed += 1;
-      if (isCancelError(error)) break;
+  if (e.key === '/' && target && !/^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) {
+    const q = $('#q') as HTMLInputElement | null;
+    if (q) {
+      e.preventDefault();
+      q.focus();
     }
   }
-  closeLaunch();
-  render();
-  toast(
-    failed > 0
-      ? `${done} actualizados, ${failed} con errores.`
-      : `${done} ports actualizados.`,
-    failed > 0 ? 'warn' : 'ok'
-  );
-}
+});
 
-function playPort(pid: string): void {
-  const port = catalogService.getPortByPid(pid);
-  if (!port) return;
-  const game = libraryService.getLibraryGame(pid);
+document.addEventListener('input', (e) => {
+  const t = e.target as HTMLInputElement | null;
+  if (!t) return;
+  if (t.id === 'q') {
+    B.q = t.value;
+    const res = $('#results');
+    if (res) res.innerHTML = resultsHTML(R.name);
+    const hero = $('#hero');
+    if (hero) {
+      hero.innerHTML =
+        R.name === 'library' && !B.q && B.filter === 'all' && B.plat === 'all' ? heroHTML() : '';
+    }
+  }
+  if (t.dataset.set) {
+    (S.settings as any)[t.dataset.set] = t.value;
+    saveState();
+  }
+  if (t.dataset.g && L && L.type === 'gear') {
+    const game = S.byId.get(L.id);
+    if (game) {
+      (game as any)[t.dataset.g] = t.value;
+      saveState();
+    }
+  }
+});
 
-  if (game.state === 'NeedsRom') {
-    romAssistant.open(pid, {
-      primaryLabel: 'Guardar y jugar',
-      secondaryLabel: 'Hacerlo después',
-      playAfterSave: true,
-    });
+document.addEventListener('change', (e) => {
+  const t = e.target as HTMLInputElement | HTMLSelectElement | null;
+  if (!t) return;
+  if (t.dataset && t.dataset.map) {
+    if (t.value) (S.settings.mediaMap as any)[t.dataset.map] = t.value;
+    else delete (S.settings.mediaMap as any)[t.dataset.map];
+    saveState();
+    renderSettings();
     return;
   }
-  if (!isReadyState(game.state)) {
-    if (game.state === 'Broken' || game.state === 'NotInstalled') {
-      startInstall(pid, 'install');
-      return;
+  if (t.id === 'devsel') {
+    B.dev = t.value as any;
+    refreshBrowse();
+  }
+  if (t.id === 'sortsel') {
+    B.sort = t.value as any;
+    B.dir = 1;
+    refreshBrowse();
+  }
+  if (t.dataset.g === 'runner' && L && L.type === 'gear') {
+    const game = S.byId.get(L.id);
+    if (game) {
+      game.runner = t.value;
+      saveState();
     }
-    toast(`${port.name} todavía no está listo (${LIBRARY_STATE_LABELS[game.state]}).`, 'warn');
-    return;
   }
-
-  const runner = game.launchProfile?.runner ?? port.launch?.runner ?? 'native';
-  const overlay = showLaunch(port, {
-    title: `Iniciando ${port.name}`,
-    sub: `runner: ${runner} · ${game.installDir || port.folderName || 'carpeta del port'}`,
-    stage: 'Arrancando el ejecutable…',
-    pct: 100,
-  });
-  window.setTimeout(() => {
-    overlay.close();
-    launching = null;
-    toast(
-      'Lanzamiento simulado: en esta fase PortsHub no ejecuta binarios del sistema.',
-      'info'
-    );
-  }, 1400);
-}
-
-function handlePortAction(pid: string, kind: PortActionKind): void {
-  switch (kind) {
-    case 'install':
-      startInstall(pid, 'install');
-      return;
-    case 'update':
-      startInstall(pid, 'update');
-      return;
-    case 'retry':
-      startInstall(pid, 'install');
-      return;
-    case 'play':
-      playPort(pid);
-      return;
-    case 'rom':
-      romAssistant.open(pid, {
-        primaryLabel: 'Guardar y jugar',
-        secondaryLabel: 'Hacerlo después',
-        playAfterSave: true,
-      });
-      return;
-    case 'external':
-      openExternal(pid);
-      return;
-    case 'gear':
-      drawer.open(pid);
-      return;
-    case 'open':
-    case 'details':
-    default:
-      openDetail(pid);
-  }
-}
-
-function uninstall(pid: string, keepSaves: boolean): void {
-  const port = catalogService.getPortByPid(pid);
-  libraryService.uninstallPort(pid);
-  drawer.close();
-  render();
-  toast(
-    keepSaves
-      ? `${port?.name ?? pid} desinstalado. Partidas y ajustes conservados.`
-      : `${port?.name ?? pid} desinstalado.`,
-    'ok'
-  );
-}
-
-function onSettings(patch: Partial<Settings>): void {
-  const next = libraryService.updateSettings(patch);
-  state.dest = next.dest;
-  // La "vista por defecto" se aplica al cambiarla, pero el selector de la
-  // toolbar sigue siendo efímero (no reescribe esta preferencia).
-  if (patch.view) state.view = next.view;
-  toast('Ajustes guardados.', 'ok', 1800);
-  render();
-}
-
-function onReset(): void {
-  libraryService.resetLibrary();
-  state.library = 'all';
-  state.dev = 'all';
-  state.platform = 'all';
-  state.limit = PAGE_SIZE;
-  render();
-  toast('Biblioteca y ajustes restablecidos.', 'ok');
-}
+});
 
 /* -------------------------------------------------------------------------- */
-/* Atajos de teclado                                                          */
+/* Router y render loop                                                       */
 /* -------------------------------------------------------------------------- */
 
-function isTextField(node: EventTarget | null): boolean {
-  if (!(node instanceof HTMLElement)) return false;
-  if (node.isContentEditable) return true;
-  return node.tagName === 'INPUT' || node.tagName === 'TEXTAREA' || node.tagName === 'SELECT';
-}
+let hashBusy = false;
 
-/** Cierra el overlay superior en orden de apilado (LIFO). */
-function closeTopOverlay(): boolean {
-  if (launching) {
-    launching.cancel?.();
-    if (!launching.cancel) closeLaunch();
-    return true;
-  }
-  if (romAssistant.isOpen()) {
-    romAssistant.close();
-    return true;
-  }
-  if (detail.isOpen()) {
-    detail.close();
-    return true;
-  }
-  if (drawer.isOpen()) {
-    drawer.close();
-    return true;
-  }
-  return false;
-}
+export function go(name: Route, id?: string): void {
+  R.name = name;
+  R.id = id ?? null;
+  if (name === 'game') D.tab = 'sum';
+  if (name === 'library' || name === 'catalog') B.filter = 'all';
 
-function onKeyDown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') {
-    if (closeTopOverlay()) event.preventDefault();
-    return;
-  }
-  if (event.key !== '/' || event.defaultPrevented) return;
-  if (event.ctrlKey || event.metaKey || event.altKey) return;
-  if (isTextField(event.target)) return;
-  event.preventDefault();
-  toolbar.focusSearch();
-}
+  draw(true);
+  window.scrollTo(0, 0);
 
-/* -------------------------------------------------------------------------- */
-/* Bootstrap                                                                  */
-/* -------------------------------------------------------------------------- */
-
-function mountComponents(): void {
-  sidebar = mountSidebar({
-    sideHost: shell.app,
-    bnavHost: document.body,
-    state: {
-      route: state.route,
-      platform: state.platform,
-    },
-    callbacks: {
-      onNavigate: (route) => navigate(route),
-      onPlatform: (platform) => {
-        state.platform = platform;
-        state.limit = PAGE_SIZE;
-        if (state.route !== 'catalog') navigate('catalog');
-        else render();
-      },
-      onOpenSettings: () => navigate('settings'),
-      onOpenUpdates: () => navigate('updates'),
-      onLibraryFilter: (filter) => {
-        state.library = filter;
-        navigate('library');
-      },
-    },
-  });
-
-  toolbar = mountToolbar(shell.main, {
-    state: {
-      title: ROUTE_TITLES[state.route],
-      view: state.view,
-      library: state.library,
-      dev: state.dev,
-      dest: state.dest,
-      sort: state.sort,
-      platform: state.platform,
-    },
-    callbacks: {
-      onQuery: (query) => {
-        state.query = query;
-        state.limit = PAGE_SIZE;
-        if (state.route !== 'catalog' && query.trim()) {
-          navigate('catalog');
-          return;
-        }
-        scheduleRender(0);
-      },
-      onSubmit: () => scheduleRender(0),
-      onView: (view) => {
-        state.view = view;
-        render();
-      },
-      onLibrary: (library) => {
-        state.library = library;
-        state.limit = PAGE_SIZE;
-        render();
-      },
-      onDev: (dev) => {
-        state.dev = dev;
-        state.limit = PAGE_SIZE;
-        render();
-      },
-      onDest: (dest) => {
-        state.dest = dest;
-        libraryService.updateSettings({ dest });
-      },
-      onSort: (sort) => {
-        state.sort = sort;
-        render();
-      },
-      onClearPlatform: () => {
-        state.platform = 'all';
-        render();
-      },
-      onClearTarget: () => {
-        render();
-      },
-    },
-  });
-
-  detail = mountDetailModal({
-    host: shell.layer,
-    onAction: handlePortAction,
-    onGear: (pid) => drawer.open(pid),
-    onOpen: (pid) => openDetail(pid),
-    onClose: () => {
-      if (suppressCloseRedirect) return;
-      if (state.pid) {
-        state.pid = null;
-        if (location.hash.startsWith('#port-')) {
-          history.replaceState(null, '', HASH_BY_ROUTE.catalog);
-        }
-      }
-    },
-  });
-
-  romAssistant = mountRomAssistant({
-    host: shell.layer,
-    onToast: toast,
-    onCancel: () => {
-      /* Cerrar sin guardar no cambia la ficha. */
-    },
-    onSaved: (pid, _validation, opts) => {
-      render();
-      if (opts.play) playPort(pid);
-    },
-  });
-
-  drawer = mountSettingsDrawer({
-    host: shell.layer,
-    onToast: toast,
-    onUninstall: uninstall,
-    onChanged: () => {
-      render();
-    },
-    onOpenRomAssistant: (pid) => {
-      romAssistant.open(pid, { primaryLabel: 'Guardar', secondaryLabel: 'Cancelar' });
-    },
-    onLaunch: (pid) => {
-      drawer.close();
-      playPort(pid);
-    },
-  });
-
-  /* Delegación de fichas (sobrevive a los repintados de `#view`). */
-  delegatePortEvents(shell.view, shared);
-
-  /* Ajustes (change + reset) sobre el mismo contenedor. */
-  delegateSettingsEvents(shell.view, {
-    onSettings,
-    onReset,
-    onToast: toast,
-  });
-
-  /* Acciones propias de la cáscara: navegación interna y paginación. */
-  shell.view.addEventListener('click', (event) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const hit = target.closest<HTMLElement>('[data-act]');
-    if (!hit) return;
-    const act = hit.dataset.act;
-
-    if (act === 'load-more') {
-      event.preventDefault();
-      state.limit += PAGE_SIZE;
-      render();
-      return;
-    }
-    if (act === 'goto') {
-      event.preventDefault();
-      const route = hit.dataset.route as NavId | undefined;
-      if (route && route in HASH_BY_ROUTE) navigate(route);
-      return;
-    }
-    if (act === 'clear-filters') {
-      event.preventDefault();
-      state.query = '';
-      state.library = 'all';
-      state.dev = 'all';
-      state.platform = 'all';
-      state.limit = PAGE_SIZE;
-      toolbar.update({ query: '', library: 'all', dev: 'all', platform: 'all' });
-      render();
-    }
-  });
-
-  document.addEventListener('keydown', onKeyDown);
-
-  /* Router por hash: `navigate()` cambia `location.hash` y esto lo aplica. */
-  window.addEventListener('hashchange', applyHash);
-
-  libraryService.subscribe((event) => {
-    // El progreso de una instalación no debe repintar todo el catálogo.
-    if (event.type === 'game' && event.pid && installerService.isInstalling(event.pid)) return;
-    scheduleRender();
-    if (drawer.isOpen() && event.pid) drawer.refresh();
-  });
-}
-
-/**
- * Arranca la aplicación: monta componentes, carga el índice y aplica la ruta.
- * Se exporta para poder reutilizarla en pruebas o en un arranque diferido.
- */
-export async function boot(): Promise<void> {
-  mountComponents();
-  applyHash();
-
+  const h = name === 'game' ? `port-${id}` : RT[name];
   try {
-    const index = await catalogService.loadCatalog();
-    if (catalogService.lastError) {
-      toast(catalogService.lastError, 'warn', 9000);
-    } else if (index.stats?.totalPorts !== undefined) {
-      toast(
-        `Índice ${index.version} cargado · ${index.stats.totalPorts} puertos.`,
-        'info',
-        2600
-      );
+    if (location.hash !== '#' + h) {
+      hashBusy = true;
+      location.hash = h;
+      setTimeout(() => {
+        hashBusy = false;
+      }, 50);
     }
-  } catch (error) {
-    toast(
-      `No se pudo cargar el catálogo: ${error instanceof Error ? error.message : String(error)}`,
-      'err',
-      9000
-    );
-  }
-
-  render();
-  applyHash();
+  } catch {}
 }
 
-/* Arranque automático al cargar el módulo (Vite inyecta este script). */
-if (typeof document !== 'undefined') {
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => void boot());
-  } else {
-    void boot();
+export function route(): void {
+  const h = (location.hash || '').replace('#', '');
+  if (h.startsWith('port-')) {
+    const id = h.slice(5);
+    if (S.byId.has(id)) {
+      go('game', id);
+      return;
+    }
   }
+  go(RT_INV[h] ?? 'home');
 }
+
+export function draw(fresh = false): void {
+  const side = $('#side');
+  if (side) side.innerHTML = renderSide();
+  const bnav = $('#bnav');
+  if (bnav) bnav.innerHTML = renderBottomNav();
+
+  if (R.name === 'home') renderHome();
+  else if (R.name === 'library' || R.name === 'catalog') {
+    if (fresh || !$('#results')) renderBrowse(R.name);
+    else refreshBrowse();
+  } else if (R.name === 'updates') renderUpdates();
+  else if (R.name === 'settings') renderSettings();
+  else if (R.name === 'game' && R.id) renderGame(R.id);
+
+  Object.keys(PROG).forEach((id) => {
+    document.querySelectorAll<HTMLElement>(`[data-prog="${id}"]`).forEach((e) => {
+      e.style.width = PROG[id] + '%';
+    });
+  });
+}
+
+function saveState(): void {
+  try {
+    const data = {
+      settings: S.settings,
+      last: S.last,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {}
+}
+
+/* -------------------------------------------------------------------------- */
+/* Inicialización de la aplicación                                            */
+/* -------------------------------------------------------------------------- */
+
+async function init(): Promise<void> {
+  let settings = { ...DEFAULT_SETTINGS };
+  let last: string | null = null;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.settings) {
+        settings = { ...DEFAULT_SETTINGS, ...parsed.settings };
+      }
+      if (parsed.last) last = parsed.last;
+    }
+  } catch {}
+
+  // Migrar alias 'shelves' a 'carts'
+  if ((settings.view as string) === 'shelves') {
+    settings.view = 'carts';
+  }
+
+  // Cargar índice real y biblioteca
+  const catalog = await catalogService.loadCatalog();
+  const library = libraryService.getState();
+
+  const games: Game[] = catalog.ports.map((port: PortItem) => toGame(port, library.games, settings));
+
+  // Instalar un par de ejemplos en biblioteca si está vacía para dar vida al Inicio arcade
+  const installedCount = games.filter((g) => g.inst).length;
+  if (installedCount === 0 && games.length > 0) {
+    const defaultPlayable = ['sm64', 'oot', 'goldeneye', 'alttp', 'sonic1'];
+    games.forEach((g) => {
+      if (defaultPlayable.includes(g.id)) {
+        g.inst = true;
+        g.v = g.lv;
+        g.romOk = true;
+      }
+    });
+  }
+
+  if (!last && games.length > 0) {
+    const firstInstalled = games.find((g) => g.inst);
+    last = firstInstalled ? firstInstalled.id : games[0].id;
+  }
+
+  setSnapshot(settings, games, last, catalog.generatedAt);
+
+  window.addEventListener('hashchange', () => {
+    if (!hashBusy) route();
+  });
+
+  route();
+}
+
+init().catch((err) => {
+  console.error('[PortsLauncher] Error en inicialización:', err);
+});

@@ -92,7 +92,7 @@ export const MEDIA_LABELS: Record<MediaStyle, string> = {
 export const VIEW_LABELS: Record<ViewMode, string> = {
   posters: 'Carátulas (3:4)',
   big: 'Grilla grande (16:9)',
-  shelves: 'Estantería de cartuchos',
+  carts: 'Estantería de cartuchos',
   list: 'Lista',
   table: 'Tabla',
 };
@@ -364,7 +364,7 @@ function viewSection(settings: Settings): string {
       (view) =>
         `<button type="button" data-selectview="${view}" aria-pressed="${settings.view === view}" ` +
         `aria-label="${esc(VIEW_LABELS[view])}" title="${esc(VIEW_LABELS[view])}">` +
-        `${icon(view === 'shelves' ? 'carts' : view, { size: 17 })}</button>`
+        `${icon(view === 'carts' ? 'carts' : view, { size: 17 })}</button>`
     ).join('') +
     '</div>' +
     '<div class="row" style="cursor:default;padding:8px 14px;gap:12px">' +

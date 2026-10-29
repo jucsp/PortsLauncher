@@ -100,7 +100,7 @@ export const TOOLBAR_CHIPS: readonly LibraryFilter[] = [
 export const VIEW_BUTTONS: ReadonlyArray<{ id: ViewMode; label: string; icon: string }> = [
   { id: 'posters', label: 'Carátulas', icon: 'posters' },
   { id: 'big', label: 'Grilla grande', icon: 'big' },
-  { id: 'shelves', label: 'Estantería', icon: 'carts' },
+  { id: 'carts', label: 'Estantería', icon: 'carts' },
   { id: 'list', label: 'Lista', icon: 'list' },
   { id: 'table', label: 'Tabla', icon: 'table' },
 ];
@@ -109,7 +109,7 @@ export const DEFAULT_TOOLBAR_STATE: ToolbarState = {
   title: 'Catálogo',
   query: '',
   /* Por defecto se entra en la estantería de cartuchos y discos. */
-  view: 'shelves',
+  view: 'carts',
   library: 'all',
   dev: 'all',
   dest: 'Linux',

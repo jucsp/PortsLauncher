@@ -511,8 +511,17 @@ export interface LibraryFile {
 /* Ajustes del launcher                                                       */
 /* -------------------------------------------------------------------------- */
 
-export const VIEW_MODES = ['posters', 'big', 'shelves', 'list', 'table'] as const;
+/**
+ * Vistas del listado.
+ *
+ * Las claves son las del prototipo (`VIEWS` del mock). `carts` es la estantería
+ * de cartuchos y discos.
+ */
+export const VIEW_MODES = ['posters', 'big', 'carts', 'list', 'table'] as const;
 export type ViewMode = (typeof VIEW_MODES)[number];
+
+/** Alias heredado: la clave `shelves` se migra a `carts` al leer ajustes. */
+export const LEGACY_VIEW_ALIASES: Record<string, ViewMode> = { shelves: 'carts' };
 
 export const MEDIA_MODES = ['single', 'auto'] as const;
 export type MediaMode = (typeof MEDIA_MODES)[number];
@@ -542,7 +551,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mediaDef: 'cd',
   mediaMap: {},
   /* Vista por defecto: estantería de cartuchos y discos (prototipo de Claude). */
-  view: 'shelves',
+  view: 'carts',
   dest: 'Linux',
   installDir: '~/PortsLauncher/ports',
   romDir: '~/PortsLauncher/roms',

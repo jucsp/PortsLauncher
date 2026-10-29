@@ -183,8 +183,7 @@ export class CatalogService {
     return task;
   }
 
-  private async fetchIndex(explicitUrl?: string): Promise<PortIndex> {
-    const urls = explicitUrl ? [explicitUrl] : candidateUrls();
+  private async fetchIndex(explicitUrl?: string): Promise<PortIndex> {    const urls = explicitUrl ? [explicitUrl] : candidateUrls();
     const errors: string[] = [];
 
     if (typeof fetch !== 'function') {
