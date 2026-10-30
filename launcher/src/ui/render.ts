@@ -1269,8 +1269,14 @@ export function renderGame(id: string): string {
     (heroImg
       ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:1;' +
         'pointer-events:none;padding:12px 60px">' +
-        `<img src="${esc(heroImg)}" alt="" style="max-height:100%;max-width:100%;object-fit:contain;border-radius:6px;` +
-        'filter:drop-shadow(0 12px 32px rgba(0,0,0,.8));" /></div>'
+        /* El hero se funde con el lienzo mediante una máscara radial elíptica:
+         * el centro queda nítido (100 % opaco hasta el 45 %) y los cuatro
+         * bordes se desvanecen a transparente, de modo que no hay cortes duros
+         * ni marco rectangular visible sobre el fondo desenfocado. Se emiten
+         * `-webkit-mask-image` y `mask-image` para cubrir WebKit/Blink y Gecko. */
+        `<img src="${esc(heroImg)}" alt="" style="max-height:100%;max-width:100%;object-fit:contain;` +
+        '-webkit-mask-image:radial-gradient(ellipse 90% 85% at 50% 50%,black 45%,rgba(0,0,0,0.85) 65%,rgba(0,0,0,0.25) 88%,transparent 100%);' +
+        'mask-image:radial-gradient(ellipse 90% 85% at 50% 50%,black 45%,rgba(0,0,0,0.85) 65%,rgba(0,0,0,0.25) 88%,transparent 100%);" /></div>'
       : '') +
     /* --- capa 2: contenido, logotipo (izquierda) y acciones (derecha) -------- */
     logoLayer +
