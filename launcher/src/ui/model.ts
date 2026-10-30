@@ -39,7 +39,27 @@ export const PROG: Record<string, number> = {};
 /* Tipos del modelo de vista                                                  */
 /* -------------------------------------------------------------------------- */
 
-export type Pattern = 'sun' | 'grid' | 'diag' | 'dots';
+export type Pattern =
+  | 'sun'
+  | 'grid'
+  | 'diag'
+  | 'dots'
+  | 'waves'
+  | 'mesh'
+  | 'neon'
+  | 'stripes';
+
+/** Catálogo de patrones procedurales (orden estable: define el reparto por pid). */
+export const PATTERNS: readonly Pattern[] = [
+  'sun',
+  'grid',
+  'diag',
+  'dots',
+  'waves',
+  'mesh',
+  'neon',
+  'stripes',
+];
 /** `[oscuro, medio, luz]` — igual que el `c` del prototipo. */
 export type Palette = [string, string, string];
 
@@ -189,8 +209,7 @@ export function paletteFromPid(pid: string, platform: SourcePlatform): Palette {
 
 /** Patrón de la carátula generativa, derivado del `pid`. */
 export function patternFromPid(pid: string): Pattern {
-  const patterns: Pattern[] = ['sun', 'grid', 'diag', 'dots'];
-  return patterns[hash32(`${pid}·pattern`) % patterns.length];
+  return PATTERNS[hash32(`${pid}·pattern`) % PATTERNS.length];
 }
 
 /** `GOLDENEYE 007` → `GOLDENEYE\n007` (dos líneas como el mock). */
@@ -218,29 +237,90 @@ export function folderOf(name: string): string {
 /* Carátula generativa (`art` del prototipo, línea 243)                       */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Fondo CSS procedural de un soporte sin carátula real.
+ *
+ * Todos los patrones se construyen con gradientes CSS apilados (sin imágenes ni
+ * SVG) para que el arte viaje en el propio `style` en línea y se degrade con
+ * elegancia: si un navegador no entiende una capa, pinta las siguientes.
+ *
+ * `color[2]` (`light`) siempre es un color hex de `PLAT[...].tag`, así que se
+ * le puede añadir el alfa con sufijo (`${light}33`). Los otros dos son `hsl()`
+ * y usan `rgba()` para las veladuras.
+ */
 export function art(color: Palette, pattern: Pattern): string {
   const [dark, mid, light] = color;
-  if (pattern === 'sun') {
-    return (
-      `radial-gradient(circle at 50% 40%,${light} 0 19%,transparent 20%),` +
-      `repeating-linear-gradient(0deg,rgba(0,0,0,0) 0 8px,rgba(0,0,0,.26) 8px 10px),` +
-      `linear-gradient(180deg,${dark},${mid})`
-    );
+
+  switch (pattern) {
+    /* Sol arcade con scanlines de tubo. */
+    case 'sun':
+      return (
+        `radial-gradient(circle at 50% 38%,${light} 0 19%,transparent 20%),` +
+        `radial-gradient(circle at 50% 38%,${light}55 0 30%,transparent 31%),` +
+        `repeating-linear-gradient(0deg,rgba(0,0,0,0) 0 8px,rgba(0,0,0,.26) 8px 10px),` +
+        `linear-gradient(180deg,${dark},${mid})`
+      );
+
+    /* Rejilla de perspectiva (suelo de neón). */
+    case 'grid':
+      return (
+        `repeating-linear-gradient(90deg,${light}33 0 1px,transparent 1px 16px),` +
+        `repeating-linear-gradient(0deg,${light}33 0 1px,transparent 1px 16px),` +
+        `radial-gradient(circle at 50% 112%,${light}44 0 42%,transparent 70%),` +
+        `linear-gradient(200deg,${dark},${mid})`
+      );
+
+    /* Diagonales de cinta de casete. */
+    case 'diag':
+      return (
+        `repeating-linear-gradient(135deg,rgba(255,255,255,.1) 0 4px,transparent 4px 12px),` +
+        `repeating-linear-gradient(45deg,${light}22 0 2px,transparent 2px 22px),` +
+        `linear-gradient(160deg,${dark},${mid} 68%,${light})`
+      );
+
+    /* Trama de puntos (LED matrix). */
+    case 'dots':
+      return (
+        `radial-gradient(${light}77 1.2px,transparent 1.3px) 0 0/10px 10px,` +
+        `radial-gradient(${light}33 1px,transparent 1.1px) 5px 5px/10px 10px,` +
+        `linear-gradient(150deg,${mid},${dark})`
+      );
+
+    /* Ondas concéntricas de radar retro. */
+    case 'waves':
+      return (
+        `repeating-radial-gradient(circle at 50% 118%,${light}3D 0 2px,transparent 2px 14px),` +
+        `repeating-linear-gradient(0deg,rgba(255,255,255,.06) 0 5px,transparent 5px 13px),` +
+        `linear-gradient(180deg,${dark},${mid})`
+      );
+
+    /* Malla cruzada con foco de luz. */
+    case 'mesh':
+      return (
+        `repeating-linear-gradient(45deg,${light}26 0 1px,transparent 1px 14px),` +
+        `repeating-linear-gradient(-45deg,${light}26 0 1px,transparent 1px 14px),` +
+        `radial-gradient(circle at 32% 22%,${light}44 0 12%,transparent 55%),` +
+        `linear-gradient(180deg,${mid},${dark})`
+      );
+
+    /* Atardecer synthwave con barrotes de neón. */
+    case 'neon':
+      return (
+        `repeating-linear-gradient(0deg,${light}55 0 2px,transparent 2px 18px),` +
+        `radial-gradient(circle at 50% 76%,${light} 0 26%,transparent 27%),` +
+        `radial-gradient(circle at 50% 76%,${light}44 0 40%,transparent 62%),` +
+        `linear-gradient(180deg,${dark} 0 44%,${mid} 100%)`
+      );
+
+    /* Rayas verticales de valla publicitaria. */
+    case 'stripes':
+    default:
+      return (
+        `repeating-linear-gradient(90deg,rgba(255,255,255,.1) 0 6px,transparent 6px 18px),` +
+        `repeating-linear-gradient(90deg,${light}2E 0 3px,transparent 3px 18px),` +
+        `linear-gradient(200deg,${mid},${dark} 78%)`
+      );
   }
-  if (pattern === 'grid') {
-    return (
-      `repeating-linear-gradient(90deg,${light}33 0 1px,transparent 1px 16px),` +
-      `repeating-linear-gradient(0deg,${light}33 0 1px,transparent 1px 16px),` +
-      `linear-gradient(200deg,${dark},${mid})`
-    );
-  }
-  if (pattern === 'diag') {
-    return (
-      `repeating-linear-gradient(135deg,rgba(255,255,255,.1) 0 4px,transparent 4px 12px),` +
-      `linear-gradient(160deg,${dark},${mid} 68%,${light})`
-    );
-  }
-  return `radial-gradient(${light}77 1.2px,transparent 1.3px) 0 0/10px 10px,linear-gradient(150deg,${mid},${dark})`;
 }
 
 /** Atajo del prototipo: `art(g.c, g.p)`. */

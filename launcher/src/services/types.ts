@@ -693,6 +693,14 @@ export interface Settings {
   installDir: string;
   romDir: string;
   romMode: RomMode;
+  /**
+   * Clave API **personal** de SteamGridDB (gratuita). Se envía al proxy de
+   * desarrollo en la cabecera `x-steamgrid-key`; vacía = sin integración y el
+   * launcher pinta el arte generativo procedural de cada soporte.
+   */
+  steamgridApiKey?: string;
+  /** `true` cuando el asistente de bienvenida ya se completó (no se repite). */
+  onboardingDone?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -706,6 +714,9 @@ export const DEFAULT_SETTINGS: Settings = {
   installDir: '~/PortsLauncher/ports',
   romDir: '~/PortsLauncher/roms',
   romMode: 'link',
+  /* Integraciones: sin clave, el arte generativo hace todo el trabajo. */
+  steamgridApiKey: '',
+  onboardingDone: false,
 };
 
 /* -------------------------------------------------------------------------- */

@@ -230,6 +230,13 @@ function sanitizeSettings(raw: unknown): Settings {
     settings.romDir = raw['romDir'];
   }
 
+  /* Integraciones: la clave de SteamGridDB y el flag del asistente se
+   * conservan tal cual (la clave se recorta, el flag se normaliza a boolean). */
+  if (typeof raw['steamgridApiKey'] === 'string') {
+    settings.steamgridApiKey = raw['steamgridApiKey'].trim();
+  }
+  settings.onboardingDone = raw['onboardingDone'] === true;
+
   const mediaMap = raw['mediaMap'];
   if (isObject(mediaMap)) {
     const mapped: Settings['mediaMap'] = {};

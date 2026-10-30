@@ -62,6 +62,35 @@ function coverVeil(url: string | null): string {
 }
 
 /**
+ * Rótulo centrado sobre el arte generativo.
+ *
+ * Cuando el port **no tiene carátula real** (`artwork === null`) el soporte pinta
+ * su patrón procedural: este rótulo superpone `game.cv` (`GOLDEN\nEYE`) en
+ * tipografía display retro (itálica, mayúsculas, sombra dura) con un velo
+ * radial tenue detrás para garantizar contraste sobre cualquier patrón. Así cada
+ * cartucho, caja o disco se reconoce de un vistazo.
+ *
+ * @param fontPx tamaño base del rótulo (se adapta al tamaño del soporte).
+ * @param css    ajustes extra para esquivar asas, cabeceras, agujeros…
+ */
+function titleOverlay(game: Game, fontPx: number, css = ''): string {
+  const raw = String(game.cv ?? game.t ?? '').replace(/\r/g, '').trim();
+  if (!raw) return '';
+  const lines = raw.split('\n').map((line) => line.trim()).filter(Boolean);
+  const text = (lines.length > 0 ? lines : [raw]).map((line) => escText(line)).join('<br>');
+  const size = Math.max(8, Math.round(fontPx));
+  return (
+    '<div style="position:absolute;inset:0;z-index:3;display:flex;align-items:center;' +
+    `justify-content:center;padding:6px;box-sizing:border-box;pointer-events:none;${css}">` +
+    `<span style="display:block;font:italic 800 ${size}px/1.03 var(--f-display);letter-spacing:.02em;` +
+    'text-transform:uppercase;color:#FFFFFF;text-align:center;' +
+    'padding:1px 3px;border-radius:4px;background:radial-gradient(closest-side,rgba(0,0,0,.42),rgba(0,0,0,0));' +
+    'text-shadow:0 1px 0 rgba(0,0,0,.92),0 2px 6px rgba(0,0,0,.85),0 0 18px rgba(0,0,0,.6);' +
+    `">${text}</span></div>`
+  );
+}
+
+/**
  * Dibuja un soporte físico.
  *
  * @param game  ficha del modelo de vista (aporta carátula, plataforma y arte).
@@ -86,6 +115,8 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
    * etiqueta: así la carátula real se ve siempre, aunque el `background` en
    * línea falle o el navegador ignore la propiedad. */
   const coverMarkup = coverImg(artwork) + coverVeil(artwork);
+  /* Sin carátula real: el soporte luce su patrón procedural y su título. */
+  const generative = !artwork;
   const tagColor = (PLAT[game.pl] ?? PLAT.OTRAS).tag;
   const label = game.pl;
 
@@ -119,13 +150,17 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
       : '<div style="position:relative;z-index:2;display:flex;flex-direction:column;justify-content:flex-start;' +
         `width:100%;height:100%;padding:${cart.hdr ? '22px 9px 6px' : '6px 9px'};box-sizing:border-box">` +
         `<span style="align-self:flex-start">${sticker}</span></div>`;
+    /* Etiqueta procedural: título centrado, apartado de la pegatina. */
+    const cartTitle = generative
+      ? titleOverlay(game, cart.fs, cart.row ? 'padding-bottom:20px' : 'padding-top:12px')
+      : '';
 
     markup =
       layer(`inset:0;background:${body};clip-path:path('${cart.p}')`) +
       layer(
         `${cart.lab};background:${face};overflow:hidden;box-sizing:border-box;` +
           `border-radius:${cart.rad};border:${cart.bd};box-shadow:0 0 0 2px rgba(255,255,255,.1)`,
-        coverMarkup + inner
+        coverMarkup + cartTitle + inner
       );
 
     if (cart.hdr) {
@@ -174,7 +209,10 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
     markup =
       layer(
         `inset:0;border-radius:8px;background:${face};box-shadow:inset 0 0 0 2px rgba(0,0,0,.45);overflow:hidden`,
-        coverMarkup
+        coverMarkup +
+          (generative
+            ? titleOverlay(game, 15, 'inset:22px 0 0 15px;padding:10px 8px 8px')
+            : '')
       ) +
       layer(
         `left:0;top:0;bottom:0;width:15px;border-radius:8px 0 0 8px;` +
@@ -213,6 +251,8 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
       layer(
         `inset:${disc.inset}px;border-radius:50%;background:${face};border:2px solid rgba(0,0,0,.25);overflow:hidden`,
         coverMarkup +
+          /* Título en el anillo superior del disco: el agujero central manda. */
+          (generative ? titleOverlay(game, 10, 'align-items:flex-start;padding-top:9px') : '') +
           `<span style="position:absolute;left:0;right:0;bottom:13%;z-index:2;text-align:center;` +
           `font:500 10px var(--f-mono);color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.6)">${label}</span>`
       ) +

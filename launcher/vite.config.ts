@@ -52,11 +52,25 @@ function keyFromFile(file: string): string | null {
   return null;
 }
 
-/** Clave de API: primero `process.env`, después el fichero del usuario. */
+/** Clave de API del servidor: `process.env`, después el fichero del usuario. */
 function steamgridKey(): string | null {
   const env = process.env[STEAMGRID_KEY_NAME];
   if (typeof env === 'string' && env.trim()) return env.trim();
   return keyFromFile(STEAMGRID_CREDENTIALS);
+}
+
+/**
+ * Clave que envía el navegador en la cabecera `x-steamgrid-key`.
+ *
+ * El launcher permite al usuario pegar su clave **personal** en Ajustes: viaja
+ * en esta cabecera hasta el proxy, que la reenvía a SteamGridDB como
+ * `Authorization: Bearer …`. Nunca se registra en logs.
+ */
+function headerKey(value: string | string[] | undefined): string | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : null;
 }
 
 /** Respuesta JSON uniforme (status + `Content-Type: application/json`). */
@@ -72,7 +86,13 @@ function sendJSON(res: ServerResponse, status: number, payload: unknown): void {
  * `https://www.steamgriddb.com/api/v2/<endpoint>[?query]` con la cabecera
  * `Authorization: Bearer <clave>`.
  *
- * El navegador nunca ve la clave: vive en el proceso de Vite.
+ * Orden de resolución de la clave:
+ *   1. `x-steamgrid-key` (clave personal del usuario, enviada por el frontend).
+ *   2. `STEAMGRID_API_KEY` del entorno del proceso de Vite.
+ *   3. `~/.steamgrid_credentials.env`.
+ *
+ * `__status` responde si hay clave disponible en el servidor sin llamar a la
+ * API: el modal «Ajustar arte» lo usa para avisar de que falta configurarla.
  */
 async function steamgridProxy(
   req: IncomingMessage,
@@ -85,21 +105,38 @@ async function steamgridProxy(
     return;
   }
 
-  const apiKey = steamgridKey();
-  if (!apiKey) {
-    sendJSON(res, 503, {
-      success: false,
-      error:
-        `Falta ${STEAMGRID_KEY_NAME}. Expórtala en el entorno o guárdala en ` +
-        `${STEAMGRID_CREDENTIALS} como ${STEAMGRID_KEY_NAME}=<tu-clave>.`,
-    });
-    return;
-  }
-
   const rest = url.slice(STEAMGRID_PREFIX.length);
   const cut = rest.indexOf('?');
   const endpoint = (cut >= 0 ? rest.slice(0, cut) : rest).replace(/^\/+/, '');
   const query = cut >= 0 ? rest.slice(cut) : '';
+
+  const header = headerKey(req.headers['x-steamgrid-key']);
+  const serverKey = steamgridKey();
+
+  /* Sonda de configuración: no necesita clave, solo informa de si existe. */
+  if (endpoint === '__status') {
+    sendJSON(res, 200, {
+      success: true,
+      /* `configured` = hay clave en el servidor (entorno o fichero). */
+      configured: !!serverKey,
+      /* `client` = el navegador envió una clave personal en la cabecera. */
+      client: !!header,
+    });
+    return;
+  }
+
+  /* Prioridad: cabecera del navegador → entorno → fichero de credenciales. */
+  const apiKey = header ?? serverKey;
+
+  if (!apiKey) {
+    sendJSON(res, 503, {
+      success: false,
+      error:
+        'Falta la clave de SteamGridDB. Pégala en Ajustes → Integraciones y Arte ' +
+        `o define ${STEAMGRID_KEY_NAME} en el entorno / ${STEAMGRID_CREDENTIALS}.`,
+    });
+    return;
+  }
 
   if (!endpoint || !/^[A-Za-z0-9/_.,%-]+$/.test(endpoint)) {
     sendJSON(res, 400, { success: false, error: 'Endpoint de SteamGridDB no válido.' });

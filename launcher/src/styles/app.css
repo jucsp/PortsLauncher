@@ -61,6 +61,10 @@ h1,h2,h3{font-family:var(--f-display);margin:0;text-wrap:balance}
 .btn.dng{border-color:var(--danger);color:#FF8A8A;background:transparent}
 .btn.lg{height:52px;font-size:17px;border-radius:14px}
 .btn.sm{height:34px;padding:0 12px;border-radius:10px;font-size:13px}
+/* Alias del asistente de bienvenida: `primary` = `pri`, `ghost` = sin caja. */
+.btn.primary{background:var(--accent);border-color:transparent;color:var(--onaccent);font-weight:700}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.btn.ghost:hover{color:var(--text);background:var(--panel2)}
 .ico{width:40px;padding:0;display:inline-grid;place-items:center}
 .pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;border:1px solid var(--c,var(--line));color:var(--c,var(--text));background:var(--panel2);white-space:nowrap}
 /* Hero continue */

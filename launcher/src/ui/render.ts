@@ -1052,8 +1052,32 @@ function autoLabel(key: PlatKey, settings: Settings): string {
   return `Defecto · ${MEDIA[settings.mediaDef ?? 'cd'].name}`;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Integración con SteamGridDB                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * ¿El **servidor** de Vite tiene credenciales de SteamGridDB?
+ *
+ * `main.ts` lo averigua al arrancar con `GET /api/steamgrid/__status` (no llama
+ * a la API: solo pregunta si hay clave en el entorno o en
+ * `~/.steamgrid_credentials.env`). Mientras no se sepa, se asume `false`.
+ */
+let serverSteamgridReady = false;
+
+/** Registra el resultado de la sonda `/api/steamgrid/__status`. */
+export function setSteamgridServerReady(ready: boolean): void {
+  serverSteamgridReady = !!ready;
+}
+
+/** ¿Hay clave de SteamGridDB, en los ajustes del usuario o en el servidor? */
+export function steamgridConfigured(settings: Settings): boolean {
+  return !!String(settings.steamgridApiKey ?? '').trim() || serverSteamgridReady;
+}
+
 export function renderSettings(): string {
   const settings = S.settings;
+  const steamgridReady = steamgridConfigured(settings);
   const demo = (['psp', 'snes', 'md', 'ps1', 'gb'] as const).map(sampleFor);
   const mediaKeys = Object.keys(MEDIA) as MediaStyle[];
   const selected = settings.mediaDef;
@@ -1145,6 +1169,26 @@ export function renderSettings(): string {
     '<section class="box"><div class="lbl" style="padding:0">SISTEMA</div>' +
     '<div class="kv"><span>Destino de los ports</span>' +
     `<button class="btn sm" data-act="dest">${esc(settings.dest)} (cambiar)</button></div></section>` +
+    /* INTEGRACIONES Y ARTE */
+    '<section class="box"><div class="lbl" style="padding:0">INTEGRACIONES Y ARTE</div>' +
+    '<h2 style="font-size:18px">Carátulas reales con tu clave de SteamGridDB</h2>' +
+    '<div class="kv"><span>Estado de la integración</span>' +
+    `<span style="font-weight:600">${
+      steamgridReady ? '🟢 Conectado' : '🟡 No configurada'
+    }</span></div>` +
+    '<label>Clave API de SteamGridDB (personal y gratuita)' +
+    '<input class="in-txt" type="text" data-set="steamgridApiKey" autocomplete="off" ' +
+    `spellcheck="false" placeholder="Pega aquí tu clave (opcional)" value="${esc(settings.steamgridApiKey ?? '')}"></label>` +
+    '<div class="muted" style="font-size:12px">La clave se guarda solo en este navegador y viaja al ' +
+    'proxy local del launcher. Sin clave, cada soporte usa su arte generativo procedural.</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+    '<button class="btn sm" data-act="test-steamgrid">Probar conexión</button>' +
+    '<button class="btn sm" data-act="open-wizard">Ver asistente de bienvenida</button>' +
+    '</div>' +
+    '<div class="muted" style="font-size:12px">Consigue tu clave API personal y gratuita en ' +
+    '<a href="https://www.steamgriddb.com/profile/preferences/api" target="_blank" ' +
+    'rel="noreferrer noopener" style="color:var(--accent2)">steamgriddb.com/profile/preferences/api</a>.' +
+    '</div></section>' +
     /* ÍNDICE */
     '<section class="box"><div class="lbl" style="padding:0">ÍNDICE DE PORTS</div>' +
     '<h2 style="font-size:18px">Un índice propio alimenta el launcher</h2>' +
@@ -1245,6 +1289,11 @@ export interface ArtModalOptions {
   status?: Partial<Record<ArtKind, string | null>>;
   /** Texto del buscador, por sección (se conserva entre repintados). */
   queries?: Partial<Record<ArtKind, string>>;
+  /**
+   * ¿Hay clave de SteamGridDB disponible (ajustes del usuario o servidor)?
+   * Si llega `false`, el modal muestra el aviso amigable para configurarla.
+   */
+  apiKeyConfigured?: boolean;
 }
 
 /** Ancla → propiedades CSS del contenedor absoluto del logotipo. */
@@ -1349,6 +1398,20 @@ export function artModalHTML(
   const logoPreview = draft.logoUrl ?? game.logo ?? null;
   const heroPreview = draft.heroUrl ?? game.hero ?? null;
   const coverPreview = draft.coverUrl ?? game.coverHorizontal ?? game.cover ?? null;
+
+  /* Aviso amable cuando no hay clave ni en los ajustes ni en el servidor: la
+   * búsqueda en SteamGridDB no puede funcionar, pero el arte generativo sí. */
+  const apiNotice =
+    options.apiKeyConfigured === false
+      ? '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 14px;' +
+        'border-radius:12px;border:1px dashed var(--warn);background:rgba(255,154,61,.08)">' +
+        '<div style="flex:1 1 300px"><b>🟡 SteamGridDB aún no está configurado</b><br>' +
+        '<span class="muted" style="font-size:12.5px">Buscar carátulas reales necesita una clave API ' +
+        'personal y gratuita. Puedes pegarla en <b>Ajustes → Integraciones y Arte</b> o seguir con el ' +
+        'arte generativo: cada soporte ya pinta su patrón y su título.</span></div>' +
+        '<button class="btn sm" data-act="art-goto-settings">Ir a Ajustes</button>' +
+        '</div>'
+      : '';
 
   const tabButtons = (['logo', 'hero', 'cover'] as ArtTab[])
     .map(
@@ -1463,6 +1526,7 @@ export function artModalHTML(
     '<button class="btn ico" data-act="close-modal" aria-label="Cerrar">✕</button>' +
     '</div>' +
     '<div class="mbody">' +
+    apiNotice +
     `<div class="seg txt" style="align-self:flex-start;flex-wrap:wrap">${tabButtons}</div>` +
     panel +
     '</div>' +
@@ -1472,6 +1536,105 @@ export function artModalHTML(
     '<button class="btn" data-act="close-modal">Cancelar</button>' +
     `<button class="btn pri" data-act="save-art" data-id="${game.id}">Guardar y aplicar</button>` +
     '</div></div>'
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Asistente de bienvenida (wizard de 3 pasos)                                */
+/* -------------------------------------------------------------------------- */
+
+/** Número de pasos del asistente de bienvenida. */
+export const WIZARD_STEPS = 3;
+
+/** Indicador «1 de 3» con los puntos de progreso. */
+function wizardProgress(step: number): string {
+  const dots = Array.from({ length: WIZARD_STEPS }, (_, index) => {
+    const n = index + 1;
+    return (
+      `<span style="width:8px;height:8px;border-radius:50%;display:inline-block;` +
+      `background:${n === step ? 'var(--accent)' : 'var(--line)'}"></span>`
+    );
+  }).join('');
+  return (
+    '<div style="display:flex;align-items:center;gap:10px">' +
+    `<span class="mono muted" style="font-size:11px;letter-spacing:.14em">PASO ${step} DE ${WIZARD_STEPS}</span>` +
+    `<span style="display:flex;gap:6px">${dots}</span></div>`
+  );
+}
+
+/**
+ * Modal del asistente de bienvenida (`#modal-root`).
+ *
+ * Tres pasos: presentación y aviso legal, conexión opcional con SteamGridDB y
+ * ecosistema de plugins. Es HTML puro: `main.ts` guarda el paso activo
+ * (`currentWizardStep`) y repinta al navegar. Al terminar u omitir se marca
+ * `settings.onboardingDone`, de modo que el asistente no vuelve a aparecer.
+ *
+ * @param settings ajustes vigentes (la clave de SteamGridDB se prerrellena).
+ * @param step     paso activo, 1–3 (cualquier otro valor cae en el 1).
+ */
+export function wizardModalHTML(settings: Settings, step: number): string {
+  const current = step === 2 ? 2 : step === 3 ? 3 : 1;
+
+  let title = '';
+  let description = '';
+  let detail = '';
+  let actions = '';
+
+  if (current === 1) {
+    title = '¡Bienvenido a PortsLauncher!';
+    description =
+      'El lanzador de escritorio para puertos nativos, recompilaciones y proyectos de ingeniería inversa de código abierto.';
+    detail =
+      '<p class="muted" style="font-size:13px;margin:0">PortsLauncher no aloja ni distribuye archivos protegidos ' +
+      'por derechos de autor. Cada puerto es código abierto desarrollado por la comunidad.</p>';
+    actions = '<button class="btn primary" data-act="wizard-step" data-k="2">Siguiente →</button>';
+  } else if (current === 2) {
+    title = 'Arte oficial y carátulas (Opcional)';
+    description =
+      'Puedes conectar tu clave gratuita de SteamGridDB para que los juegos muestren carátulas, fondos y logotipos oficiales de alta resolución.';
+    detail =
+      '<label>Clave API de SteamGridDB (opcional)' +
+      '<input class="in-txt" type="text" data-set="steamgridApiKey" autocomplete="off" spellcheck="false" ' +
+      `placeholder="Pega tu clave aquí (opcional)" value="${esc(settings.steamgridApiKey ?? '')}"></label>` +
+      '<div class="muted" style="font-size:12px">Si decides no ingresarla, PortsLauncher generará ' +
+      'automáticamente carátulas geométricas y estilizadas únicas para cada título.</div>';
+    actions =
+      '<button class="btn sm" data-act="wizard-step" data-k="1">← Anterior</button>' +
+      '<button class="btn primary" data-act="wizard-step" data-k="3">Siguiente →</button>';
+  } else {
+    title = 'Ecosistema de Plugins y Extensiones';
+    description =
+      'PortsLauncher admite plugins modulares de la comunidad instalados en tu directorio local:';
+    detail =
+      '<code>~/.local/share/portslauncher/plugins/</code>' +
+      '<p class="muted" style="font-size:13px;margin:0">Los plugins permiten extender el lanzador con ' +
+      'herramientas de compilación, extractores de assets y gestión de tus respaldos personales. Consulta la ' +
+      'guía oficial en <b>docs/PLUGINS.md</b> y los términos en <b>docs/LEGAL.md</b>.</p>';
+    actions =
+      '<button class="btn sm" data-act="wizard-step" data-k="2">← Anterior</button>' +
+      '<button class="btn pri" data-act="finish-wizard">¡Comenzar a explorar!</button>';
+  }
+
+  return (
+    '<div class="scrim" data-act="close-wizard"></div>' +
+    '<div class="modal" role="dialog" aria-modal="true" aria-label="Asistente de bienvenida" ' +
+    'style="max-width:560px;width:calc(100vw - 32px)">' +
+    '<div class="mhead">' +
+    '<div style="width:44px;height:44px;border-radius:50%;background:var(--accent);color:var(--onaccent);' +
+    'display:grid;place-items:center;font-size:20px">👋</div>' +
+    '<div style="flex:1;min-width:0">' +
+    `<div class="muted" style="font-size:12px">Asistente de bienvenida</div>` +
+    `${wizardProgress(current)}</div>` +
+    '<button class="btn ghost sm" data-act="finish-wizard">Omitir</button>' +
+    '</div>' +
+    '<div class="mbody">' +
+    `<h2 style="font-size:24px;line-height:1.15">${esc(title)}</h2>` +
+    `<div class="muted" style="font-size:14px">${esc(description)}</div>` +
+    detail +
+    '</div>' +
+    `<div class="mfoot">${actions}</div>` +
+    '</div>'
   );
 }
 

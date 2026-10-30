@@ -26,6 +26,8 @@
 8. [Decisiones de diseño](#8-decisiones-de-diseño)
 9. [Limitaciones conocidas y hoja de ruta](#9-limitaciones-conocidas-y-hoja-de-ruta)
 10. [Créditos y atribución](#10-créditos-y-atribución)
+11. [Ecosistema de Plugins (docs/PLUGINS.md)](docs/PLUGINS.md)
+12. [Aviso Legal y Propiedad Intelectual (docs/LEGAL.md)](docs/LEGAL.md)
 
 ---
 
@@ -583,6 +585,20 @@ avise en lugar de perder silenciosamente las instalaciones del usuario.
   fallbacks locales y de sistema.
 - El código del indexador y del launcher se distribuye para uso personal y educativo; respeta las
   licencias de cada port al instalarlo.
+
+---
+
+## 11. Ecosistema de Plugins
+
+PortsLauncher cuenta con una especificación abierta para la integración de herramientas y extensiones externas (compilación, extracción y aprovisionamiento de assets locales).
+
+Consulta la guía técnica completa en [docs/PLUGINS.md](docs/PLUGINS.md).
+
+---
+
+## 12. Aviso Legal y Términos de Uso
+
+PortsLauncher es un gestor de librerías para puertos de código abierto que no distribuye, no aloja ni incentiva la descarga de contenido con copyright. Consulta los términos legales completos en [docs/LEGAL.md](docs/LEGAL.md).
 
 ---
 

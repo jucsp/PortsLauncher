@@ -32,6 +32,9 @@ import {
   artDraftOf,
   artPatchOf,
   clampLogoScale,
+  wizardModalHTML,
+  setSteamgridServerReady,
+  steamgridConfigured,
   RT,
   RT_INV,
   bgOf,
@@ -377,6 +380,8 @@ function renderArtModal(): void {
     gallery: currentArtGallery,
     status: currentArtStatus,
     queries: currentArtQueries,
+    /* ¿Hay clave en los ajustes o en el servidor? Si no, el modal avisa. */
+    apiKeyConfigured: steamgridConfigured(S.settings),
   });
   document.body.style.overflow = 'hidden';
 }
@@ -433,9 +438,12 @@ function applyLogoScale(raw: number): void {
 
 /** GET al proxy de desarrollo; devuelve el JSON ya parseado. */
 async function steamgridJSON(endpoint: string): Promise<unknown> {
-  const response = await fetch(`/api/steamgrid/${endpoint}`, {
-    headers: { Accept: 'application/json' },
-  });
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  /* Clave personal del usuario (si existe) → el proxy la reenvía a la API. */
+  if (S.settings.steamgridApiKey) {
+    headers['x-steamgrid-key'] = S.settings.steamgridApiKey.trim();
+  }
+  const response = await fetch(`/api/steamgrid/${endpoint}`, { headers });
   if (!response.ok) throw new Error(`SteamGridDB ${response.status}`);
   return response.json();
 }
@@ -590,6 +598,84 @@ function pickArtAction(d: Record<string, string | undefined>): void {
   const kind = d.k;
   if (!isArtKind(kind)) return;
   pickArt(kind, d.url);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Asistente de bienvenida (wizard)                                           */
+/* -------------------------------------------------------------------------- */
+
+/** Paso activo del asistente (1–3). */
+let currentWizardStep = 1;
+
+/** ¿El asistente está abierto ahora mismo? (lo usa la tecla Escape). */
+let wizardOpen = false;
+
+/** Pinta el paso activo del asistente en `#modal-root`. */
+function renderWizardModal(): void {
+  const root = artRoot();
+  if (!root) return;
+  root.innerHTML = wizardModalHTML(S.settings, currentWizardStep);
+  document.body.style.overflow = 'hidden';
+  wizardOpen = true;
+}
+
+/** Abre el asistente desde el principio. */
+function openWizard(): void {
+  currentWizardStep = 1;
+  renderWizardModal();
+}
+
+/** Cierra el asistente y persiste `onboardingDone` (no vuelve a aparecer). */
+function finishWizard(): void {
+  S.settings.onboardingDone = true;
+  saveState();
+  const root = $('#modal-root');
+  if (root) root.innerHTML = '';
+  document.body.style.overflow = '';
+  wizardOpen = false;
+  currentWizardStep = 1;
+  draw();
+}
+
+/**
+ * Sonda `/api/steamgrid/__status`: ¿tiene clave el servidor de desarrollo?
+ *
+ * No llama a la API de SteamGridDB; solo informa de si existe
+ * `STEAMGRID_API_KEY` en el entorno del proceso o en
+ * `~/.steamgrid_credentials.env`. Se lanza sin bloquear el arranque.
+ */
+async function probeSteamgridStatus(): Promise<void> {
+  try {
+    const response = await fetch('/api/steamgrid/__status', {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return;
+    const payload = (await response.json()) as { configured?: boolean } | null;
+    setSteamgridServerReady(!!payload?.configured);
+    /* La sección de Ajustes pinta el estado: repintar si está a la vista. */
+    if (R.name === 'settings') renderSettings();
+  } catch {
+    /* Sin servidor de desarrollo (build estático): se queda en `false`. */
+  }
+}
+
+/** Prueba real de conexión con SteamGridDB (botón de Ajustes). */
+async function testSteamgrid(): Promise<void> {
+  try {
+    const payload = (await steamgridJSON('search/autocomplete/Mario')) as {
+      data?: unknown[];
+    } | null;
+    const data = payload && Array.isArray(payload.data) ? payload.data : [];
+    if (data.length > 0) {
+      toast('✓ Conexión con SteamGridDB exitosa');
+      setSteamgridServerReady(true);
+      renderSettings();
+      return;
+    }
+  } catch (error) {
+    console.warn('[PortsLauncher] SteamGridDB:', error);
+  }
+  toast('✗ No se pudo conectar a SteamGridDB. Revisa la clave');
 }
 
 const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
@@ -808,6 +894,27 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   'save-art': () => saveArt(),
   'reset-art': () => resetArt(),
   'close-modal': () => closeArtModal(),
+  'art-goto-settings': () => {
+    /* El aviso del modal enlaza a Ajustes: cerrar el arte y navegar. */
+    closeArtModal();
+    go('settings');
+  },
+
+  /* -------------------- asistente de bienvenida --------------------------- */
+
+  'open-wizard': () => openWizard(),
+  'wizard-step': (d) => {
+    currentWizardStep = Number(d.k) || 1;
+    renderWizardModal();
+  },
+  'finish-wizard': () => finishWizard(),
+  'close-wizard': () => finishWizard(),
+
+  /* ------------------------- SteamGridDB --------------------------------- */
+
+  'test-steamgrid': () => {
+    void testSteamgrid();
+  },
 };
 
 /* -------------------------------------------------------------------------- */
@@ -834,6 +941,10 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape' && currentArtGame) {
     closeArtModal();
+    return;
+  }
+  if (e.key === 'Escape' && wizardOpen) {
+    finishWizard();
     return;
   }
   const target = e.target as HTMLElement | null;
@@ -1090,6 +1201,15 @@ async function init(): Promise<void> {
   });
 
   route();
+
+  /* Sonda del proxy de SteamGridDB: no bloquea el arranque. */
+  void probeSteamgridStatus();
+
+  /* Primer arranque: asistente de bienvenida (3 pasos). */
+  if (!S.settings.onboardingDone) {
+    currentWizardStep = 1;
+    renderWizardModal();
+  }
 }
 
 init().catch((err) => {
