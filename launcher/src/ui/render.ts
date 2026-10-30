@@ -1105,19 +1105,38 @@ export function devBox(game: Game): string {
 }
 
 /**
- * Máscara elíptica ESTÁTICA que funde el hero con el lienzo.
+ * Máscaras LINEALES direccionales que funden el hero con el lienzo.
  *
- * Se aplica al contenedor (nunca al `<img>` escalado: `transform` movería
- * también su máscara), de modo que el desvanecimiento queda anclado al hueco de
- * la cabecera y la imagen se agranda/mueve por dentro. Los stops tocan
- * `transparent` al 85 % de una elipse 65 % 60 %, muy por dentro de los bordes
- * físicos: los cuatro lados son invisibles y no queda ningún corte rectangular.
- * Se emiten `-webkit-*` y estándar (WebKit/Blink y Gecko).
+ * Sustituyen a la elipse radial: un `radial-gradient` se mide en porcentajes de
+ * la caja del elemento, así que en pantallas anchas (o cuando la imagen es más
+ * estrecha que el hueco) el desvanecimiento se agotaba antes de llegar a los
+ * extremos laterales y los lados izquierdo/derecho se veían cortados en recto.
+ * Con dos degradados lineales en ejes independientes cada borde se desvanece
+ * respecto a su propio eje y el resultado es estable a cualquier resolución:
+ * en horizontal el `transparent` cae siempre en el 0 % y el 100 % del ancho, en
+ * vertical en el 0 % y el 100 % del alto.
+ *
+ * Los porcentajes son bajos a propósito (`transparent` → `black` en el primer
+ * 20 % y de vuelta al 80 %): el centro queda nítido y el fundido ocupa lo justo
+ * para que no se distinga ningún borde recto. `rgba(0,0,0,.5)` / `.6` en el 8 %
+ * y el 92 % redondea la caída y evita el aspecto de viñeta dura.
+ *
+ * Se aplican a CONTENEDORES, nunca al `<img>` que lleva el `transform: scale`
+ * del slider: así el zoom agranda la imagen por dentro de una máscara anclada a
+ * la cabecera. Se emiten `-webkit-*` y estándar (WebKit/Blink y Gecko).
+ *
+ * OJO: las máscaras de contenedores anidados se MULTIPLICAN entre sí. La capa
+ * del hero y la previsualización encadenan X → Y → X (la última sobre el
+ * contenedor inmediato del `<img>`, para que los bordes físicos de la imagen
+ * —aunque sea más estrecha que la pantalla— empiecen y acaben en `transparent`).
  */
-const HERO_MASK_CSS =
-  '-webkit-mask-image:radial-gradient(ellipse 65% 60% at 50% 50%,black 25%,rgba(0,0,0,0.85) 45%,rgba(0,0,0,0.2) 65%,transparent 85%);' +
-  'mask-image:radial-gradient(ellipse 65% 60% at 50% 50%,black 25%,rgba(0,0,0,0.85) 45%,rgba(0,0,0,0.2) 65%,transparent 85%);' +
-  '-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;';
+const HERO_MASK_X_CSS =
+  '-webkit-mask-image:linear-gradient(to right,transparent 0%,rgba(0,0,0,0.5) 8%,black 20%,black 80%,rgba(0,0,0,0.5) 92%,transparent 100%);' +
+  'mask-image:linear-gradient(to right,transparent 0%,rgba(0,0,0,0.5) 8%,black 20%,black 80%,rgba(0,0,0,0.5) 92%,transparent 100%);';
+
+const HERO_MASK_Y_CSS =
+  '-webkit-mask-image:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,0.6) 8%,black 20%,black 80%,rgba(0,0,0,0.6) 92%,transparent 100%);' +
+  'mask-image:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,0.6) 8%,black 20%,black 80%,rgba(0,0,0,0.6) 92%,transparent 100%);';
 
 export function renderGame(id: string): string {
   const game = S.byId.get(id);
@@ -1291,27 +1310,31 @@ export function renderGame(id: string): string {
     (heroImg
       ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:1;' +
         'pointer-events:none;padding:12px 60px">' +
-        /* El hero se funde con el lienzo mediante una máscara radial elíptica
-         * ESTÁTICA aplicada solo al wrapper: si se aplicara al `<img>`, el
-         * `transform: scale` del slider de escala movería también la máscara y
-         * el fundido dejaría de estar anclado a la cabecera (además de
-         * multiplicar las alfas y lavar el arte).
-         * El wrapper ocupa todo el área disponible (`width/height: 100%`) a
-         * propósito: así la elipse se mide sobre el hueco de la cabecera y no
-         * sobre la caja de la imagen (los motores calculan la máscara sobre la
-         * caja del elemento, no sobre el píxel pintado), de modo que el
-         * rectángulo del arte queda SIEMPRE dentro de la zona degradada, sea
-         * panorámico o casi cuadrado, y el `max-height: 100%` del `<img>` vuelve
-         * a resolverse contra una altura definida.
-         * `overflow:hidden` recorta el zoom (`scale` > 1) en una zona que la
-         * máscara ya ha dejado en `transparent`, así que no reaparece ningún
-         * borde recto ni se repite el degradado fuera de la caja. */
+        /* El hero se funde con el lienzo mediante máscaras lineales en dos ejes
+         * encadenadas en contenedores anidados:
+         *   · capa externa → máscara HORIZONTAL sobre el ancho completo del hueco,
+         *   · capa media   → máscara VERTICAL sobre el alto completo,
+         *   · capa interna → máscara HORIZONTAL otra vez, sobre el contenedor
+         *     inmediato del `<img>`, para que los bordes físicos de la imagen
+         *     (aunque sea más estrecha que la pantalla) empiecen y terminen en
+         *     `transparent` y nunca se vea una línea recta vertical.
+         * Ninguna se aplica al `<img>` que lleva el `transform: scale` del
+         * slider: así el zoom agranda la imagen por dentro y el fundido sigue
+         * anclado a la cabecera. `overflow:hidden` recorta el zoom en una zona
+         * que la máscara ya ha dejado transparente, así que no reaparece ningún
+         * borde recto. */
         '<div style="width:100%;height:100%;overflow:hidden;display:flex;align-items:center;justify-content:center;' +
-        HERO_MASK_CSS +
+        HERO_MASK_X_CSS +
+        '">' +
+        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;' +
+        HERO_MASK_Y_CSS +
+        '">' +
+        '<div style="position:relative;display:flex;align-items:center;justify-content:center;max-height:100%;max-width:100%;' +
+        HERO_MASK_X_CSS +
         '">' +
         `<img src="${esc(heroImg)}" alt="" style="max-height:100%;max-width:100%;object-fit:contain;display:block;` +
         `transform:scale(${heroScale / 100});transform-origin:center;transition:transform .15s ease-out" />` +
-        '</div></div>'
+        '</div></div></div></div>'
       : '') +
     /* --- capa 2: contenido, logotipo (izquierda) y acciones (derecha) -------- */
     logoLayer +
@@ -2020,8 +2043,9 @@ export function artModalHTML(
   }
 
   if (activeTab === 'hero') {
-    /* Misma máscara estática que la cabecera: la previsualización debe mostrar
-     * exactamente el fundido que se verá en la ficha, y el zoom (`scale`) se
+    /* Mismas máscaras lineales que la cabecera (X → Y → X sobre contenedores
+     * anidados): la previsualización debe mostrar exactamente el mismo fundido
+     * perimetral, sin cortes laterales en ningún ancho. El zoom (`scale`) se
      * aplica a la imagen de dentro para que la máscara no se mueva. */
     const heroScale = clampHeroScale(draft.heroScale);
     panel =
@@ -2031,14 +2055,20 @@ export function artModalHTML(
       (heroPreview
         ? `<img src="${esc(heroPreview)}" alt="" style="position:absolute;inset:-30px;width:calc(100% + 60px);` +
           'height:calc(100% + 60px);object-fit:cover;filter:blur(26px);opacity:.6" />' +
-          '<div style="position:absolute;inset:0;overflow:hidden;display:flex;align-items:center;' +
+          '<div style="position:absolute;inset:0;display:flex;align-items:center;' +
           'justify-content:center;padding:8px 20px;' +
-          HERO_MASK_CSS +
+          HERO_MASK_X_CSS +
+          '">' +
+          '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;' +
+          HERO_MASK_Y_CSS +
+          '">' +
+          '<div style="position:relative;display:flex;align-items:center;justify-content:center;max-height:100%;max-width:100%;' +
+          HERO_MASK_X_CSS +
           '">' +
           `<img id="art-hero-preview-img" src="${esc(heroPreview)}" alt="" style="max-width:100%;` +
           'max-height:100%;object-fit:contain;display:block;' +
           `transform:scale(${heroScale / 100});transform-origin:center;transition:transform .15s ease-out" />` +
-          '</div>'
+          '</div></div></div>'
         : '<span class="muted" style="position:absolute;inset:0;display:grid;place-items:center">Sin fondo</span>') +
       '</div>' +
       '<div class="muted" style="font-size:12px">Al aplicarlo, la cabecera usa el fondo difuminado al máximo ' +
