@@ -99,6 +99,10 @@ export interface Game {
   coverHorizontal: string | null;
   /** Grid vertical (carátula de caja PS2 / Xbox 360 / Switch), si la trae. */
   coverVertical: string | null;
+  /** Grid cuadrado (arte de discos y reserva de cartuchos), si la trae. */
+  coverSquare: string | null;
+  /** Logotipo oficial (PNG transparente) para la cabecera de detalle. */
+  logo: string | null;
   /** Imagen panorámica para la cabecera de la ficha de detalle, si la trae. */
   hero: string | null;
   /** Archivos que debe aportar el usuario (ROM), o `null`. */
@@ -267,21 +271,36 @@ const usableCover = (url: string | null | undefined): string | null =>
  * Carátula que corresponde al soporte que se está dibujando.
  *
  * - **Cartuchos** (`n64`, `snes`, `nes`, `md`, `gba`, `gb`, `nds`, `n3ds`):
- *   `coverHorizontal` (grid horizontal de la etiqueta).
- * - **Cajas** (`ps2`, `x360`, `nsw`): `coverVertical` (grid vertical).
- * - **Resto** (discos, PC, otros): `cover` (portada genérica).
+ *   `coverHorizontal` (grid horizontal de la etiqueta) → `coverSquare` → `cover`.
+ * - **Cajas** (`ps2`, `x360`, `nsw`): `coverVertical` (grid vertical) → `cover`.
+ * - **Resto** (discos, PC, otros): `coverSquare` → `cover` → `coverVertical`.
  *
  * Si el arte específico falta se degrada a `cover`; si tampoco hay, `null` y el
  * soporte pinta su arte generativo procedural.
  */
 export function coverForStyle(game: Game, style: MediaStyle): string | null {
   if (HORIZONTAL_COVER_STYLES.includes(style)) {
-    return usableCover(game.coverHorizontal) ?? usableCover(game.cover);
+    return (
+      usableCover(game.coverHorizontal) ??
+      usableCover(game.coverSquare) ??
+      usableCover(game.cover) ??
+      usableCover(game.coverVertical)
+    );
   }
   if (VERTICAL_COVER_STYLES.includes(style)) {
-    return usableCover(game.coverVertical) ?? usableCover(game.cover);
+    return (
+      usableCover(game.coverVertical) ??
+      usableCover(game.cover) ??
+      usableCover(game.coverSquare) ??
+      usableCover(game.coverHorizontal)
+    );
   }
-  return usableCover(game.cover);
+  return (
+    usableCover(game.coverSquare) ??
+    usableCover(game.cover) ??
+    usableCover(game.coverVertical) ??
+    usableCover(game.coverHorizontal)
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -473,6 +492,8 @@ export function toGame(
     cover: port.coverUrl ?? null,
     coverHorizontal: port.coverHorizontalUrl ?? null,
     coverVertical: port.coverVerticalUrl ?? null,
+    coverSquare: port.coverSquareUrl ?? null,
+    logo: port.logoUrl ?? null,
     hero: port.heroUrl ?? null,
     rom: romOf(port),
     ai: port.aiLevel || 'unknown',

@@ -454,6 +454,10 @@ export interface PortItem {
   coverHorizontalUrl?: string | null;
   /** Grid vertical (600x900): carátula de cajas PS2 / Xbox 360 / Switch. */
   coverVerticalUrl?: string | null;
+  /** Grid cuadrado (512x512 / 1024x1024): arte de discos y reserva de cartuchos. */
+  coverSquareUrl?: string | null;
+  /** Logotipo oficial (PNG transparente) de la cabecera de detalle. */
+  logoUrl?: string | null;
   /** Imagen panorámica (1920x620): fondo de la cabecera de detalle. */
   heroUrl?: string | null;
   requiresUserFiles: RequiresUserFiles;

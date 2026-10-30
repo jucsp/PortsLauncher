@@ -843,16 +843,49 @@ export function renderGame(id: string): string {
     )
     .join('');
 
+  /* Imagen principal de la cabecera: panorámica de detalle → grid horizontal →
+   * portada genérica. */
+  const heroImg = game.hero || game.coverHorizontal || game.cover;
+  /* URL saneada para `url('…')`: el escapado HTML ya ha convertido las comillas
+   * en entidades, que aquí se eliminan para no romper la cadena CSS. */
+  const heroCss = heroImg ? esc(heroImg).replace(/&quot;|&#39;/g, '') : null;
+  const logo = game.logo;
+
   return paintMain(
-    `<div class="dhero" style="background:${bgOf(game, game.hero ?? game.cover)}">` +
-    '<div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(10,9,18,.15),rgba(10,9,18,.85))"></div>' +
-    '<a href="#biblioteca" data-act="nav" data-to="library" class="pill" style="position:relative;align-self:flex-start;background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px">← Biblioteca</a>' +
-    '<div style="position:relative;display:flex;flex-wrap:wrap;align-items:flex-end;gap:24px;padding-top:70px">' +
-    '<div style="flex:1 1 380px;min-width:0">' +
+    '<div class="dhero">' +
+    /* --- capa 0: fondo desenfocado a sangre --------------------------------- */
+    (heroCss
+      ? '<div style="position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none">' +
+        `<div style="position:absolute;inset:-30px;background-image:url('${heroCss}');background-size:cover;` +
+        'background-position:center;filter:blur(32px);transform:scale(1.15);opacity:.55"></div></div>'
+      : '') +
+    /* --- fusión lateral del fondo con el lienzo ----------------------------- */
+    '<div style="position:absolute;inset:0;z-index:0;pointer-events:none;background:' +
+    'linear-gradient(90deg,#0A0912 0%,rgba(10,9,18,0) 20%,rgba(10,9,18,0) 80%,#0A0912 100%),' +
+    'linear-gradient(180deg,rgba(10,9,18,0.2) 0%,rgba(10,9,18,0.9) 100%)"></div>' +
+    /* --- capa 1: hero principal centrado ------------------------------------ */
+    (heroImg
+      ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:1;' +
+        'pointer-events:none;padding:12px 60px">' +
+        `<img src="${esc(heroImg)}" alt="" style="max-height:100%;max-width:100%;object-fit:contain;border-radius:6px;` +
+        'filter:drop-shadow(0 12px 32px rgba(0,0,0,.8));" /></div>'
+      : '') +
+    /* --- capa 2: contenido, logotipo y acciones ----------------------------- */
+    '<div style="position:relative;z-index:2;display:flex;flex-direction:column;justify-content:space-between;gap:16px;flex:1 1 auto">' +
+    '<a href="#biblioteca" data-act="nav" data-to="library" class="pill" style="align-self:flex-start;background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px">← Biblioteca</a>' +
+    '<div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:24px;padding-top:50px">' +
+    '<div style="flex:1 1 320px;min-width:0">' +
     `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${meta}</div>` +
-    `<h1 style="font-size:clamp(32px,6vw,52px);line-height:1;text-shadow:0 4px 24px rgba(0,0,0,.5)">${esc(game.t)}</h1>` +
+    (logo
+      ? `<h1 style="font-size:clamp(32px,6vw,52px);line-height:1;text-shadow:0 4px 24px rgba(0,0,0,.5)">${esc(game.t)}</h1>`
+      : '') +
     `<div style="margin-top:8px;font-size:18px">${esc(game.pr)} · última versión ${esc(game.lv)}</div></div>` +
-    '<div style="display:flex;flex-direction:column;gap:8px;align-items:stretch">' +
+    '<div style="display:flex;flex-direction:column;gap:10px;align-items:stretch;flex:0 1 auto;max-width:360px;margin-left:auto">' +
+    (logo
+      ? `<img src="${esc(logo)}" alt="${esc(game.t)}" style="max-height:85px;max-width:320px;object-fit:contain;` +
+        'filter:drop-shadow(0 4px 16px rgba(0,0,0,.85));align-self:flex-end;" />'
+      : '<h1 style="margin:0;font-size:clamp(28px,5vw,44px);line-height:1;text-align:right;text-shadow:0 4px 24px rgba(0,0,0,.5)">' +
+        `${esc(game.t)}</h1>`) +
     (game.strategy === 'external'
       ? '<button class="btn lg pri" data-act="ext">Abrir página del proyecto</button>'
       : game.strategy === 'source-only' && !game.inst
@@ -861,7 +894,9 @@ export function renderGame(id: string): string {
     `<div style="text-align:center;font-size:12px">${esc(game.st)}${
       game.mb ? ` · ~${game.mb} MB` : ''
     }${game.rom ? ' · necesitarás tu ROM' : ''}</div></div></div></div>` +
-    '<div class="dgrid"><div class="dcol">' +
+    /* `dgrid` sale de `.dhero`: las capas absolutas (fondo desenfocado + hero)
+     * no deben superponerse al cuerpo de la ficha. */
+    '</div><div class="dgrid"><div class="dcol">' +
     `<div class="tabs" role="tablist">${tabsHtml}</div>${body}</div>` +
     `<aside class="dside">${rom}${devBox(game)}` +
     '<div class="box"><div style="font:700 17px var(--f-display)">Nivel de verificación</div>' +
@@ -884,7 +919,7 @@ export function renderGame(id: string): string {
         '<button class="btn sm" data-act="toast" data-m="Abriría el repositorio en una pestaña nueva (simulado)">Abrir en GitHub</button>'
       : '<div class="muted">Proyecto externo, sin repositorio público.</div>') +
     '<div class="muted" style="font-size:12px">La descarga sale siempre del repositorio original del proyecto.</div></div>' +
-    '</aside></div></div>'
+    '</aside></div>'
   );
 }
 
@@ -933,6 +968,8 @@ function sampleFor(style: MediaStyle): Game {
     cover: null,
     coverHorizontal: null,
     coverVertical: null,
+    coverSquare: null,
+    logo: null,
     hero: null,
     rom: null,
     ai: 'none',

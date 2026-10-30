@@ -49,12 +49,11 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
   const cover = artwork ? `${coverLayer(artwork)}, ${art_}` : art_;
   /**
    * Variante para las caras impresas (etiqueta de cartucho, disco, caja DVD):
-   * con foto real se antepone un velo para que el título y la pegatina
-   * mantengan contraste, igual que el sombreado del mock sobre el arte.
+   * con foto real se antepone un velo tenue para que la pegatina de plataforma
+   * mantenga contraste, igual que el sombreado del mock sobre el arte.
    */
   const face = artwork ? `${COVER_VEIL}, ${cover}` : cover;
   const tagColor = (PLAT[game.pl] ?? PLAT.OTRAS).tag;
-  const title = escText(game.cv);
   const label = game.pl;
 
   const layer = (css: string, inner = ''): string =>
@@ -63,10 +62,6 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
   const sticker =
     `<span style="font:500 10px var(--f-mono);color:#14041A;padding:1px 6px;border-radius:4px;` +
     `background:${tagColor};box-shadow:0 1px 6px rgba(0,0,0,.55);text-shadow:none">${label}</span>`;
-
-  const titleSpan = (size: number): string =>
-    `<span style="font:700 ${size}px/1 var(--f-display);color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.6);` +
-    `white-space:pre-line">${title}</span>`;
 
   const lines = (
     css: string,
@@ -86,11 +81,11 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
   if (cart) {
     const body = cart.bg ?? bodyOf(game.pl);
     const inner = cart.row
-      ? '<div style="display:flex;align-items:flex-end;justify-content:space-between;width:100%;' +
-        `height:100%;padding:7px 10px;box-sizing:border-box">${titleSpan(cart.fs)}${sticker}</div>`
-      : '<div style="display:flex;flex-direction:column;justify-content:space-between;width:100%;' +
+      ? '<div style="display:flex;align-items:flex-end;justify-content:flex-end;width:100%;' +
+        `height:100%;padding:7px 10px;box-sizing:border-box">${sticker}</div>`
+      : '<div style="display:flex;flex-direction:column;justify-content:flex-start;width:100%;' +
         `height:100%;padding:${cart.hdr ? '22px 9px 6px' : '6px 9px'};box-sizing:border-box">` +
-        `<span style="align-self:flex-start">${sticker}</span>${titleSpan(cart.fs)}</div>`;
+        `<span style="align-self:flex-start">${sticker}</span></div>`;
 
     markup =
       layer(`inset:0;background:${body};clip-path:path('${cart.p}')`) +
@@ -155,11 +150,6 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
           'text-shadow:0 1px 8px rgba(0,0,0,.6)',
         label
       ) +
-      layer(
-        'left:15px;right:0;bottom:0;padding:8px 10px;border-radius:0 0 8px 0;' +
-          'background:linear-gradient(180deg,transparent,rgba(0,0,0,.65))',
-        titleSpan(15)
-      ) +
       layer('inset:0;border-radius:8px;background:linear-gradient(115deg,rgba(255,255,255,.22),transparent 38%)');
   } else {
     /* ----------------------------- discos -------------------------------- */
@@ -182,14 +172,11 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
       },
     };
     const disc = discs[style] ?? discs.cd;
-    const fontSize = info.w < 120 ? 12 : 15;
     markup =
       layer(`inset:0;border-radius:50%;background:${disc.rim}`) +
       layer(
         `inset:${disc.inset}px;border-radius:50%;background:${face};border:2px solid rgba(0,0,0,.25);overflow:hidden`,
-        `<span style="position:absolute;left:0;right:0;top:16%;text-align:center;font:700 ${fontSize}px/1 var(--f-display);` +
-          `color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.65);white-space:pre-line">${title}</span>` +
-          `<span style="position:absolute;left:0;right:0;bottom:13%;text-align:center;` +
+        `<span style="position:absolute;left:0;right:0;bottom:13%;text-align:center;` +
           `font:500 10px var(--f-mono);color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.6)">${label}</span>`
       ) +
       layer(
