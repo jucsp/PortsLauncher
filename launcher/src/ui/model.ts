@@ -9,15 +9,19 @@
  * ========================================================================== */
 
 import type {
+  CustomArtwork,
   InstallStrategy,
   LibraryGame,
+  LogoAnchor,
   MediaStyle,
   PortItem,
   RomMode,
   Settings,
   SourcePlatform,
 } from '../services/types';
+import { LOGO_ANCHOR_DEFAULT, LOGO_SCALE_DEFAULT, LOGO_SCALE_MAX, LOGO_SCALE_MIN } from '../services/types';
 import { catalogService } from '../services/catalogService';
+import { libraryService } from '../services/libraryService';
 import { DEVT, DSSH, FROM_PLATFORM, MEDIA, PLAT, PLATMEDIA, STRAT, TO_PLATFORM } from './platforms';
 import type { DevInfo, DevKey, PlatKey } from './platforms';
 
@@ -105,6 +109,12 @@ export interface Game {
   logo: string | null;
   /** Imagen panorámica para la cabecera de la ficha de detalle, si la trae. */
   hero: string | null;
+  /** Arte personalizado del usuario (`🎨 Ajustar arte`), si lo hay. */
+  customArt?: CustomArtwork | null;
+  /** Punto de anclaje del logotipo en la cabecera. */
+  logoAnchor: LogoAnchor;
+  /** Alto del logotipo en píxeles (40–220). */
+  logoScale: number;
   /** Archivos que debe aportar el usuario (ROM), o `null`. */
   rom: RomReq | null;
   /** Nivel de asistencia por IA declarado. */
@@ -235,6 +245,12 @@ export function art(color: Palette, pattern: Pattern): string {
 
 /** Atajo del prototipo: `art(g.c, g.p)`. */
 export const artOf = (game: Game): string => art(game.c, game.p);
+
+/** Alto del logotipo acotado al rango del slider (40–220 px). */
+export function clampLogoScale(value: number | null | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return LOGO_SCALE_DEFAULT;
+  return Math.max(LOGO_SCALE_MIN, Math.min(LOGO_SCALE_MAX, Math.round(value)));
+}
 
 /* -------------------------------------------------------------------------- */
 /* Carátula según el soporte físico                                           */
@@ -474,6 +490,9 @@ export function toGame(
   const latest = port.verifiedRelease?.version ?? '—';
   const dev = devOf(port);
   const platform = port.sourcePlatform ?? 'other';
+  /* Arte personalizado (localStorage → `customArt[pid]`): sobreescribe el del
+   * índice y está disponible tanto para ports instalados como no instalados. */
+  const custom = libraryService.getCustomArt(port.pid);
 
   return {
     id: port.pid,
@@ -489,12 +508,15 @@ export function toGame(
     mb: 0,
     c: paletteFromPid(port.pid, platform),
     p: patternFromPid(port.pid),
-    cover: port.coverUrl ?? null,
-    coverHorizontal: port.coverHorizontalUrl ?? null,
+    cover: custom?.coverUrl ?? port.coverUrl ?? null,
+    coverHorizontal: custom?.coverUrl ?? port.coverHorizontalUrl ?? null,
     coverVertical: port.coverVerticalUrl ?? null,
     coverSquare: port.coverSquareUrl ?? null,
-    logo: port.logoUrl ?? null,
-    hero: port.heroUrl ?? null,
+    logo: custom?.logoUrl ?? port.logoUrl ?? null,
+    hero: custom?.heroUrl ?? port.heroUrl ?? null,
+    customArt: custom,
+    logoAnchor: custom?.logoAnchor ?? LOGO_ANCHOR_DEFAULT,
+    logoScale: clampLogoScale(custom?.logoScale ?? LOGO_SCALE_DEFAULT),
     rom: romOf(port),
     ai: port.aiLevel || 'unknown',
     exp: dev.k === 'exp',

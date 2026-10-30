@@ -133,6 +133,8 @@ tbody tr{cursor:pointer}tbody tr:hover{background:var(--panel2)}
 /* Modals */
 #layer{position:fixed;inset:0;z-index:50;pointer-events:none}
 #layer>*{pointer-events:auto}
+#modal-root{position:fixed;inset:0;z-index:60;pointer-events:none}
+#modal-root>*{pointer-events:auto}
 .scrim{position:fixed;inset:0;background:rgba(5,4,12,.66);backdrop-filter:blur(6px)}
 .modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(760px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow:auto;border-radius:24px;background:var(--panel);border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.6),0 0 0 1px rgba(255,79,163,.2)}
 .mhead{display:flex;align-items:center;gap:16px;padding:20px 26px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,rgba(61,232,255,.14),transparent)}

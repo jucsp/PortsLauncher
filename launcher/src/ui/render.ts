@@ -12,8 +12,27 @@
  *   renderSettings                    → Ajustes
  * ========================================================================== */
 
-import type { MediaStyle, PortItem, Settings } from '../services/types';
-import { esc, devChip as chipOf, flagOf, PROG, statusOf, styleFor, styleOf, artOf, mediaWidth } from './model';
+import type { CustomArtwork, LogoAnchor, MediaStyle, PortItem, Settings } from '../services/types';
+import {
+  LOGO_ANCHORS,
+  LOGO_ANCHOR_DEFAULT,
+  LOGO_ANCHOR_GLYPHS,
+  LOGO_ANCHOR_LABELS,
+  LOGO_SCALE_MAX,
+  LOGO_SCALE_MIN,
+} from '../services/types';
+import {
+  esc,
+  devChip as chipOf,
+  clampLogoScale,
+  flagOf,
+  PROG,
+  statusOf,
+  styleFor,
+  styleOf,
+  artOf,
+  mediaWidth,
+} from './model';
 import type { Game } from './model';
 import { IC, sv } from './icons';
 import { mediaHTML, miniIcon } from './media';
@@ -852,19 +871,27 @@ export function renderGame(id: string): string {
    * en entidades, que aquí se eliminan para no romper la cadena CSS. */
   const heroCss = heroImg ? esc(heroImg).replace(/&quot;|&#39;/g, '') : null;
   const logo = game.logo;
+  const logoAnchor = game.logoAnchor ?? LOGO_ANCHOR_DEFAULT;
+  const logoScale = clampLogoScale(game.logoScale);
 
-  /* Logotipo oficial (o título si no hay logo) a la IZQUIERDA de la cabecera:
-   * ocupa toda la altura disponible (tope 140px) manteniendo proporciones. */
-  const heroTitle =
-    '<div style="display:flex;align-items:center;height:100%;max-height:140px;">' +
-    (logo
-      ? `<img src="${esc(logo)}" alt="${esc(game.t)}" style="height:100%;max-height:140px;` +
-        'max-width:min(100%,460px);object-fit:contain;object-position:left center;' +
-        'filter:drop-shadow(0 6px 20px rgba(0,0,0,.9));" />'
-      : '<h1 style="font-size:clamp(32px,5.5vw,52px);line-height:1.05;' +
-        'text-shadow:0 4px 24px rgba(0,0,0,.6);margin:0">' +
-        `${esc(game.t)}</h1>`) +
-    '</div>';
+  /* Capa absoluta del logotipo: el usuario decide el ancla (7 puntos) y el
+   * alto (40–220 px) desde «🎨 Ajustar arte». Se coloca antes de la capa de
+   * contenido para que los botones sigan siendo clicables por encima. */
+  const logoLayer = logo
+    ? `<div style="${logoBoxStyle(logoAnchor, logoScale)}">` +
+      `<img src="${esc(logo)}" alt="${esc(game.t)}" style="${logoImageStyle(logoScale)}" /></div>`
+    : '';
+
+  /* Sin logotipo se pinta el título tipográfico; con logotipo se reserva su
+   * altura para que las píldoras de metadatos no se le monten encima. */
+  const heroTitle = logo
+    ? logoAnchor.indexOf('bottom') === 0
+      ? `<div style="height:${Math.min(logoScale, 140)}px" aria-hidden="true"></div>`
+      : ''
+    : '<div style="display:flex;align-items:center;height:100%;max-height:140px;">' +
+      '<h1 style="font-size:clamp(32px,5.5vw,52px);line-height:1.05;' +
+      'text-shadow:0 4px 24px rgba(0,0,0,.6);margin:0">' +
+      `${esc(game.t)}</h1></div>`;
 
   /* Botón principal de la cabecera según la estrategia del port. */
   const heroAction =
@@ -894,8 +921,12 @@ export function renderGame(id: string): string {
         'filter:drop-shadow(0 12px 32px rgba(0,0,0,.8));" /></div>'
       : '') +
     /* --- capa 2: contenido, logotipo (izquierda) y acciones (derecha) -------- */
+    logoLayer +
     '<div style="position:relative;z-index:2;display:flex;flex-direction:column;justify-content:space-between;gap:16px;flex:1 1 auto">' +
-    '<a href="#biblioteca" data-act="nav" data-to="library" class="pill" style="align-self:flex-start;background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px">← Biblioteca</a>' +
+    '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;align-self:flex-start">' +
+    '<a href="#biblioteca" data-act="nav" data-to="library" class="pill" style="background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px">← Biblioteca</a>' +
+    `<button class="pill" data-act="art-modal" data-id="${game.id}" style="background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px;border:1px solid rgba(255,255,255,.15);cursor:pointer;color:var(--text)">🎨 Ajustar arte</button>` +
+    '</div>' +
     '<div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:24px;padding-top:50px">' +
     /* --- lado IZQUIERDO: logo a toda la altura + meta pills + proyecto/versión */
     '<div style="flex:1 1 320px;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:12px">' +
@@ -986,6 +1017,9 @@ function sampleFor(style: MediaStyle): Game {
     coverSquare: null,
     logo: null,
     hero: null,
+    customArt: null,
+    logoAnchor: LOGO_ANCHOR_DEFAULT,
+    logoScale: 110,
     rom: null,
     ai: 'none',
     exp: false,
@@ -1170,3 +1204,274 @@ function platformOf(key: PlatKey): 'n64' | 'snes' | 'nes' | 'md' | 'gba' | 'gb' 
 }
 
 export { MEDIA, PLAT, PLAT_KEYS };
+
+/* -------------------------------------------------------------------------- */
+/* Arte personalizado: posición del logo y modal «Ajustar arte»               */
+/* -------------------------------------------------------------------------- */
+
+/** Secciones del modal de personalización. */
+export type ArtKind = 'logo' | 'hero' | 'cover';
+export type ArtTab = ArtKind;
+
+/** Etiqueta de cada pestaña del modal. */
+export const ART_TAB_LABELS: Record<ArtTab, string> = {
+  logo: 'Logo',
+  hero: 'Fondo de cabecera',
+  cover: 'Carátula del soporte',
+};
+
+/** Borrador en edición: lo que el usuario ve antes de «Guardar y aplicar». */
+export interface ArtDraft {
+  logoUrl: string | null;
+  heroUrl: string | null;
+  coverUrl: string | null;
+  logoAnchor: LogoAnchor;
+  logoScale: number;
+}
+
+/** Miniatura de la galería devuelta por `/api/steamgrid/...`. */
+export interface ArtGalleryItem {
+  url: string;
+  thumb?: string;
+  label?: string;
+}
+
+export interface ArtModalOptions {
+  /** Valores en edición (por defecto, el arte efectivo del juego). */
+  draft?: ArtDraft;
+  /** Resultados ya descargados de SteamGridDB, por sección. */
+  gallery?: Partial<Record<ArtKind, ArtGalleryItem[]>>;
+  /** Mensaje de estado de la última búsqueda, por sección. */
+  status?: Partial<Record<ArtKind, string | null>>;
+  /** Texto del buscador, por sección (se conserva entre repintados). */
+  queries?: Partial<Record<ArtKind, string>>;
+}
+
+/** Ancla → propiedades CSS del contenedor absoluto del logotipo. */
+const LOGO_ANCHOR_CSS: Record<LogoAnchor, string> = {
+  'top-left': 'top:20px;left:30px;',
+  'top-center': 'top:20px;left:50%;transform:translateX(-50%);',
+  'top-right': 'top:20px;right:30px;',
+  center: 'top:50%;left:50%;transform:translate(-50%,-50%);',
+  'bottom-left': 'bottom:24px;left:30px;',
+  'bottom-center': 'bottom:24px;left:50%;transform:translateX(-50%);',
+  'bottom-right': 'bottom:24px;right:30px;',
+};
+
+/** Posición CSS (sin `position`) del ancla pedida. */
+export function logoAnchorStyle(anchor: LogoAnchor | string | null | undefined): string {
+  const key = (anchor ?? LOGO_ANCHOR_DEFAULT) as LogoAnchor;
+  return LOGO_ANCHOR_CSS[key] ?? LOGO_ANCHOR_CSS[LOGO_ANCHOR_DEFAULT];
+}
+
+/** Contenedor absoluto del logo dentro de la cabecera (o de la previsualización). */
+export function logoBoxStyle(
+  anchor: LogoAnchor | string | null | undefined,
+  scale: number | null | undefined
+): string {
+  return (
+    'position:absolute;z-index:2;pointer-events:none;' +
+    `${logoAnchorStyle(anchor)}height:${clampLogoScale(scale)}px;max-height:100%;`
+  );
+}
+
+/** Estilo del `<img>`/`<span>` del logo: alto del slider sin deformar. */
+export function logoImageStyle(scale: number | null | undefined): string {
+  return (
+    `height:${clampLogoScale(scale)}px;max-height:100%;max-width:min(100%,460px);object-fit:contain;` +
+    'filter:drop-shadow(0 6px 20px rgba(0,0,0,.9));'
+  );
+}
+
+/** Galería de miniaturas clicables devuelta por el proxy de SteamGridDB. */
+export function artGalleryHTML(kind: ArtKind, items: ArtGalleryItem[]): string {
+  if (!items || items.length === 0) return '';
+  return items
+    .map(
+      (item) =>
+        `<button data-act="art-pick" data-k="${kind}" data-url="${esc(item.url)}" ` +
+        `title="${esc(item.label ?? 'Usar esta imagen')}" aria-label="${esc(item.label ?? 'Usar esta imagen')}" ` +
+        'style="padding:0;height:92px;border-radius:12px;overflow:hidden;border:1px solid var(--line);' +
+        'background:var(--panel2);cursor:pointer">' +
+        `<img src="${esc(item.thumb ?? item.url)}" alt="" loading="lazy" ` +
+        'style="width:100%;height:100%;object-fit:cover;display:block" /></button>'
+    )
+    .join('');
+}
+
+/** Estado del borrador a partir del arte efectivo de un juego. */
+export function artDraftOf(game: Game): ArtDraft {
+  return {
+    logoUrl: game.customArt?.logoUrl ?? null,
+    heroUrl: game.customArt?.heroUrl ?? null,
+    coverUrl: game.customArt?.coverUrl ?? null,
+    logoAnchor: game.logoAnchor ?? LOGO_ANCHOR_DEFAULT,
+    logoScale: clampLogoScale(game.logoScale),
+  };
+}
+
+/** Borrador del modal en el `CustomArtwork` que se persiste. */
+export function artPatchOf(draft: ArtDraft): CustomArtwork {
+  return {
+    coverUrl: draft.coverUrl,
+    heroUrl: draft.heroUrl,
+    logoUrl: draft.logoUrl,
+    logoAnchor: draft.logoAnchor,
+    logoScale: clampLogoScale(draft.logoScale),
+  };
+}
+
+/* Reexportaciones de conveniencia: `main.ts` consume el modal y su modelo de
+ * borrador junto a la escala y el tipo de ancla, sin depender de tres módulos. */
+export { clampLogoScale } from './model';
+export type { LogoAnchor } from '../services/types';
+
+/**
+ * Modal «Ajustar arte» (estilo Steam): logo con 7 anclas y slider, fondo de
+ * cabecera y carátula del soporte, con búsqueda en SteamGridDB, subida local y
+ * URL manual.
+ *
+ * Es HTML puro: el estado del borrador lo guarda `main.ts` y lo pasa en
+ * `options.draft`, de modo que cada repintado conserva lo elegido.
+ */
+export function artModalHTML(
+  game: Game,
+  activeTab: ArtTab = 'logo',
+  options: ArtModalOptions = {}
+): string {
+  const draft: ArtDraft = options.draft ?? artDraftOf(game);
+  const gallery = options.gallery ?? {};
+  const status = options.status ?? {};
+  const queries = options.queries ?? {};
+
+  const anchor = (draft.logoAnchor ?? LOGO_ANCHOR_DEFAULT) as LogoAnchor;
+  const scale = clampLogoScale(draft.logoScale);
+  const logoPreview = draft.logoUrl ?? game.logo ?? null;
+  const heroPreview = draft.heroUrl ?? game.hero ?? null;
+  const coverPreview = draft.coverUrl ?? game.coverHorizontal ?? game.cover ?? null;
+
+  const tabButtons = (['logo', 'hero', 'cover'] as ArtTab[])
+    .map(
+      (key) =>
+        `<button data-act="art-tab" data-k="${key}" aria-pressed="${activeTab === key}">` +
+        `${esc(ART_TAB_LABELS[key])}</button>`
+    )
+    .join('');
+
+  /* Buscador + subida local + URL manual: el mismo bloque para las 3 secciones. */
+  const sourceBlock = (
+    kind: ArtKind,
+    label: string,
+    placeholder: string,
+    current: string | null
+  ): string =>
+    `<div class="lbl" style="padding:0">${label}</div>` +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    `<input class="in-txt" id="art-q-${kind}" data-art="query" data-k="${kind}" ` +
+    `value="${esc(queries[kind] ?? '')}" placeholder="${esc(placeholder)}" style="flex:1 1 220px" ` +
+    `aria-label="Buscar ${esc(label)} en SteamGridDB">` +
+    `<button class="btn sm" data-act="art-search" data-k="${kind}">Buscar en SteamGridDB</button>` +
+    '</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+    '<label class="btn sm" style="display:inline-flex;align-items:center;gap:6px">📁 Subir archivo' +
+    `<input type="file" accept="image/*" data-art="file" data-k="${kind}" hidden></label>` +
+    `<input class="in-txt" id="art-url-${kind}" data-art="url" data-k="${kind}" ` +
+    `value="${esc(current ?? '')}" placeholder="https://…/imagen.png" style="flex:1 1 180px" ` +
+    `aria-label="URL de ${esc(label)}">` +
+    `<button class="btn sm" data-act="art-url" data-k="${kind}">Usar URL</button>` +
+    '</div>' +
+    `<div id="art-status-${kind}" class="muted" style="font-size:12px">${esc(status[kind] ?? '')}</div>` +
+    `<div id="art-gallery-${kind}" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px">` +
+    artGalleryHTML(kind, gallery[kind] ?? []) +
+    '</div>';
+
+  const anchorButtons = LOGO_ANCHORS.map(
+    (key) =>
+      `<button class="chip" data-act="set-anchor" data-k="${key}" aria-pressed="${anchor === key}" ` +
+      `title="${esc(LOGO_ANCHOR_LABELS[key])}">${LOGO_ANCHOR_GLYPHS[key]} ${esc(
+        LOGO_ANCHOR_LABELS[key]
+      )}</button>`
+  ).join('');
+
+  let panel = '';
+  if (activeTab === 'logo') {
+    panel =
+      '<div class="lbl" style="padding:0">PREVISUALIZACIÓN</div>' +
+      '<div style="position:relative;height:200px;border-radius:14px;overflow:hidden;' +
+      'border:1px solid var(--line);background:var(--panel2)">' +
+      (heroPreview
+        ? `<img src="${esc(heroPreview)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;` +
+          'object-fit:cover;filter:blur(10px);opacity:.45" />'
+        : '') +
+      `<div id="art-logo-box" style="${logoBoxStyle(anchor, scale)}">` +
+      (logoPreview
+        ? `<img id="art-logo-img" src="${esc(logoPreview)}" alt="Logo" style="${logoImageStyle(scale)}" />`
+        : '<span class="muted" style="font-size:12px">Sin logo</span>') +
+      '</div></div>' +
+      '<div class="lbl" style="padding:0">POSICIÓN DEL LOGO</div>' +
+      `<div style="display:flex;flex-wrap:wrap;gap:8px">${anchorButtons}</div>` +
+      '<div class="lbl" style="padding:0">TAMAÑO DEL LOGO</div>' +
+      '<div style="display:flex;align-items:center;gap:12px">' +
+      `<input id="art-scale" type="range" min="${LOGO_SCALE_MIN}" max="${LOGO_SCALE_MAX}" step="2" ` +
+      `value="${scale}" data-art="scale" data-act="set-scale" aria-label="Tamaño del logo" style="flex:1">` +
+      `<span class="mono" id="art-scale-val" style="min-width:66px;text-align:right">${scale} px</span>` +
+      '</div>' +
+      sourceBlock('logo', 'CAMBIAR EL LOGO', 'GoldenEye 007', draft.logoUrl);
+  }
+
+  if (activeTab === 'hero') {
+    panel =
+      '<div class="lbl" style="padding:0">PREVISUALIZACIÓN</div>' +
+      '<div style="position:relative;height:170px;border-radius:14px;overflow:hidden;' +
+      'border:1px solid var(--line);background:var(--panel2)">' +
+      (heroPreview
+        ? `<img src="${esc(heroPreview)}" alt="" style="position:absolute;inset:-30px;width:calc(100% + 60px);` +
+          'height:calc(100% + 60px);object-fit:cover;filter:blur(26px);opacity:.6" />' +
+          `<img src="${esc(heroPreview)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;` +
+          'object-fit:contain" />'
+        : '<span class="muted" style="position:absolute;inset:0;display:grid;place-items:center">Sin fondo</span>') +
+      '</div>' +
+      '<div class="muted" style="font-size:12px">Al aplicarlo, la cabecera usa el fondo difuminado al máximo ' +
+      'y el desvanecimiento lateral hacia el lienzo.</div>' +
+      sourceBlock('hero', 'FONDO DE CABECERA (HERO)', 'GoldenEye 007', draft.heroUrl);
+  }
+
+  if (activeTab === 'cover') {
+    panel =
+      '<div class="lbl" style="padding:0">PREVISUALIZACIÓN</div>' +
+      '<div style="position:relative;height:200px;border-radius:14px;overflow:hidden;' +
+      'border:1px solid var(--line);background:var(--panel2)">' +
+      (coverPreview
+        ? `<img src="${esc(coverPreview)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" />`
+        : '<span class="muted" style="position:absolute;inset:0;display:grid;place-items:center">Sin carátula</span>') +
+      '</div>' +
+      '<div class="muted" style="font-size:12px">Es la imagen que luce el soporte: etiqueta del cartucho, ' +
+      'caja o disco según la plataforma.</div>' +
+      sourceBlock('cover', 'CARÁTULA DEL SOPORTE', 'GoldenEye 007', draft.coverUrl);
+  }
+
+  return (
+    '<div class="scrim" data-act="close-modal"></div>' +
+    '<div class="modal" role="dialog" aria-modal="true" aria-label="Ajustar arte de ' +
+    esc(game.t) +
+    '" style="width:min(880px,calc(100vw - 24px))">' +
+    '<div class="mhead">' +
+    '<div style="width:44px;height:44px;border-radius:50%;background:var(--accent);color:var(--onaccent);' +
+    'display:grid;place-items:center;font-size:20px">🎨</div>' +
+    `<div style="flex:1;min-width:0"><h2 style="font-size:22px">Ajustar arte</h2>` +
+    `<div class="muted">${esc(game.t)} · logo, cabecera y carátula al estilo Steam</div></div>` +
+    '<button class="btn ico" data-act="close-modal" aria-label="Cerrar">✕</button>' +
+    '</div>' +
+    '<div class="mbody">' +
+    `<div class="seg txt" style="align-self:flex-start;flex-wrap:wrap">${tabButtons}</div>` +
+    panel +
+    '</div>' +
+    '<div class="mfoot">' +
+    `<button class="btn dng" data-act="reset-art" data-id="${game.id}">Restaurar por defecto</button>` +
+    '<span style="flex:1"></span>' +
+    '<button class="btn" data-act="close-modal">Cancelar</button>' +
+    `<button class="btn pri" data-act="save-art" data-id="${game.id}">Guardar y aplicar</button>` +
+    '</div></div>'
+  );
+}
+

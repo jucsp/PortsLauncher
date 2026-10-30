@@ -340,6 +340,74 @@ export function coverForPlatform(
 }
 
 /* -------------------------------------------------------------------------- */
+/* Arte personalizado (estilo Steam): logo, cabecera y carátula               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Puntos de anclaje del logotipo dentro de la cabecera de la ficha.
+ *
+ * Los siete valores cubren la rejilla 3×3 de SteamGridDB (esquinas, bordes y
+ * centro). Se guardan tal cual en `customArt[pid].logoAnchor`.
+ */
+export const LOGO_ANCHORS = [
+  'top-left',
+  'top-center',
+  'top-right',
+  'center',
+  'bottom-left',
+  'bottom-center',
+  'bottom-right',
+] as const;
+
+export type LogoAnchor = (typeof LOGO_ANCHORS)[number];
+
+export const LOGO_ANCHOR_DEFAULT: LogoAnchor = 'bottom-left';
+
+/** Etiquetas cortas de los siete anclas (modal «Ajustar arte»). */
+export const LOGO_ANCHOR_LABELS: Record<LogoAnchor, string> = {
+  'top-left': 'Arriba izq.',
+  'top-center': 'Arriba centro',
+  'top-right': 'Arriba dcha.',
+  center: 'Centro',
+  'bottom-left': 'Abajo izq.',
+  'bottom-center': 'Abajo centro',
+  'bottom-right': 'Abajo dcha.',
+};
+
+/** Glifo de cada ancla (rejilla 3×3 del modal). */
+export const LOGO_ANCHOR_GLYPHS: Record<LogoAnchor, string> = {
+  'top-left': '↖',
+  'top-center': '↑',
+  'top-right': '↗',
+  center: '•',
+  'bottom-left': '↙',
+  'bottom-center': '↓',
+  'bottom-right': '↘',
+};
+
+/** Rango del slider de tamaño del logo (px de alto). */
+export const LOGO_SCALE_MIN = 40;
+export const LOGO_SCALE_MAX = 220;
+export const LOGO_SCALE_DEFAULT = 110;
+
+/** Ajustes de arte que el usuario puede sobrescribir por juego. */
+export interface CustomArtwork {
+  /** Carátula del soporte (cartucho/caja/disco). `null` = usar la del índice. */
+  coverUrl?: string | null;
+  /** Fondo de la cabecera (hero). `null` = usar la del índice. */
+  heroUrl?: string | null;
+  /** Logotipo del título. `null` = usar el del índice. */
+  logoUrl?: string | null;
+  logoAnchor?: LogoAnchor;
+  logoScale?: number;
+}
+
+/** `true` si el valor es uno de los siete anclas válidos. */
+export function isLogoAnchor(value: unknown): value is LogoAnchor {
+  return typeof value === 'string' && (LOGO_ANCHORS as readonly string[]).includes(value);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Catálogo: `data/ports.index.json`                                          */
 /* -------------------------------------------------------------------------- */
 
@@ -582,6 +650,11 @@ export interface LibraryFile {
   updatedAt: string;
   games: Record<string, LibraryGame>;
   settings: Settings;
+  /**
+   * Arte personalizado por juego (`pid` → ajustes). Vive aparte de `games`
+   * para que exista aunque el port no esté instalado.
+   */
+  customArt?: Record<string, CustomArtwork>;
 }
 
 /* -------------------------------------------------------------------------- */

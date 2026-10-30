@@ -28,10 +28,15 @@ import {
   renderGame,
   resultsHTML,
   heroHTML,
+  artModalHTML,
+  artDraftOf,
+  artPatchOf,
+  clampLogoScale,
   RT,
   RT_INV,
   bgOf,
 } from './ui/render';
+import type { ArtDraft, ArtKind, ArtTab, LogoAnchor } from './ui/render';
 import { art } from './ui/model';
 
 const STORAGE_KEY = 'portshub-proto-v1';
@@ -315,6 +320,278 @@ function primaryAction(id: string): void {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Personalización de arte (modal estilo Steam)                               */
+/* -------------------------------------------------------------------------- */
+
+/** Imagen de la galería, normalizada desde `/api/steamgrid/...`. */
+interface ArtGalleryEntry {
+  id: number;
+  url: string;
+  thumb?: string;
+  label?: string;
+}
+
+/** Secciones del modal, en el orden de las pestañas. */
+const ART_KINDS: ArtKind[] = ['logo', 'hero', 'cover'];
+
+/** Estado del modal «Ajustar arte» (se pierde al cerrarlo). */
+let currentArtGame: Game | null = null;
+let currentArtTab: ArtTab = 'logo';
+let currentArtDraft: ArtDraft | null = null;
+let currentArtGallery: Record<ArtKind, ArtGalleryEntry[]> = { logo: [], hero: [], cover: [] };
+let currentArtStatus: Record<ArtKind, string> = { logo: '', hero: '', cover: '' };
+let currentArtQueries: Record<ArtKind, string> = { logo: '', hero: '', cover: '' };
+
+/** Endpoint de SteamGridDB para cada sección del modal. */
+const STEAMGRID_ENDPOINTS: Record<ArtKind, (gameId: number) => string> = {
+  logo: (gameId) => `logos/game/${gameId}?types=static`,
+  hero: (gameId) => `heroes/game/${gameId}?types=static`,
+  /* Carátula del soporte: grid horizontal 920x430 / 460x215 (etiquetas). */
+  cover: (gameId) => `grids/game/${gameId}?dimensions=920x430,460x215&types=static`,
+};
+
+/** Contenedor del modal (`#modal-root`, creado en `index.html`). */
+function artRoot(): HTMLElement | null {
+  return $('#modal-root');
+}
+
+/** ¿La clave recibida es una sección válida del modal? */
+function isArtKind(value: unknown): value is ArtKind {
+  return typeof value === 'string' && (ART_KINDS as string[]).includes(value);
+}
+
+/** Repinta el modal con el borrador y la galería actuales. */
+function renderArtModal(): void {
+  const root = artRoot();
+  const game = currentArtGame;
+  const draft = currentArtDraft;
+  if (!root) return;
+  if (!game || !draft) {
+    root.innerHTML = '';
+    document.body.style.overflow = '';
+    return;
+  }
+  root.innerHTML = artModalHTML(game, currentArtTab, {
+    draft,
+    gallery: currentArtGallery,
+    status: currentArtStatus,
+    queries: currentArtQueries,
+  });
+  document.body.style.overflow = 'hidden';
+}
+
+/** Abre el modal para un juego y deja el borrador listo para editar. */
+function openArtModal(game: Game): void {
+  currentArtGame = game;
+  currentArtTab = 'logo';
+  currentArtDraft = artDraftOf(game);
+  /* El buscador arranca con el título del juego; el usuario puede afinarlo. */
+  for (const kind of ART_KINDS) {
+    currentArtGallery[kind] = [];
+    currentArtStatus[kind] = '';
+    currentArtQueries[kind] = game.t;
+  }
+  renderArtModal();
+}
+
+/** Cierra el modal, limpia el estado y libera el scroll de la página. */
+function closeArtModal(): void {
+  const root = artRoot();
+  if (root) root.innerHTML = '';
+  document.body.style.overflow = '';
+  currentArtGame = null;
+  currentArtDraft = null;
+  currentArtTab = 'logo';
+  for (const kind of ART_KINDS) {
+    currentArtGallery[kind] = [];
+    currentArtStatus[kind] = '';
+    currentArtQueries[kind] = '';
+  }
+}
+
+/** Asigna una imagen al campo del borrador que toca según la sección. */
+function setDraftUrl(kind: ArtKind, url: string | null): void {
+  if (!currentArtDraft) return;
+  if (kind === 'logo') currentArtDraft.logoUrl = url;
+  else if (kind === 'hero') currentArtDraft.heroUrl = url;
+  else currentArtDraft.coverUrl = url;
+}
+
+/** Ajusta el tamaño del logo y refresca la previsualización sin repintar. */
+function applyLogoScale(raw: number): void {
+  if (!currentArtDraft) return;
+  const scale = clampLogoScale(raw);
+  currentArtDraft.logoScale = scale;
+  const box = document.getElementById('art-logo-box');
+  if (box) box.style.height = `${scale}px`;
+  const img = document.getElementById('art-logo-img');
+  if (img) img.style.height = `${scale}px`;
+  const label = document.getElementById('art-scale-val');
+  if (label) label.textContent = `${scale} px`;
+}
+
+/** GET al proxy de desarrollo; devuelve el JSON ya parseado. */
+async function steamgridJSON(endpoint: string): Promise<unknown> {
+  const response = await fetch(`/api/steamgrid/${endpoint}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`SteamGridDB ${response.status}`);
+  return response.json();
+}
+
+/** `search/autocomplete/<q>` → primer `game_id` de SteamGridDB. */
+async function steamgridGameId(query: string): Promise<number | null> {
+  const payload = (await steamgridJSON(
+    `search/autocomplete/${encodeURIComponent(query)}`
+  )) as { data?: Array<{ id?: number }> } | null;
+  const matches: Array<{ id?: number }> =
+    payload && Array.isArray(payload.data) ? payload.data : [];
+  const first = matches[0];
+  return first && typeof first.id === 'number' ? first.id : null;
+}
+
+/** Imagen tal y como la devuelve la API v2 de SteamGridDB. */
+interface SteamGridAsset {
+  id?: number;
+  url?: string;
+  thumb?: string;
+  style?: string;
+}
+
+/** Busca imágenes del tipo activo y las guarda como galería. */
+async function searchArt(kind: ArtKind): Promise<void> {
+  const query = (currentArtQueries[kind] ?? '').trim();
+  currentArtGallery[kind] = [];
+  if (!query) {
+    currentArtStatus[kind] = 'Escribe el título del juego para buscar.';
+    renderArtModal();
+    return;
+  }
+
+  currentArtStatus[kind] = 'Buscando en SteamGridDB…';
+  renderArtModal();
+
+  try {
+    /* `game_id` explícito → nos ahorramos el autocompletado. */
+    const gameId = /^\d+$/.test(query) ? Number(query) : await steamgridGameId(query);
+    if (!gameId) {
+      currentArtStatus[kind] = `Sin resultados para «${query}» en SteamGridDB.`;
+      renderArtModal();
+      return;
+    }
+
+    const payload = (await steamgridJSON(STEAMGRID_ENDPOINTS[kind](gameId))) as {
+      data?: SteamGridAsset[];
+    } | null;
+    const raw: SteamGridAsset[] = payload && Array.isArray(payload.data) ? payload.data : [];
+
+    currentArtGallery[kind] = raw
+      .filter((item) => typeof item?.url === 'string' && !!item.url)
+      .slice(0, 36)
+      .map((item, index) => {
+        const id = typeof item.id === 'number' ? item.id : index + 1;
+        return {
+          id,
+          url: String(item.url),
+          thumb: typeof item.thumb === 'string' ? item.thumb : undefined,
+          label: item.style ? `#${id} · ${item.style}` : `#${id}`,
+        };
+      });
+
+    currentArtStatus[kind] = currentArtGallery[kind].length
+      ? `${currentArtGallery[kind].length} imágenes de SteamGridDB (juego #${gameId}).`
+      : 'SteamGridDB no tiene imágenes de este tipo para ese juego.';
+  } catch (error) {
+    currentArtStatus[kind] =
+      'No se pudo consultar SteamGridDB. Revisa la clave STEAMGRID_API_KEY del servidor.';
+    console.warn('[PortsLauncher] SteamGridDB:', error);
+  }
+
+  renderArtModal();
+}
+
+/** Aplica una imagen elegida de la galería al borrador. */
+function pickArt(kind: ArtKind, url: string | undefined): void {
+  if (!currentArtDraft || !url) return;
+  setDraftUrl(kind, url);
+  currentArtStatus[kind] = 'Imagen elegida. Pulsa «Guardar y aplicar».';
+  renderArtModal();
+}
+
+/** Lee un archivo local como DataURL y lo deja en el borrador. */
+function applyArtFile(kind: ArtKind, file: File | null | undefined): void {
+  if (!file || !currentArtDraft) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = typeof reader.result === 'string' ? reader.result : null;
+    if (!dataUrl || !currentArtDraft) return;
+    setDraftUrl(kind, dataUrl);
+    currentArtStatus[kind] = `Archivo «${file.name}» cargado.`;
+    renderArtModal();
+  };
+  reader.onerror = () => {
+    currentArtStatus[kind] = 'No se pudo leer el archivo elegido.';
+    renderArtModal();
+  };
+  reader.readAsDataURL(file);
+}
+
+/**
+ * Refresca la ficha en memoria con el arte recién persistido.
+ *
+ * Reutiliza `toGame` (la única proyección `PortItem → Game`) y conserva el
+ * estado efímero de la sesión: instalaciones simuladas, ROM validada y
+ * «jugado». El objeto se muta en sitio para no romper `S.byId` ni `S.last`.
+ */
+function refreshGameArt(game: Game): void {
+  const rebuilt = toGame(game.port, libraryService.getState().games, S.settings);
+  Object.assign(game, rebuilt, {
+    inst: game.inst,
+    romOk: game.romOk,
+    v: game.v,
+    pin: game.pin,
+    auto: game.auto,
+    dir: game.dir,
+    romPath: game.romPath,
+    romMode: game.romMode,
+    args: game.args,
+    runner: game.runner,
+    exe: game.exe,
+    played: game.played,
+  });
+}
+
+/** Guarda el borrador, cierra el modal y repinta la vista actual. */
+function saveArt(): void {
+  const game = currentArtGame;
+  const draft = currentArtDraft;
+  if (!game || !draft) return;
+  const stored = libraryService.setCustomArt(game.id, artPatchOf(draft));
+  refreshGameArt(game);
+  closeArtModal();
+  draw();
+  toast(stored ? `Arte de ${game.t} actualizado` : `Arte de ${game.t} sin cambios`);
+}
+
+/** Borra el arte personalizado del juego y vuelve al del índice. */
+function resetArt(): void {
+  const game = currentArtGame;
+  if (!game) return;
+  libraryService.setCustomArt(game.id, null);
+  refreshGameArt(game);
+  closeArtModal();
+  draw();
+  toast(`Arte de ${game.t} restaurado al del índice`);
+}
+
+/** Acción compartida por `pick-art` y `art-pick` (galería). */
+function pickArtAction(d: Record<string, string | undefined>): void {
+  const kind = d.k;
+  if (!isArtKind(kind)) return;
+  pickArt(kind, d.url);
+}
+
 const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   open: (d) => d.id && go('game', d.id),
   nav: (d) => d.to && go(d.to as Route),
@@ -484,6 +761,53 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
       draw();
     }
   },
+
+  /* ------------------------- arte personalizado -------------------------- */
+
+  'art-modal': (d) => {
+    const game = d.id ? S.byId.get(d.id) : undefined;
+    if (game) openArtModal(game);
+  },
+  'art-tab': (d) => {
+    const kind = d.k;
+    if (!isArtKind(kind)) return;
+    currentArtTab = kind;
+    renderArtModal();
+  },
+  'set-anchor': (d) => {
+    if (!currentArtDraft || typeof d.k !== 'string') return;
+    currentArtDraft.logoAnchor = d.k as LogoAnchor;
+    renderArtModal();
+  },
+  /* `set-scale` llega como input/change del slider (ver escuchadores). */
+  'set-scale': () => {
+    /* Intencionadamente vacío: el valor se aplica en `input`/`change`. */
+  },
+  'art-search': (d) => {
+    const kind = d.k;
+    if (!isArtKind(kind)) return;
+    void searchArt(kind);
+  },
+  'art-url': (d) => {
+    const kind = d.k;
+    if (!isArtKind(kind)) return;
+    const input = document.getElementById(`art-url-${kind}`) as HTMLInputElement | null;
+    const url = (input?.value ?? '').trim();
+    if (!url) {
+      currentArtStatus[kind] = 'Pega una URL de imagen válida.';
+      renderArtModal();
+      return;
+    }
+    setDraftUrl(kind, url);
+    currentArtStatus[kind] = 'URL aplicada al borrador.';
+    renderArtModal();
+  },
+  'pick-art': pickArtAction,
+  /* `render.ts` rotula la galería con `data-act="art-pick"`: mismo efecto. */
+  'art-pick': pickArtAction,
+  'save-art': () => saveArt(),
+  'reset-art': () => resetArt(),
+  'close-modal': () => closeArtModal(),
 };
 
 /* -------------------------------------------------------------------------- */
@@ -493,6 +817,9 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
 document.addEventListener('click', (e) => {
   const target = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-act]');
   if (!target) return;
+  /* Los controles de formulario (el slider del arte) gestionan su valor en
+   * `input`/`change`: no deben perder el comportamiento nativo del clic. */
+  if (target.matches('input, select, textarea')) return;
   const act = target.dataset.act;
   if (act && ACT[act]) {
     e.preventDefault();
@@ -503,6 +830,10 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && L) {
     closeL();
+    return;
+  }
+  if (e.key === 'Escape' && currentArtGame) {
+    closeArtModal();
     return;
   }
   const target = e.target as HTMLElement | null;
@@ -548,6 +879,15 @@ document.addEventListener('input', (e) => {
       saveState();
     }
   }
+  /* Modal «Ajustar arte»: el buscador y el slider no repintan el modal para no
+   * perder el foco mientras se escribe o se arrastra. */
+  if (t.dataset.art === 'query') {
+    const kind = t.dataset.k;
+    if (isArtKind(kind)) currentArtQueries[kind] = t.value;
+  }
+  if (t.dataset.art === 'scale') {
+    applyLogoScale(Number(t.value));
+  }
 });
 
 document.addEventListener('change', (e) => {
@@ -575,6 +915,18 @@ document.addEventListener('change', (e) => {
       game.runner = t.value;
       saveState();
     }
+  }
+  /* Modal «Ajustar arte»: archivo local y confirmación del slider. */
+  if (t.dataset.art === 'file') {
+    const kind = t.dataset.k;
+    if (isArtKind(kind)) {
+      const input = t as HTMLInputElement;
+      applyArtFile(kind, input.files?.[0] ?? null);
+    }
+    return;
+  }
+  if (t.dataset.art === 'scale') {
+    applyLogoScale(Number(t.value));
   }
 });
 

@@ -13,11 +13,13 @@
  * ========================================================================== */
 
 import type {
+  CustomArtwork,
   InstallStrategy,
   LaunchProfile,
   LibraryFile,
   LibraryGame,
   LibraryState,
+  LogoAnchor,
   RomMode,
   Settings,
 } from './types';
@@ -27,12 +29,15 @@ import {
   LIBRARY_SCHEMA_VERSION,
   LIBRARY_STORAGE_KEY,
   LIBRARY_STATES,
+  LOGO_SCALE_MAX,
+  LOGO_SCALE_MIN,
   MEDIA_MODES,
   ROM_MODES,
   VIEW_MODES,
   DEST_OPTIONS,
   MEDIA_STYLES,
   SOURCE_PLATFORMS,
+  isLogoAnchor,
 } from './types';
 
 /* -------------------------------------------------------------------------- */
@@ -98,7 +103,53 @@ function emptyLibrary(): LibraryFile {
     updatedAt: nowIso(),
     games: {},
     settings: { ...DEFAULT_SETTINGS },
+    customArt: {},
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Arte personalizado                                                         */
+/* -------------------------------------------------------------------------- */
+
+/** URL válida para un campo de arte: cadena con contenido o `null`. */
+function artUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+/** Escala del logo acotada al rango del slider. */
+function artScale(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(LOGO_SCALE_MIN, Math.min(LOGO_SCALE_MAX, Math.round(value)));
+}
+
+/**
+ * Sanea el arte personalizado leído de disco o de `localStorage`.
+ *
+ * Devuelve `null` cuando no queda ningún ajuste útil, de modo que el mapa
+ * `customArt` no acumule entradas vacías.
+ */
+export function sanitizeCustomArt(raw: unknown): CustomArtwork | null {
+  if (!isObject(raw)) return null;
+  const art: CustomArtwork = {};
+
+  const coverUrl = artUrl(raw['coverUrl']);
+  if (coverUrl) art.coverUrl = coverUrl;
+  const heroUrl = artUrl(raw['heroUrl']);
+  if (heroUrl) art.heroUrl = heroUrl;
+  const logoUrl = artUrl(raw['logoUrl']);
+  if (logoUrl) art.logoUrl = logoUrl;
+
+  if (isLogoAnchor(raw['logoAnchor'])) art.logoAnchor = raw['logoAnchor'] as LogoAnchor;
+  const logoScale = artScale(raw['logoScale']);
+  if (logoScale !== undefined) art.logoScale = logoScale;
+
+  return Object.keys(art).length > 0 ? art : null;
+}
+
+function cloneCustomArt(art: CustomArtwork): CustomArtwork {
+  return { ...art };
 }
 
 /** Ficha de biblioteca neutra para un pid desconocido. */
@@ -214,7 +265,7 @@ function migrateSettings(settings: Settings, storedVersion: unknown): Settings {
 /* Eventos                                                                    */
 /* -------------------------------------------------------------------------- */
 
-export type LibraryEventType = 'hydrate' | 'game' | 'settings' | 'reset';
+export type LibraryEventType = 'hydrate' | 'game' | 'settings' | 'art' | 'reset';
 
 export interface LibraryEvent {
   type: LibraryEventType;
@@ -261,11 +312,21 @@ export class LibraryService {
       }
       const storedVersion = parsed['version'];
       const settings = migrateSettings(sanitizeSettings(parsed['settings']), storedVersion);
+      const customArt: Record<string, CustomArtwork> = {};
+      const rawArt = parsed['customArt'];
+      if (isObject(rawArt)) {
+        for (const [pid, value] of Object.entries(rawArt)) {
+          if (!pid) continue;
+          const art = sanitizeCustomArt(value);
+          if (art) customArt[pid] = art;
+        }
+      }
       return {
         version: typeof parsed['version'] === 'number' ? parsed['version'] : LIBRARY_SCHEMA_VERSION,
         updatedAt: typeof parsed['updatedAt'] === 'string' ? parsed['updatedAt'] : nowIso(),
         games,
         settings,
+        customArt,
       };
     } catch {
       // JSON corrupto: no perdemos la sesión, arrancamos limpio.
@@ -459,6 +520,47 @@ export class LibraryService {
     this.file.games[pid] = next;
     this.write('game', pid);
     return { ...next };
+  }
+
+  /* --------------------------- arte personalizado ------------------------- */
+
+  /**
+   * Arte personalizado guardado para un `pid`, o `null` si el juego conserva
+   * el arte del índice.
+   *
+   * Funciona igual para ports instalados y no instalados: el mapa `customArt`
+   * vive al margen de `games`, así que personalizar el arte nunca instala el
+   * port ni toca su estado.
+   */
+  getCustomArt(pid: string): CustomArtwork | null {
+    if (!pid) return null;
+    const art = this.file.customArt?.[pid];
+    return art ? cloneCustomArt(art) : null;
+  }
+
+  /** Mapa completo `pid → arte` (copia defensiva). */
+  getCustomArtMap(): Record<string, CustomArtwork> {
+    const out: Record<string, CustomArtwork> = {};
+    for (const [pid, art] of Object.entries(this.file.customArt ?? {})) {
+      out[pid] = cloneCustomArt(art);
+    }
+    return out;
+  }
+
+  /**
+   * Guarda (o borra, con `null`) el arte personalizado de un juego.
+   *
+   * Persiste en `localStorage['portshub-library-v1']` bajo `customArt[pid]`
+   * para que sobreviva a recargas y a la desinstalación del port.
+   */
+  setCustomArt(pid: string, art: CustomArtwork | null): CustomArtwork | null {
+    if (!pid) throw new Error('setCustomArt: falta el pid');
+    const clean = sanitizeCustomArt(art);
+    if (!this.file.customArt) this.file.customArt = {};
+    if (clean) this.file.customArt[pid] = clean;
+    else delete this.file.customArt[pid];
+    this.write('art', pid);
+    return clean ? cloneCustomArt(clean) : null;
   }
 
   /* ------------------------------- ajustes ------------------------------- */
