@@ -13,6 +13,7 @@
  * ========================================================================== */
 
 import type {
+  Addon,
   CustomArtwork,
   InstallStrategy,
   LaunchProfile,
@@ -26,6 +27,7 @@ import type {
 
 import {
   DEFAULT_SETTINGS,
+  defaultAddons,
   LIBRARY_SCHEMA_VERSION,
   LIBRARY_STORAGE_KEY,
   LIBRARY_STATES,
@@ -104,6 +106,7 @@ function emptyLibrary(): LibraryFile {
     games: {},
     settings: { ...DEFAULT_SETTINGS },
     customArt: {},
+    addons: defaultAddons(),
   };
 }
 
@@ -150,6 +153,46 @@ export function sanitizeCustomArt(raw: unknown): CustomArtwork | null {
 
 function cloneCustomArt(art: CustomArtwork): CustomArtwork {
   return { ...art };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Addons (plugins)                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Sanea un addon leído de `localStorage` o entregado por la UI.
+ *
+ * Devuelve `null` si le falta lo mínimo (`id` y `name`), de modo que una
+ * entrada corrupta no llega nunca a la lista de la sección de Addons.
+ */
+export function sanitizeAddon(raw: unknown): Addon | null {
+  if (!isObject(raw)) return null;
+
+  const id = typeof raw['id'] === 'string' ? raw['id'].trim() : '';
+  const name = typeof raw['name'] === 'string' ? raw['name'].trim() : '';
+  if (!id || !name) return null;
+
+  const addon: Addon = {
+    id,
+    name,
+    version: typeof raw['version'] === 'string' && raw['version'].trim() ? raw['version'].trim() : '0.0.0',
+    description: typeof raw['description'] === 'string' ? raw['description'].trim() : '',
+    type: typeof raw['type'] === 'string' && raw['type'].trim() ? raw['type'].trim() : 'plugin',
+    enabled: raw['enabled'] !== false,
+    installedAt:
+      typeof raw['installedAt'] === 'number' && Number.isFinite(raw['installedAt'])
+        ? raw['installedAt']
+        : Date.now(),
+  };
+
+  if (typeof raw['author'] === 'string' && raw['author'].trim()) {
+    addon.author = raw['author'].trim();
+  }
+  if (typeof raw['icon'] === 'string' && raw['icon'].trim()) {
+    addon.icon = raw['icon'].trim();
+  }
+
+  return addon;
 }
 
 /** Ficha de biblioteca neutra para un pid desconocido. */
@@ -272,7 +315,7 @@ function migrateSettings(settings: Settings, storedVersion: unknown): Settings {
 /* Eventos                                                                    */
 /* -------------------------------------------------------------------------- */
 
-export type LibraryEventType = 'hydrate' | 'game' | 'settings' | 'art' | 'reset';
+export type LibraryEventType = 'hydrate' | 'game' | 'settings' | 'art' | 'addons' | 'reset';
 
 export interface LibraryEvent {
   type: LibraryEventType;
@@ -328,12 +371,22 @@ export class LibraryService {
           if (art) customArt[pid] = art;
         }
       }
+      /* Addons: si la biblioteca guardada es anterior a la sección de plugins
+       * (no hay clave `addons`), se siembra el addon de ejemplo; un array vacío
+       * guardado por el usuario (los desinstaló todos) se respeta. */
+      const rawAddons = parsed['addons'];
+      const addons: Addon[] = Array.isArray(rawAddons)
+        ? rawAddons
+            .map((entry) => sanitizeAddon(entry))
+            .filter((entry): entry is Addon => entry !== null)
+        : defaultAddons();
       return {
         version: typeof parsed['version'] === 'number' ? parsed['version'] : LIBRARY_SCHEMA_VERSION,
         updatedAt: typeof parsed['updatedAt'] === 'string' ? parsed['updatedAt'] : nowIso(),
         games,
         settings,
         customArt,
+        addons,
       };
     } catch {
       // JSON corrupto: no perdemos la sesión, arrancamos limpio.
@@ -568,6 +621,63 @@ export class LibraryService {
     else delete this.file.customArt[pid];
     this.write('art', pid);
     return clean ? cloneCustomArt(clean) : null;
+  }
+
+  /* ------------------------------- addons -------------------------------- */
+
+  /** Lista de addons instalados (copia defensiva). */
+  getAddons(): Addon[] {
+    return (this.file.addons ?? []).map((addon) => ({ ...addon }));
+  }
+
+  /** Activa o desactiva un addon; devuelve la lista resultante. */
+  toggleAddon(id: string): Addon[] {
+    const addon = (this.file.addons ?? []).find((entry) => entry.id === id);
+    if (addon) {
+      addon.enabled = !addon.enabled;
+      this.write('addons');
+    }
+    return this.getAddons();
+  }
+
+  /**
+   * Instala (o reemplaza, por `id`) un addon y lo persiste.
+   *
+   * Igual que el resto del servicio, el addon se sanea antes de guardarlo: un
+   * plugin sin `id`/`name` se descarta sin tocar la biblioteca.
+   */
+  installAddon(addon: Addon): Addon[] {
+    const clean = sanitizeAddon(addon);
+    if (!clean) return this.getAddons();
+    if (!Array.isArray(this.file.addons)) this.file.addons = [];
+    const index = this.file.addons.findIndex((entry) => entry.id === clean.id);
+    if (index >= 0) this.file.addons[index] = clean;
+    else this.file.addons.push(clean);
+    this.write('addons');
+    return this.getAddons();
+  }
+
+  /** Desinstala un addon por `id`; devuelve la lista resultante. */
+  removeAddon(id: string): Addon[] {
+    if (!Array.isArray(this.file.addons)) this.file.addons = [];
+    const remaining = this.file.addons.filter((entry) => entry.id !== id);
+    if (remaining.length !== this.file.addons.length) {
+      this.file.addons = remaining;
+      this.write('addons');
+    }
+    return this.getAddons();
+  }
+
+  /**
+   * Persiste el estado completo de un addon ya presente en la lista.
+   *
+   * Es el camino que usa la sección de Addons al conmutar el interruptor: la UI
+   * muta su copia (`enabled`) y aquí se guarda tal cual, sin invertirla otra vez
+   * (eso duplicaría el cambio que ya hizo `toggleAddon`). Si el addon aún no
+   * estaba en la biblioteca se inserta, igual que `installAddon`.
+   */
+  setAddon(addon: Addon): Addon[] {
+    return this.installAddon(addon);
   }
 
   /* ------------------------------- ajustes ------------------------------- */

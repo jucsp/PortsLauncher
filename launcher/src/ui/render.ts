@@ -12,8 +12,16 @@
  *   renderSettings                    → Ajustes
  * ========================================================================== */
 
-import type { CustomArtwork, LogoAnchor, MediaStyle, PortItem, Settings } from '../services/types';
+import type {
+  Addon,
+  CustomArtwork,
+  LogoAnchor,
+  MediaStyle,
+  PortItem,
+  Settings,
+} from '../services/types';
 import {
+  ADDONS_DIR,
   LOGO_ANCHORS,
   LOGO_ANCHOR_DEFAULT,
   LOGO_ANCHOR_GLYPHS,
@@ -39,8 +47,8 @@ import { mediaHTML, miniIcon } from './media';
 import { AI, DEVT, DEV_LEGEND, MEDIA, PLAT, PLAT_KEYS, PLATMEDIA, STRAT } from './platforms';
 import type { PlatKey } from './platforms';
 import { TO_PLATFORM } from './platforms';
-import { B, D, R, S, updateCount } from './state';
-import type { FilterKey, Route, SortKey } from './state';
+import { B, D, NAVMEM, R, S, updateCount } from './state';
+import type { Route, SortKey } from './state';
 
 /* -------------------------------------------------------------------------- */
 /* Navegación                                                                 */
@@ -51,6 +59,7 @@ export const NAV: Array<[Route, string, string]> = [
   ['library', 'Biblioteca', IC.lib],
   ['catalog', 'Catálogo', IC.cat],
   ['updates', 'Actualizaciones', IC.upd],
+  ['addons', 'Addons', '🧩'],
   ['settings', 'Ajustes', IC.set],
 ];
 
@@ -60,6 +69,7 @@ export const RT: Record<string, string> = {
   library: 'biblioteca',
   catalog: 'catalogo',
   updates: 'actualizaciones',
+  addons: 'addons',
   settings: 'ajustes',
 };
 
@@ -69,6 +79,7 @@ export const RT_INV: Record<string, Route> = {
   biblioteca: 'library',
   catalogo: 'catalog',
   actualizaciones: 'updates',
+  addons: 'addons',
   ajustes: 'settings',
 };
 
@@ -439,58 +450,86 @@ export function viewSwitchHTML(): string {
   ).join('');
 }
 
-export function chipsHTML(kind: 'library' | 'catalog'): string {
-  const filters: Array<[FilterKey, string]> =
+/**
+ * Filtros del listado (`#chips`).
+ *
+ * Todos los filtros son desplegables (`<select class="sel">`) para que el grupo
+ * sea uniforme y quepa en una sola fila en móvil: instalación, destino,
+ * plataforma de origen, estado de desarrollo y orden.
+ *
+ * Se exporta también como `chipsHTML` (nombre histórico del prototipo) para no
+ * romper a quien ya la importaba con ese alias.
+ */
+export function controlsHTML(kind: 'library' | 'catalog'): string {
+  /* 1. Presencia en la biblioteca local (+ estados propios de la biblioteca). */
+  const libraryStates =
     kind === 'library'
-      ? [
-          ['all', 'Todos'],
-          ['ready', 'Listos'],
-          ['rom', 'Falta ROM'],
-          ['upd', 'Actualizaciones'],
-        ]
-      : [
-          ['all', 'Todos'],
-          ['new', 'Sin instalar'],
-          ['inst', 'Instalados'],
-        ];
+      ? `<option value="ready" ${B.filter === 'ready' ? 'selected' : ''}>Listos</option>` +
+        `<option value="rom" ${B.filter === 'rom' ? 'selected' : ''}>Falta ROM</option>` +
+        `<option value="upd" ${B.filter === 'upd' ? 'selected' : ''}>Actualizaciones</option>`
+      : '';
 
-  const chips = filters
-    .map(
-      ([key, label]) =>
-        `<button class="chip" data-act="filter" data-k="${key}" aria-pressed="${B.filter === key}">${label}</button>`
-    )
-    .join('');
+  const filterSelect =
+    '<select class="sel" id="filtersel" aria-label="Filtro de instalación">' +
+    `<option value="all" ${B.filter === 'all' ? 'selected' : ''}>Instalación: Todos</option>` +
+    `<option value="new" ${B.filter === 'new' ? 'selected' : ''}>Sin instalar</option>` +
+    `<option value="inst" ${B.filter === 'inst' ? 'selected' : ''}>Instalados</option>` +
+    libraryStates +
+    '</select>';
 
-  const devs = (Object.keys(DEVT) as Array<keyof typeof DEVT>)
+  /* 2. Sistema de destino de la descarga. */
+  const destSelect =
+    '<select class="sel" id="destsel" aria-label="Sistema de destino">' +
+    `<option value="Linux" ${S.settings.dest === 'Linux' ? 'selected' : ''}>Destino: Linux</option>` +
+    `<option value="Windows" ${S.settings.dest === 'Windows' ? 'selected' : ''}>Destino: Windows</option>` +
+    '</select>';
+
+  /* 3. Plataforma de origen. */
+  const platOptions = PLAT_KEYS.map(
+    (key) =>
+      `<option value="${key}" ${B.plat === key ? 'selected' : ''}>${esc(PLAT[key].name)}</option>`
+  ).join('');
+  const platSelect =
+    '<select class="sel" id="platsel" aria-label="Plataforma de origen">' +
+    `<option value="all" ${B.plat === 'all' ? 'selected' : ''}>Plataforma: Todas</option>` +
+    platOptions +
+    '</select>';
+
+  /* 4. Estado de desarrollo. */
+  const devOptions = (Object.keys(DEVT) as Array<keyof typeof DEVT>)
     .map(
       (key) =>
         `<option value="${key}" ${B.dev === key ? 'selected' : ''}>${DEVT[key].t}</option>`
     )
     .join('');
+  const devSelect =
+    '<select class="sel" id="devsel" aria-label="Estado de desarrollo">' +
+    `<option value="all" ${B.dev === 'all' ? 'selected' : ''}>Desarrollo: Todos</option>` +
+    devOptions +
+    '</select>';
 
+  /* 5. Orden. */
   const sortOptions: Array<[SortKey, string]> = [
     ['name', 'Nombre'],
     ['status', 'Estado'],
     ['plat', 'Plataforma'],
     ['recent', 'Recientes'],
   ];
-  const sorts = sortOptions
-    .map(
-      ([key, label]) =>
-        `<option value="${key}" ${B.sort === key ? 'selected' : ''}>${label}</option>`
-    )
-    .join('');
+  const sortSelect =
+    '<select class="sel" id="sortsel" aria-label="Orden">' +
+    sortOptions
+      .map(
+        ([key, label]) =>
+          `<option value="${key}" ${B.sort === key ? 'selected' : ''}>Orden: ${label}</option>`
+      )
+      .join('') +
+    '</select>';
 
-  return (
-    chips +
-    '<button class="chip" data-act="dest" title="Cambiar sistema de destino">' +
-    `Destino: ${esc(S.settings.dest)}</button>` +
-    '<label class="muted" style="display:flex;gap:8px;align-items:center">Desarrollo ' +
-    `<select class="sel" id="devsel" aria-label="Estado de desarrollo"><option value="all">Todos</option>${devs}</select></label>` +
-    '<label class="muted" style="margin-left:auto;display:flex;gap:8px;align-items:center">Orden ' +
-    `<select class="sel" id="sortsel" aria-label="Orden">${sorts}</select></label>`
-  );
+  return filterSelect + destSelect + platSelect + devSelect + sortSelect;
 }
+
+/** Alias histórico de `controlsHTML` (el prototipo la llamaba `chipsHTML`). */
+export const chipsHTML = controlsHTML;
 
 /* -------------------------------------------------------------------------- */
 /* Héroe «continuar jugando» (`heroHTML`, línea 404)                          */
@@ -702,6 +741,106 @@ export function renderUpdates(): string {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Addons y extensiones (`renderAddons`)                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Icono de un addon.
+ *
+ * Respeta `addon.icon` cuando existe (emoji o URL de imagen) y, si no, pinta la
+ * pieza de puzle sobre el fondo de acento: la sección nunca queda sin identidad
+ * visual aunque el plugin no declare icono.
+ */
+function addonAvatar(addon: Addon): string {
+  const base =
+    'width:44px;height:44px;border-radius:50%;background:var(--accent);color:var(--onaccent);' +
+    'display:grid;place-items:center;font-size:20px;flex:0 0 auto;overflow:hidden';
+  const icon = typeof addon.icon === 'string' ? addon.icon.trim() : '';
+  const isImage = /^(https?:|data:)/i.test(icon);
+  const glyph = icon
+    ? isImage
+      ? `<img src="${esc(icon)}" alt="" style="width:100%;height:100%;object-fit:cover" />`
+      : esc(icon)
+    : '🧩';
+  return `<div class="avatar" style="${base}" aria-hidden="true">${glyph}</div>`;
+}
+
+/** Tarjeta de un addon instalado: identidad, estado y acciones. */
+function addonCard(addon: Addon): string {
+  const name = esc(addon.name);
+  return (
+    `<article class="box" style="display:flex;flex-direction:column;gap:12px">` +
+    '<div style="display:flex;align-items:center;gap:12px">' +
+    addonAvatar(addon) +
+    '<div style="flex:1 1 auto;min-width:0">' +
+    `<b style="font-size:15px">${name}</b> ` +
+    `<span class="mono muted" style="font-size:12px">v${esc(addon.version)}</span>` +
+    `<div class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">` +
+    `<span>por ${esc(addon.author ?? 'Comunidad')}</span>` +
+    `<span class="pill" style="font-size:11px">${esc(addon.type)}</span></div></div>` +
+    `<button class="tog" role="switch" aria-checked="${addon.enabled}" aria-label="${
+      addon.enabled ? 'Desactivar' : 'Activar'
+    } ${name}" data-act="toggle-addon" data-id="${esc(addon.id)}"><i></i></button>` +
+    '</div>' +
+    `<div class="muted" style="font-size:13px">${esc(addon.description)}</div>` +
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto">' +
+    `<span class="muted" style="font-size:12px">${
+      addon.enabled ? '● Activo' : '○ Desactivado'
+    }</span>` +
+    `<button class="btn sm ico" data-act="remove-addon" data-id="${esc(addon.id)}" ` +
+    `aria-label="Desinstalar ${name}" title="Desinstalar ${name}">🗑️</button>` +
+    '</div></article>'
+  );
+}
+
+/**
+ * Addons y Extensiones (`renderAddons`).
+ *
+ * Los plugins viven en el sistema de ficheros del usuario (`ADDONS_DIR`); el
+ * launcher sólo lista los ya instalados y permite activarlos o desinstalarlos.
+ * El estado vacío explica cómo instalar el primero en lugar de dejar la
+ * pantalla en blanco.
+ */
+export function renderAddons(): string {
+  const addons = S.addons ?? [];
+
+  const emptyState =
+    '<div class="empty" style="padding:36px 22px">' +
+    '<div style="font-size:34px;line-height:1;margin-bottom:10px">🧩</div>' +
+    '<b style="font-size:16px;color:var(--text)">Todavía no hay plugins instalados</b><br>' +
+    `Copia la carpeta de un plugin en <span class="mono">${esc(ADDONS_DIR)}</span> y reinicia ` +
+    'el launcher: aquí verás su ficha, su estado y podrás activarlo o desactivarlo.' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:14px">' +
+    '<button class="btn sm" data-act="open-addons-dir">📁 Abrir carpeta de plugins</button>' +
+    '<button class="btn sm ghost" data-act="install-addon">➕ Instalar plugin</button>' +
+    '</div></div>';
+
+  const list =
+    addons.length === 0
+      ? emptyState
+      : '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">' +
+        addons.map(addonCard).join('') +
+        '</div>' +
+        `<div class="muted" style="font-size:12px;margin-top:16px">Carpeta de plugins: ` +
+        `<span class="mono">${esc(ADDONS_DIR)}</span> · ${addons.length} instalado${
+          addons.length === 1 ? '' : 's'
+        }</div>`;
+
+  return paintMain(
+    '<div class="top"><h1>Addons y Extensiones</h1></div>' +
+    '<div class="muted" style="max-width:820px;margin:-2px 0 20px;font-size:13.5px">' +
+    'Gestiona los plugins que amplían PortsLauncher con herramientas de compilación, extractores de assets y aprovisionamiento local.' +
+    '</div>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px">' +
+    '<button class="btn sm" data-act="open-addons-dir">📁 Abrir carpeta de plugins</button>' +
+    '<button class="btn sm" data-act="install-addon">➕ Instalar plugin</button>' +
+    '<a href="https://github.com/juancarlos/PortsLauncher/blob/main/docs/PLUGINS.md" target="_blank" rel="noreferrer" class="btn sm ghost">📖 Guía para desarrolladores</a>' +
+    '</div>' +
+    list
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Ficha (`renderGame`, línea 446) — sin reseñas ni comunidad                 */
 /* -------------------------------------------------------------------------- */
 
@@ -901,6 +1040,17 @@ export function renderGame(id: string): string {
         ? '<button class="btn lg" data-act="toast" data-m="Guía de compilación (simulada)">Ver guía de compilación</button>'
         : cta;
 
+  /* Botón de volver dinámico: la ficha recuerda si el usuario venía del
+   * Catálogo o de la Biblioteca (`NAVMEM`), de modo que «←» devuelve siempre al
+   * listado de origen. */
+  const backRoute: 'catalog' | 'library' = NAVMEM.lastBrowseRoute;
+  const backHash = backRoute === 'catalog' ? '#catalogo' : '#biblioteca';
+  const backLabel = backRoute === 'catalog' ? '← Catálogo' : '← Biblioteca';
+  const backBtn =
+    `<a href="${backHash}" data-act="nav" data-to="${backRoute}" class="pill" ` +
+    'style="background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px">' +
+    `${backLabel}</a>`;
+
   return paintMain(
     '<div class="dhero">' +
     /* --- capa 0: fondo desenfocado a sangre --------------------------------- */
@@ -924,7 +1074,7 @@ export function renderGame(id: string): string {
     logoLayer +
     '<div style="position:relative;z-index:2;display:flex;flex-direction:column;justify-content:space-between;gap:16px;flex:1 1 auto">' +
     '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;align-self:flex-start">' +
-    '<a href="#biblioteca" data-act="nav" data-to="library" class="pill" style="background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px">← Biblioteca</a>' +
+    backBtn +
     `<button class="pill" data-act="art-modal" data-id="${game.id}" style="background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px;border:1px solid rgba(255,255,255,.15);cursor:pointer;color:var(--text)">🎨 Ajustar arte</button>` +
     '</div>' +
     '<div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:24px;padding-top:50px">' +
@@ -1077,7 +1227,10 @@ export function steamgridConfigured(settings: Settings): boolean {
 
 export function renderSettings(): string {
   const settings = S.settings;
-  const steamgridReady = steamgridConfigured(settings);
+  /* El indicador de Ajustes refleja SOLO la clave guardada por el usuario: la
+   * del servidor de desarrollo no se muestra como «Conectado» para no prometer
+   * una integración que la build estática no tiene. */
+  const steamgridReady = !!(settings.steamgridApiKey && settings.steamgridApiKey.trim());
   const demo = (['psp', 'snes', 'md', 'ps1', 'gb'] as const).map(sampleFor);
   const mediaKeys = Object.keys(MEDIA) as MediaStyle[];
   const selected = settings.mediaDef;
@@ -1096,7 +1249,6 @@ export function renderSettings(): string {
     settings.mediaMode === 'auto'
       ? '<div style="font:600 14px var(--f-body);margin-top:6px">Medio de cada biblioteca</div><div class="list">' +
         PLAT_KEYS.map((key) => {
-          const current = settings.mediaMap[platformOf(key)] ?? PLATMEDIA[key] ?? '';
           const options = mediaKeys
             .map(
               (media) =>
@@ -1107,7 +1259,7 @@ export function renderSettings(): string {
             '<div class="row" style="cursor:default;padding:8px 14px;gap:12px">' +
             `<span style="width:44px;height:38px;display:grid;place-items:center">${miniIcon(styleOf(key, settings), sampleFor(styleOf(key, settings)))}</span>` +
             `<b style="flex:1 1 140px">${PLAT[key].name}</b>` +
-            `<select class="in-txt" data-map="${key}" style="max-width:260px;height:36px">` +
+            `<select class="in-txt" data-map="${platformOf(key)}" style="max-width:260px;height:36px">` +
             `<option value="">${esc(autoLabel(key, settings))}</option>${options}</select></div>`
           );
         }).join('') +

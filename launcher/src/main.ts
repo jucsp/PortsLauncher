@@ -8,14 +8,22 @@
 
 import './styles/app.css';
 
-import type { DestOS, MediaStyle, PortItem, RomMode, Settings, ViewMode } from './services/types';
+import type {
+  DestOS,
+  MediaStyle,
+  PortItem,
+  RomMode,
+  Settings,
+  SourcePlatform,
+  ViewMode,
+} from './services/types';
 import { DEFAULT_SETTINGS, LEGACY_VIEW_ALIASES } from './services/types';
 import { catalogService } from './services/catalogService';
 import { libraryService } from './services/libraryService';
 import type { Game } from './ui/model';
 import { toGame, statusOf, esc } from './ui/model';
 import { MEDIA, PLAT } from './ui/platforms';
-import { B, D, R, S, setSnapshot, updateCount } from './ui/state';
+import { B, D, NAVMEM, R, S, setSnapshot, updateCount } from './ui/state';
 import type { Route } from './ui/state';
 import {
   renderSide,
@@ -25,6 +33,7 @@ import {
   refreshBrowse,
   renderUpdates,
   renderSettings,
+  renderAddons,
   renderGame,
   resultsHTML,
   heroHTML,
@@ -661,6 +670,14 @@ async function probeSteamgridStatus(): Promise<void> {
 
 /** Prueba real de conexión con SteamGridDB (botón de Ajustes). */
 async function testSteamgrid(): Promise<void> {
+  /* Sin clave propia no hay nada que probar: el proxy no tiene credenciales
+   * del usuario y la petición sólo podría fallar. */
+  const userKey = (S.settings.steamgridApiKey ?? '').trim();
+  if (!userKey) {
+    toast('Ingresa tu clave de SteamGridDB antes de probar la conexión');
+    return;
+  }
+
   try {
     const payload = (await steamgridJSON('search/autocomplete/Mario')) as {
       data?: unknown[];
@@ -675,7 +692,7 @@ async function testSteamgrid(): Promise<void> {
   } catch (error) {
     console.warn('[PortsLauncher] SteamGridDB:', error);
   }
-  toast('✗ No se pudo conectar a SteamGridDB. Revisa la clave');
+  toast('✗ Clave inválida o error al conectar con SteamGridDB');
 }
 
 const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
@@ -915,6 +932,32 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   'test-steamgrid': () => {
     void testSteamgrid();
   },
+
+  /* -------------------- addons y extensiones ------------------------------ */
+
+  'open-addons-dir': () => {
+    toast('Carpeta: ~/.local/share/portslauncher/plugins/');
+  },
+  'install-addon': () => {
+    toast('Copia la carpeta de tu plugin en ~/.local/share/portslauncher/plugins/');
+  },
+  'toggle-addon': (d) => {
+    const addon = S.addons.find((a) => a.id === d.id);
+    if (addon) {
+      addon.enabled = !addon.enabled;
+      libraryService.setAddon(addon);
+      draw();
+      toast(`${addon.name} ${addon.enabled ? 'activado' : 'desactivado'}`);
+    }
+  },
+  'remove-addon': (d) => {
+    if (d.id) {
+      libraryService.removeAddon(d.id);
+      S.addons = S.addons.filter((a) => a.id !== d.id);
+      draw();
+      toast('Addon eliminado');
+    }
+  },
 };
 
 /* -------------------------------------------------------------------------- */
@@ -1004,12 +1047,31 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', (e) => {
   const t = e.target as HTMLInputElement | HTMLSelectElement | null;
   if (!t) return;
+  /* Ajustes → «Según la plataforma»: el `<select>` lleva la plataforma de origen
+   * en `data-map` (no la clave visual del listado). */
   if (t.dataset && t.dataset.map) {
-    if (t.value) (S.settings.mediaMap as any)[t.dataset.map] = t.value;
-    else delete (S.settings.mediaMap as any)[t.dataset.map];
+    const platKey = t.dataset.map as SourcePlatform;
+    if (t.value) (S.settings.mediaMap as any)[platKey] = t.value;
+    else delete (S.settings.mediaMap as any)[platKey];
     saveState();
     renderSettings();
+    draw();
+    toast('Formato actualizado');
     return;
+  }
+  /* Filtros del catálogo y de la biblioteca (`controlsHTML`). */
+  if (t.id === 'filtersel') {
+    B.filter = t.value as any;
+    refreshBrowse();
+  }
+  if (t.id === 'destsel') {
+    S.settings.dest = t.value as any;
+    saveState();
+    draw();
+  }
+  if (t.id === 'platsel') {
+    B.plat = t.value as any;
+    refreshBrowse();
   }
   if (t.id === 'devsel') {
     B.dev = t.value as any;
@@ -1048,13 +1110,28 @@ document.addEventListener('change', (e) => {
 let hashBusy = false;
 
 export function go(name: Route, id?: string): void {
+  const previous = R.name;
+  const leavingBrowse = previous === 'catalog' || previous === 'library';
+
+  /* Abrir una ficha desde un listado: recordar de dónde venimos y en qué punto
+   * de lectura estaba, para que «←» devuelva al sitio exacto. */
+  if (leavingBrowse && name === 'game') {
+    NAVMEM.lastBrowseRoute = previous as 'catalog' | 'library';
+    NAVMEM.catalogScrollY = window.scrollY;
+  }
+
   R.name = name;
   R.id = id ?? null;
   if (name === 'game') D.tab = 'sum';
-  if (name === 'library' || name === 'catalog') B.filter = 'all';
+  /* Los filtros del usuario se conservan al cambiar de sección: reiniciarlos
+   * hacía perder la búsqueda en curso cada vez que se abría una ficha. */
 
   draw(true);
-  window.scrollTo(0, 0);
+
+  /* Volver de la ficha al listado de origen restaura el scroll; cualquier otro
+   * movimiento empieza arriba. */
+  const returning = previous === 'game' && name === NAVMEM.lastBrowseRoute;
+  window.scrollTo(0, returning ? NAVMEM.catalogScrollY : 0);
 
   const h = name === 'game' ? `port-${id}` : RT[name];
   try {
@@ -1091,6 +1168,7 @@ export function draw(fresh = false): void {
     if (fresh || !$('#results')) renderBrowse(R.name);
     else refreshBrowse();
   } else if (R.name === 'updates') renderUpdates();
+  else if (R.name === 'addons') renderAddons();
   else if (R.name === 'settings') renderSettings();
   else if (R.name === 'game' && R.id) renderGame(R.id);
 
@@ -1194,7 +1272,15 @@ async function init(): Promise<void> {
     last = firstInstalled ? firstInstalled.id : games[0].id;
   }
 
-  setSnapshot(settings, games, last, catalog.generatedAt);
+  /* Los addons viven en la biblioteca local: la sección de Addons pinta los del
+   * usuario (una lista vacía es un estado válido, no un fallback a fábrica). */
+  setSnapshot(
+    settings,
+    games,
+    last,
+    catalog.generatedAt,
+    Array.isArray(library.addons) ? library.addons : S.addons
+  );
 
   window.addEventListener('hashchange', () => {
     if (!hashBusy) route();

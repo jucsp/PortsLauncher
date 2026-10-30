@@ -655,6 +655,65 @@ export interface LibraryFile {
    * para que exista aunque el port no esté instalado.
    */
   customArt?: Record<string, CustomArtwork>;
+  /** Addons (plugins) instalados en el launcher. */
+  addons: Addon[];
+}
+
+/* -------------------------------------------------------------------------- */
+/* Addons (plugins) de la comunidad                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Directorio local donde el launcher busca los plugins.
+ *
+ * Los addons son extensiones de la comunidad (proveedores de assets,
+ * escáneres de backups, herramientas de compilación…) que se cargan desde el
+ * sistema de ficheros del usuario, nunca desde la red.
+ */
+export const ADDONS_DIR = '~/.local/share/portslauncher/plugins/';
+
+/** Addon instalado en el launcher. */
+export interface Addon {
+  /** Identificador estable (`local-backup-scanner`). */
+  id: string;
+  /** Nombre visible del plugin. */
+  name: string;
+  /** Versión declarada por el autor (`1.0.0`). */
+  version: string;
+  /** Qué hace, en una línea. */
+  description: string;
+  /** Autor o proyecto que lo publica. */
+  author?: string;
+  /** Icono (URL o emoji) opcional; sin él se pinta la pieza de puzle. */
+  icon?: string;
+  /** Tipo de extensión (`asset-provider`, `scanner`, `toolchain`…). */
+  type: string;
+  /** `true` si el addon está activo. */
+  enabled: boolean;
+  /** Marca de tiempo (ms) de la instalación. */
+  installedAt: number;
+}
+
+/**
+ * Addons con los que arranca el launcher de fábrica.
+ *
+ * `Local Backups Scanner` es el ejemplo de la comunidad: se entrega activo para
+ * que la sección de Addons nunca aparezca vacía en un arranque limpio.
+ */
+export function defaultAddons(): Addon[] {
+  return [
+    {
+      id: 'local-backup-scanner',
+      name: 'Local Backups Scanner',
+      version: '1.0.0',
+      description:
+        'Detecta y vincula automáticamente volcados personales en tu carpeta de backups.',
+      author: 'Comunidad',
+      type: 'asset-provider',
+      enabled: true,
+      installedAt: Date.now(),
+    },
+  ];
 }
 
 /* -------------------------------------------------------------------------- */
