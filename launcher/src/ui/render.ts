@@ -60,7 +60,9 @@ import type { PlatKey } from './platforms';
 import { TO_PLATFORM } from './platforms';
 import { B, D, NAVMEM, R, S, updateCount } from './state';
 import type { DetailTab, Route, SortKey } from './state';
-import { ensureReadme, readmeBoxHTML } from './readme';
+import { ensureReadme, markdownToHtml, readmeBoxHTML } from './readme';
+import { CURRENT_VERSION, getUpdateRepo, isValidRepo } from '../services/updateService';
+import type { UpdateCheckResult } from '../services/updateService';
 
 /* -------------------------------------------------------------------------- */
 /* Navegación                                                                 */
@@ -126,6 +128,150 @@ function browseScope(kind: Route): 'library' | 'catalog' {
   return kind === 'catalog' ? 'catalog' : 'library';
 }
 
+/* -------------------------------------------------------------------------- */
+/* Actualizador del launcher                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Estado de la comprobación de actualizaciones del LAUNCHER.
+ *
+ * Vive en memoria (no en `localStorage`) a propósito: es el resultado de una
+ * consulta de red de esta sesión, no una preferencia del usuario. `main.ts` lo
+ * actualiza (`setLauncherUpdate`) y los pintores lo leen, para que la insignia
+ * del menú lateral y la pestaña de Ajustes digan siempre lo mismo sin repetir
+ * la llamada a la API de GitHub.
+ */
+export type LauncherUpdateState =
+  | { state: 'idle' }
+  | { state: 'checking' }
+  | { state: 'done'; result: UpdateCheckResult }
+  | { state: 'error'; message: string };
+
+let launcherUpdate: LauncherUpdateState = { state: 'idle' };
+
+/** Guarda el resultado de la última comprobación. */
+export function setLauncherUpdate(next: LauncherUpdateState): void {
+  launcherUpdate = next;
+}
+
+/** Estado actual (lo usa `main.ts` para no repetir consultas). */
+export function getLauncherUpdate(): LauncherUpdateState {
+  return launcherUpdate;
+}
+
+/** `true` sólo si hay una versión superior confirmada. */
+export function hasLauncherUpdate(): boolean {
+  return launcherUpdate.state === 'done' && launcherUpdate.result.hasUpdate;
+}
+
+/**
+ * Insignia «⚡ Actualización vX» del menú lateral.
+ *
+ * Devuelve cadena vacía cuando no hay nada que anunciar, de modo que
+ * `renderSide()` la interpola sin condicionales.
+ */
+function updateBannerHTML(): string {
+  if (launcherUpdate.state !== 'done' || !launcherUpdate.result.hasUpdate) return '';
+  const version = launcherUpdate.result.latestVersion;
+  return (
+    '<button type="button" class="btn-update-banner" data-act="open-update" ' +
+    `title="Hay una versión nueva de PortsLauncher disponible (v${esc(version)})">` +
+    `<span aria-hidden="true">⚡</span> Actualización <b>v${esc(version)}</b></button>`
+  );
+}
+
+/**
+ * Cuerpo dinámico del bloque de Ajustes.
+ *
+ * Se exporta porque `main.ts` lo inyecta en `#launcher-update-box` tras cada
+ * comprobación: repintar sólo este contenedor conserva el foco del campo de
+ * repositorio y evita volver a montar toda la pantalla de Ajustes.
+ */
+export function launcherUpdateBodyHTML(): string {
+  if (launcherUpdate.state === 'checking') {
+    return '<div class="muted" style="font-size:13px">Comprobando la última versión publicada…</div>';
+  }
+  if (launcherUpdate.state === 'error') {
+    return `<div class="update-note err" role="status">${esc(launcherUpdate.message)}</div>`;
+  }
+  if (launcherUpdate.state !== 'done') {
+    return (
+      '<div class="muted" style="font-size:13px">' +
+      'Pulsa «Comprobar actualizaciones» para consultar los releases del repositorio.' +
+      '</div>'
+    );
+  }
+
+  const result = launcherUpdate.result;
+  if (!result.hasUpdate) {
+    return (
+      '<div class="update-note ok" role="status">' +
+      `<b>Estás al día</b> · v${esc(result.currentVersion)} es la última versión publicada.` +
+      '</div>'
+    );
+  }
+
+  /* Notas del release: markdown del repositorio, saneado por `markdownToHtml`. */
+  const notes = result.releaseNotes.trim()
+    ? `<div class="update-notes readme-body">${markdownToHtml(result.releaseNotes, getUpdateRepo())}</div>`
+    : '';
+  const action = result.assetName
+    ? `Descargar v${esc(result.latestVersion)}`
+    : `Ver el release v${esc(result.latestVersion)}`;
+
+  return (
+    '<div class="update-card">' +
+    '<div class="update-head">' +
+    `<b>v${esc(result.latestVersion)}</b>` +
+    (result.releaseName ? `<span class="muted" style="font-size:13px">${esc(result.releaseName)}</span>` : '') +
+    '</div>' +
+    (result.publishedAt
+      ? `<div class="muted mono" style="font-size:11.5px">publicada ${esc(result.publishedAt.slice(0, 10))}</div>`
+      : '') +
+    notes +
+    '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:2px">' +
+    `<button type="button" class="btn pri sm" data-act="download-update" ${
+      result.downloadUrl ? '' : 'disabled'
+    }>${action}</button>` +
+    (result.htmlUrl
+      ? `<a class="btn sm" href="${esc(result.htmlUrl)}" target="_blank" rel="noreferrer noopener">` +
+        'Ver en GitHub</a>'
+      : '') +
+    '</div></div>'
+  );
+}
+
+/** Sección «Actualizaciones del launcher» de la pantalla de Ajustes. */
+export function launcherUpdateSection(): string {
+  const repo = getUpdateRepo();
+  const valid = isValidRepo(repo);
+  const checking = launcherUpdate.state === 'checking';
+
+  return (
+    '<section class="box"><div class="lbl" style="padding:0">ACTUALIZACIONES DEL LAUNCHER</div>' +
+    '<h2 style="font-size:18px">Mantén PortsLauncher al día</h2>' +
+    '<div class="kv"><span>Versión instalada</span>' +
+    `<span class="mono" style="font-weight:600">v${esc(CURRENT_VERSION)}</span></div>` +
+    '<label>Repositorio de releases (GitHub)' +
+    '<input class="in-txt" id="update-repo" type="text" data-update-repo="1" spellcheck="false" ' +
+    `autocomplete="off" placeholder="owner/repo" value="${esc(repo)}"></label>` +
+    (valid
+      ? ''
+      : '<div class="muted" style="font-size:12px;color:var(--warn)">' +
+        'El formato debe ser <code>owner/repo</code>.</div>') +
+    '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">' +
+    `<button type="button" class="btn sm" data-act="check-updates" ${checking ? 'disabled' : ''}>` +
+    `${checking ? 'Comprobando…' : 'Comprobar actualizaciones'}</button>` +
+    '</div>' +
+    '<div id="launcher-update-box" style="margin-top:10px;display:flex;flex-direction:column;gap:8px">' +
+    launcherUpdateBodyHTML() +
+    '</div>' +
+    '<div class="muted" style="font-size:12px">Los instaladores se publican en el release del ' +
+    'repositorio (AppImage/deb en Linux, exe/zip en Windows). La descarga se abre en el navegador ' +
+    'del sistema para que la instale el usuario.</div></section>'
+  );
+}
+
 /** Barra lateral (`renderSide`, línea 347). */
 export function renderSide(): string {
   const cur = currentNav();
@@ -157,6 +303,7 @@ export function renderSide(): string {
     '<div class="lbl">PLATAFORMA ORIGINAL</div>' +
     `<div class="plat"><button data-act="plat" data-k="all" aria-pressed="${B.plat === 'all'}">` +
     `<span class="dot" style="background:var(--muted)"></span><span class="t">Todas</span></button>${platforms}</div>` +
+    updateBannerHTML() +
     `<div class="srcbox"><b style="color:var(--text)">Índice PortsHub</b><br>Propio · ${esc(indexAge())}</div>`
   );
 }
@@ -1545,7 +1692,7 @@ export function steamgridConfigured(settings: Settings): boolean {
 /* -------------------------------------------------------------------------- */
 
 /** Pestañas de la pantalla de Ajustes. */
-export type SettingsTab = 'appearance' | 'storage' | 'integrations' | 'addons' | 'system';
+export type SettingsTab = 'appearance' | 'storage' | 'integrations' | 'addons' | 'system' | 'updates';
 
 /**
  * Pestaña visible ahora mismo.
@@ -1615,6 +1762,7 @@ export function renderSettings(): string {
     ['integrations', 'Integraciones y Arte', IC.cat],
     ['addons', 'Addons y Plugins', IC.addons],
     ['system', 'Sistema e Índice', IC.gear],
+    ['updates', 'Actualizaciones del launcher', IC.upd],
   ];
 
   const tabsHtml =
@@ -1778,6 +1926,7 @@ export function renderSettings(): string {
     integrations: integrationsSection,
     addons: addonsSection,
     system: systemSection + indexSection + legendSection + localSection,
+    updates: launcherUpdateSection(),
   };
 
   return paintMain(

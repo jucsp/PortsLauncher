@@ -1,0 +1,79 @@
+name: Release
+
+# Se dispara al empujar un tag de versión (`v0.1.0`, `v1.2.3`…) o a mano desde
+# la pestaña Actions. Un tag publica un GitHub Release con los instaladores de
+# Linux y Windows en el mismo release.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# `contents: write` es imprescindible para que softprops/action-gh-release@v2
+# pueda crear el release y subir los binarios.
+permissions:
+  contents: write
+
+# Evita que un push de tags y una ejecución manual simultánea se pisen.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Empaquetar (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Windows y Linux publican en el MISMO release: si uno falla, el otro
+      # sigue y deja sus artefactos igualmente.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          # La caché de npm se ancla al lockfile del subproyecto `launcher/`.
+          cache: npm
+          cache-dependency-path: launcher/package-lock.json
+
+      # `npm install` (no `ci`) para que la primera ejecución pueda refrescar el
+      # lockfile con las dependencias de Electron. Una vez versionado el lock
+      # actualizado, `npm ci` es preferible: es reproducible y más rápido.
+      - name: Instalar dependencias
+        run: npm --prefix launcher install
+
+      - name: Tests (vitest)
+        run: npm --prefix launcher run test
+
+      - name: Build + electron-builder
+        run: npm --prefix launcher run dist
+        env:
+          # electron-builder no debe publicar por su cuenta: del release se
+          # encarga el paso siguiente, para que ambos SO suban al mismo.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Guardar instaladores como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: portslauncher-${{ matrix.os }}
+          path: launcher/dist-electron/*.*
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publicar en GitHub Releases
+        # Sólo en ejecuciones por tag: en `workflow_dispatch` no hay release que
+        # crear y el paso fallaría.
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: launcher/dist-electron/*.*
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

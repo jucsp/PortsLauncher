@@ -50,12 +50,21 @@ import {
   setSteamgridServerReady,
   steamgridConfigured,
   setSettingsTab,
+  setLauncherUpdate,
+  getLauncherUpdate,
+  launcherUpdateBodyHTML,
   RT,
   RT_INV,
   bgOf,
 } from './ui/render';
 import type { ArtDraft, ArtKind, ArtTab, LogoAnchor, SettingsTab } from './ui/render';
 import { art } from './ui/model';
+import {
+  checkForUpdates,
+  getUpdateRepo,
+  isValidRepo,
+  setUpdateRepo,
+} from './services/updateService';
 
 const STORAGE_KEY = 'portshub-proto-v1';
 
@@ -394,6 +403,107 @@ function primaryAction(id: string): void {
   } else if (st.act === 'ext') {
     toast('Abriría la página del proyecto en una pestaña nueva (simulado)');
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Actualizador del launcher                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Repinta sólo lo que depende del actualizador: la insignia del menú lateral y
+ * el bloque de Ajustes. Repintar la vista entera haría perder el foco del campo
+ * de repositorio mientras el usuario escribe.
+ */
+function refreshLauncherUpdateUI(): void {
+  const side = $('#side');
+  if (side) side.innerHTML = renderSide();
+
+  const box = document.getElementById('launcher-update-box');
+  if (box) box.innerHTML = launcherUpdateBodyHTML();
+
+  const button = document.querySelector<HTMLButtonElement>('[data-act="check-updates"]');
+  if (button) {
+    const checking = getLauncherUpdate().state === 'checking';
+    button.disabled = checking;
+    button.textContent = checking ? 'Comprobando…' : 'Comprobar actualizaciones';
+  }
+}
+
+/**
+ * Consulta el último release del repositorio configurado.
+ *
+ * `silent` se usa en el arranque: no muestra toasts y deja la insignia lista si
+ * hay novedades. `checkForUpdates` nunca lanza, pero el `try` protege de
+ * cualquier fallo del propio repintado.
+ */
+async function checkLauncherUpdates(silent = false): Promise<void> {
+  if (getLauncherUpdate().state === 'checking') return;
+  setLauncherUpdate({ state: 'checking' });
+  refreshLauncherUpdateUI();
+  try {
+    const result = await checkForUpdates(getUpdateRepo());
+    setLauncherUpdate({ state: 'done', result });
+    if (!silent) {
+      toast(
+        result.hasUpdate
+          ? 'Nueva versión disponible: v' + result.latestVersion
+          : 'Tienes la última versión de PortsLauncher'
+      );
+    }
+  } catch (error) {
+    setLauncherUpdate({
+      state: 'error',
+      message: 'No se pudo comprobar la actualización: ' + (error instanceof Error ? error.message : String(error)),
+    });
+    if (!silent) toast('No se pudo comprobar la actualización');
+  } finally {
+    refreshLauncherUpdateUI();
+  }
+}
+
+/**
+ * Descarga el instalador del release y, si el backend local está disponible, lo
+ * guarda en `~/Downloads` con `/api/launcher/self-update`.
+ *
+ * La ruta existe tanto en Electron (servidor propio) como en `vite`/`preview`
+ * (`electron/api.cjs` vía middleware), así que el camino feliz no abre el
+ * navegador: el fichero queda descargado y, en Linux, ejecutable. Si no hay
+ * backend (build servida desde otro origen) o la petición falla, se recurre a la
+ * descarga directa del release: `window.open` pasa por `setWindowOpenHandler` en
+ * Electron, que delega en `shell.openExternal`.
+ */
+async function openUpdateDownload(): Promise<void> {
+  const state = getLauncherUpdate();
+  if (state.state !== 'done' || !state.result.downloadUrl) {
+    toast('No hay descarga disponible para esta versión');
+    return;
+  }
+  const url = state.result.downloadUrl;
+  toast('Descargando actualización v' + state.result.latestVersion + '…');
+
+  try {
+    const res = await fetch('/api/launcher/self-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        downloadUrl: url,
+        assetName: state.result.assetName,
+        version: state.result.latestVersion,
+      }),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { ok?: boolean; path?: string };
+      if (data.ok && data.path) {
+        toast('✓ Actualización guardada en: ' + data.path);
+        return;
+      }
+    }
+  } catch {
+    /* Sin backend local o sin red: se intenta la descarga directa. */
+  }
+
+  const opened = window.open(url, '_blank', 'noopener,noreferrer');
+  if (!opened) location.href = url;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1238,6 +1348,17 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
       renderSettings();
     }
   },
+  /* Actualizador del launcher (Ajustes → Actualizaciones y aviso lateral). */
+  'check-updates': () => {
+    void checkLauncherUpdates();
+  },
+  'download-update': () => {
+    void openUpdateDownload();
+  },
+  'open-update': () => {
+    setSettingsTab('updates');
+    go('settings');
+  },
   primary: (d) => d.id && primaryAction(d.id),
   gear: (d) => {
     if (!d.id) return;
@@ -1923,6 +2044,9 @@ async function init(): Promise<void> {
   });
 
   route();
+
+  /* Comprobación silenciosa de actualizaciones del launcher. */
+  void checkLauncherUpdates(true);
 
   /* Sonda del proxy de SteamGridDB: no bloquea el arranque. Cuando termina, se
    * arranca la sincronización automática si el usuario la dejó activa (la sonda
