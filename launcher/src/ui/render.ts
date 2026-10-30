@@ -54,12 +54,18 @@ import type { Route, SortKey } from './state';
 /* Navegación                                                                 */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Menú lateral (`#side`) y menú inferior móvil (`.bnav`).
+ *
+ * Addons dejó de ser una sección propia: ahora es una pestaña de Ajustes. El
+ * hash histórico `#addons` sigue funcionando porque el router (`main.ts`) lo
+ * resuelve como «Ajustes → pestaña de Addons y Plugins».
+ */
 export const NAV: Array<[Route, string, string]> = [
   ['home', 'Inicio', IC.home],
   ['library', 'Biblioteca', IC.lib],
   ['catalog', 'Catálogo', IC.cat],
   ['updates', 'Actualizaciones', IC.upd],
-  ['addons', 'Addons', IC.addons],
   ['settings', 'Ajustes', IC.set],
 ];
 
@@ -793,57 +799,85 @@ function addonCard(addon: Addon): string {
   );
 }
 
-/**
- * Addons y Extensiones (`renderAddons`).
- *
- * Los plugins viven en el sistema de ficheros del usuario (`ADDONS_DIR`); el
- * launcher sólo lista los ya instalados y permite activarlos o desinstalarlos.
- * El estado vacío explica cómo instalar el primero en lugar de dejar la
- * pantalla en blanco.
- */
-export function renderAddons(): string {
-  const addons = S.addons ?? [];
+/** Guía pública de plugins (barra de acciones de Addons). */
+const PLUGINS_GUIDE_URL =
+  'https://github.com/juancarlos/PortsLauncher/blob/main/docs/PLUGINS.md';
 
-  const emptyState =
+/** Texto de apoyo de la sección de Addons. */
+const ADDONS_BLURB =
+  'Gestiona los plugins que amplían PortsLauncher con herramientas de compilación, ' +
+  'extractores de assets y aprovisionamiento local.';
+
+/**
+ * Barra de acciones de Addons: carpeta de plugins, instalar y guía.
+ *
+ * La comparten la pestaña de Ajustes y la vista antigua (`renderAddons`), para
+ * que ambas ofrezcan exactamente los mismos controles.
+ */
+function addonsActions(): string {
+  return (
+    '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+    '<button class="btn sm" data-act="open-addons-dir" style="display:inline-flex;align-items:center;gap:6px">' +
+    `${IC.folder} Abrir carpeta de plugins</button>` +
+    '<button class="btn sm" data-act="install-addon" style="display:inline-flex;align-items:center;gap:6px">' +
+    `${IC.plus} Instalar plugin</button>` +
+    `<a href="${PLUGINS_GUIDE_URL}" target="_blank" rel="noreferrer" class="btn sm ghost" ` +
+    `style="display:inline-flex;align-items:center;gap:6px">${IC.book} Guía para desarrolladores</a>` +
+    '</div>'
+  );
+}
+
+/**
+ * Estado vacío de Addons.
+ *
+ * Explica cómo instalar el primer plugin; las acciones viven en la barra de
+ * arriba, así que aquí no se repiten.
+ */
+function addonsEmptyState(): string {
+  return (
     '<div class="empty" style="padding:36px 22px">' +
     '<div style="color:var(--muted);margin-bottom:12px;display:flex;justify-content:center">' +
     addonsGlyph(40) +
     '</div>' +
     '<b style="font-size:16px;color:var(--text)">Todavía no hay plugins instalados</b><br>' +
     `Copia la carpeta de un plugin en <span class="mono">${esc(ADDONS_DIR)}</span> y reinicia ` +
-    'el launcher: aquí verás su ficha, su estado y podrás activarlo o desactivarlo.' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:14px">' +
-    '<button class="btn sm" data-act="open-addons-dir" style="display:inline-flex;align-items:center;gap:6px">' +
-    `${IC.folder} Abrir carpeta de plugins</button>` +
-    '<button class="btn sm ghost" data-act="install-addon" style="display:inline-flex;align-items:center;gap:6px">' +
-    `${IC.plus} Instalar plugin</button>` +
-    '</div></div>';
+    'el launcher: aquí verás su ficha, su estado y podrás activarlo o desactivarlo.</div>'
+  );
+}
 
-  const list =
-    addons.length === 0
-      ? emptyState
-      : '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">' +
-        addons.map(addonCard).join('') +
-        '</div>' +
-        `<div class="muted" style="font-size:12px;margin-top:16px">Carpeta de plugins: ` +
-        `<span class="mono">${esc(ADDONS_DIR)}</span> · ${addons.length} instalado${
-          addons.length === 1 ? '' : 's'
-        }</div>`;
+/** Tarjetas de los plugins instalados (o el estado vacío) y el pie con la ruta. */
+function addonsList(): string {
+  const addons = S.addons ?? [];
+  if (addons.length === 0) return addonsEmptyState();
+  return (
+    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">' +
+    addons.map(addonCard).join('') +
+    '</div>' +
+    '<div class="muted" style="font-size:12px">Carpeta de plugins: ' +
+    `<span class="mono">${esc(ADDONS_DIR)}</span> · ${addons.length} instalado${
+      addons.length === 1 ? '' : 's'
+    }</div>`
+  );
+}
 
+/**
+ * Addons y Extensiones (`renderAddons`).
+ *
+ * Vista histórica de la sección. Ya no está en la navegación —Addons vive como
+ * pestaña de Ajustes (`renderSettings`)— pero se conserva para poder montarla
+ * de forma aislada y como red de seguridad del router.
+ *
+ * Los plugins viven en el sistema de ficheros del usuario (`ADDONS_DIR`); el
+ * launcher sólo lista los ya instalados y permite activarlos o desinstalarlos.
+ */
+export function renderAddons(): string {
   return paintMain(
     '<div class="top"><h1>Addons y Extensiones</h1></div>' +
-    '<div class="muted" style="max-width:820px;margin:-2px 0 20px;font-size:13.5px">' +
-    'Gestiona los plugins que amplían PortsLauncher con herramientas de compilación, extractores de assets y aprovisionamiento local.' +
-    '</div>' +
-    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px">' +
-    '<button class="btn sm" data-act="open-addons-dir" style="display:inline-flex;align-items:center;gap:6px">' +
-    `${IC.folder} Abrir carpeta de plugins</button>` +
-    '<button class="btn sm" data-act="install-addon" style="display:inline-flex;align-items:center;gap:6px">' +
-    `${IC.plus} Instalar plugin</button>` +
-    '<a href="https://github.com/juancarlos/PortsLauncher/blob/main/docs/PLUGINS.md" target="_blank" rel="noreferrer" class="btn sm ghost" style="display:inline-flex;align-items:center;gap:6px">' +
-    `${IC.book} Guía para desarrolladores</a>` +
-    '</div>' +
-    list
+    '<div style="display:flex;flex-direction:column;gap:20px">' +
+    `<div class="muted" style="max-width:820px;font-size:13.5px">${ADDONS_BLURB}</div>` +
+    addonsActions() +
+    addonsList() +
+    '</div>'
   );
 }
 
@@ -1232,6 +1266,27 @@ export function steamgridConfigured(settings: Settings): boolean {
   return !!String(settings.steamgridApiKey ?? '').trim() || serverSteamgridReady;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Pestañas de Ajustes                                                        */
+/* -------------------------------------------------------------------------- */
+
+/** Pestañas de la pantalla de Ajustes. */
+export type SettingsTab = 'appearance' | 'storage' | 'integrations' | 'addons' | 'system';
+
+/**
+ * Pestaña visible ahora mismo.
+ *
+ * Es estado de navegación, no una preferencia del usuario: vive en memoria a
+ * propósito para que cada arranque vuelva a abrir «Apariencia» en lugar de
+ * quedarse atascado en la última pestaña que se visitó.
+ */
+let currentSettingsTab: SettingsTab = 'appearance';
+
+/** Activa una pestaña de Ajustes (`main.ts`, acción `set-tab`). */
+export function setSettingsTab(tab: SettingsTab): void {
+  currentSettingsTab = tab;
+}
+
 export function renderSettings(): string {
   const settings = S.settings;
   /* El indicador de Ajustes refleja SOLO la clave guardada por el usuario: la
@@ -1278,9 +1333,30 @@ export function renderSettings(): string {
       `<button data-act="view" data-k="${key}" aria-pressed="${settings.view === key}" aria-label="${label}" title="${label}">${glyph}</button>`
   ).join('');
 
-  return paintMain(
-    '<div class="top"><h1>Ajustes</h1></div>' +
-    '<div style="display:flex;flex-direction:column;gap:22px;max-width:980px">' +
+  /* Barra de pestañas: Ajustes es una sola pantalla, pero sólo se pinta el
+   * panel de la pestaña activa (antes era un scroll vertical interminable). */
+  const tabs: Array<[SettingsTab, string, string]> = [
+    ['appearance', 'Apariencia', IC.posters],
+    ['storage', 'Carpetas y ROMs', IC.folder],
+    ['integrations', 'Integraciones y Arte', IC.cat],
+    ['addons', 'Addons y Plugins', IC.addons],
+    ['system', 'Sistema e Índice', IC.gear],
+  ];
+
+  const tabsHtml =
+    '<div class="tabs" role="tablist" style="margin-bottom:22px">' +
+    tabs
+      .map(
+        ([id, label, icon]) =>
+          `<button class="tab" role="tab" aria-selected="${currentSettingsTab === id}" ` +
+          `data-act="set-tab" data-k="${id}" style="display:inline-flex;align-items:center;gap:8px">` +
+          `${icon} ${label}</button>`
+      )
+      .join('') +
+    '</div>';
+
+  /* Cada pestaña agrupa una o varias secciones ya maquetadas. */
+  const appearanceSection =
     /* APARIENCIA */
     '<section class="box"><div class="lbl" style="padding:0">APARIENCIA</div>' +
     '<h2 style="font-size:18px">Cartuchos y discos</h2>' +
@@ -1306,11 +1382,16 @@ export function renderSettings(): string {
           `${mediaHTML(game, styleFor(game, settings), false)}<div class="cap">${esc(game.t)}</div></div>`
       )
       .join('') +
-    '</div><div class="board"></div></div></section>' +
+    '</div><div class="board"></div></div></section>';
+
+  const librarySection =
     /* BIBLIOTECA */
     '<section class="box"><div class="lbl" style="padding:0">BIBLIOTECA</div>' +
     '<h2 style="font-size:18px">Vista predeterminada</h2>' +
-    `<div class="seg" style="align-self:flex-start">${viewButtons}</div></section>` +
+    `<div class="seg" style="align-self:flex-start">${viewButtons}</div>` +
+    '<div class="muted" style="font-size:12px">Con qué vista se abren Biblioteca y Catálogo.</div></section>';
+
+  const storageSection =
     /* CARPETAS Y ROMS */
     '<section class="box"><div class="lbl" style="padding:0">CARPETAS Y ROMS</div>' +
     '<label>Carpeta de ports por defecto' +
@@ -1323,11 +1404,15 @@ export function renderSettings(): string {
     '<b>Usarla desde donde está</b><span class="muted">No se mueve nada.</span></button>' +
     `<button class="opt" role="radio" aria-checked="${settings.romMode === 'copy'}" data-act="rmode" data-k="copy">` +
     `<b>Copiarla a la carpeta del port</b><span class="muted">Se copia dentro de ${esc(settings.romDir)}.</span></button>` +
-    '</div></section>' +
+    '</div></section>';
+
+  const systemSection =
     /* SISTEMA */
     '<section class="box"><div class="lbl" style="padding:0">SISTEMA</div>' +
     '<div class="kv"><span>Destino de los ports</span>' +
-    `<button class="btn sm" data-act="dest">${esc(settings.dest)} (cambiar)</button></div></section>` +
+    `<button class="btn sm" data-act="dest">${esc(settings.dest)} (cambiar)</button></div></section>`;
+
+  const integrationsSection =
     /* INTEGRACIONES Y ARTE */
     '<section class="box"><div class="lbl" style="padding:0">INTEGRACIONES Y ARTE</div>' +
     '<h2 style="font-size:18px">Carátulas reales con tu clave de SteamGridDB</h2>' +
@@ -1347,7 +1432,9 @@ export function renderSettings(): string {
     '<div class="muted" style="font-size:12px">Consigue tu clave API personal y gratuita en ' +
     '<a href="https://www.steamgriddb.com/profile/preferences/api" target="_blank" ' +
     'rel="noreferrer noopener" style="color:var(--accent2)">steamgriddb.com/profile/preferences/api</a>.' +
-    '</div></section>' +
+    '</div></section>';
+
+  const indexSection =
     /* ÍNDICE */
     '<section class="box"><div class="lbl" style="padding:0">ÍNDICE DE PORTS</div>' +
     '<h2 style="font-size:18px">Un índice propio alimenta el launcher</h2>' +
@@ -1363,7 +1450,9 @@ export function renderSettings(): string {
     '</div>' +
     `<div class="kv"><span>Último indexado</span><span>${esc(indexAge())}</span></div>` +
     `<div class="kv"><span>Ports en el índice</span><span class="mono">${S.games.length}</span></div>` +
-    '<div class="muted" style="font-size:12px">El launcher no consulta repositorios ni listados de terceros: solo lee el índice.</div></section>' +
+    '<div class="muted" style="font-size:12px">El launcher no consulta repositorios ni listados de terceros: solo lee el índice.</div></section>';
+
+  const legendSection =
     /* ETIQUETAS */
     '<section class="box"><div class="lbl" style="padding:0">ETIQUETAS DE ESTADO</div>' +
     '<h2 style="font-size:18px">Qué significa cada etiqueta</h2>' +
@@ -1373,12 +1462,33 @@ export function renderSettings(): string {
         `<span class="dev" style="--c:${DEVT[key].c}">${DEVT[key].g} ${DEVT[key].t}</span>` +
         `<span class="muted" style="text-align:right">${esc(text)}</span></div>`
     ).join('') +
-    '</section>' +
+    '</section>';
+
+  const localSection =
     /* BIBLIOTECA LOCAL */
     '<section class="box"><div class="lbl" style="padding:0">BIBLIOTECA LOCAL</div>' +
     '<div class="muted">Tus instalaciones, ROMs y ajustes se guardan en este navegador.</div>' +
-    '<button class="btn dng" style="align-self:flex-start" data-act="reset">Restablecer biblioteca y ajustes</button></section>' +
-    '</div>'
+    '<button class="btn dng" style="align-self:flex-start" data-act="reset">Restablecer biblioteca y ajustes</button></section>';
+
+  const addonsSection =
+    '<div class="lbl" style="padding:0">ADDONS Y PLUGINS</div>' +
+    `<div class="muted" style="max-width:820px;font-size:13.5px">${ADDONS_BLURB}</div>` +
+    addonsActions() +
+    addonsList();
+
+  /* Sólo se pinta la pestaña activa. */
+  const panels: Record<SettingsTab, string> = {
+    appearance: appearanceSection + librarySection,
+    storage: storageSection,
+    integrations: integrationsSection,
+    addons: addonsSection,
+    system: systemSection + indexSection + legendSection + localSection,
+  };
+
+  return paintMain(
+    '<div class="top"><h1>Ajustes</h1></div>' +
+    tabsHtml +
+    `<div style="display:flex;flex-direction:column;gap:22px;max-width:980px">${panels[currentSettingsTab]}</div>`
   );
 }
 

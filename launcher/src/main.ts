@@ -44,11 +44,12 @@ import {
   wizardModalHTML,
   setSteamgridServerReady,
   steamgridConfigured,
+  setSettingsTab,
   RT,
   RT_INV,
   bgOf,
 } from './ui/render';
-import type { ArtDraft, ArtKind, ArtTab, LogoAnchor } from './ui/render';
+import type { ArtDraft, ArtKind, ArtTab, LogoAnchor, SettingsTab } from './ui/render';
 import { art } from './ui/model';
 
 const STORAGE_KEY = 'portshub-proto-v1';
@@ -698,6 +699,13 @@ async function testSteamgrid(): Promise<void> {
 const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   open: (d) => d.id && go('game', d.id),
   nav: (d) => d.to && go(d.to as Route),
+  /* Pestañas de Ajustes: cambian el panel activo sin mover la ruta. */
+  'set-tab': (d) => {
+    if (d.k) {
+      setSettingsTab(d.k as SettingsTab);
+      renderSettings();
+    }
+  },
   primary: (d) => d.id && primaryAction(d.id),
   gear: (d) => {
     if (!d.id) return;
@@ -1153,6 +1161,13 @@ export function route(): void {
       go('game', id);
       return;
     }
+  }
+  /* Addons ya no es una sección propia: es una pestaña de Ajustes. El hash
+   * histórico `#addons` se conserva para no romper enlaces ni marcadores. */
+  if (h === 'addons') {
+    setSettingsTab('addons');
+    go('settings');
+    return;
   }
   go(RT_INV[h] ?? 'home');
 }
