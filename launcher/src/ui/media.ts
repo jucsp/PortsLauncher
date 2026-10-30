@@ -256,6 +256,11 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
         inset: 9,
         hole: 20,
       },
+      wii: {
+        rim: 'conic-gradient(from 0deg,#E8F4FA,#B0D8F0,#FFFFFF,#90C5E8,#E8F4FA)',
+        inset: 12,
+        hole: 28,
+      },
       xbox: {
         rim: 'conic-gradient(from 10deg,#0E3A12,#3FA84A,#0A2A0E,#7BE08A,#0E3A12)',
         inset: 12,

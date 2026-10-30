@@ -1418,6 +1418,7 @@ const STYLE_PLAT: Record<MediaStyle, PlatKey> = {
   cd: 'OTRAS',
   ps1: 'PS1',
   gcn: 'GCN',
+  wii: 'WII',
   xbox: 'XBOX',
   ps2: 'PS2',
   x360: 'X360',
@@ -1757,7 +1758,7 @@ export function renderSettings(): string {
 }
 
 /** Traduce una clave visual a `sourcePlatform`. */
-function platformOf(key: PlatKey): 'n64' | 'snes' | 'nes' | 'md' | 'gba' | 'gb' | 'nds' | 'n3ds' | 'nsw' | 'psp' | 'ps1' | 'ps2' | 'gcn' | 'xbox' | 'x360' | 'pc' | 'other' {
+function platformOf(key: PlatKey): 'n64' | 'snes' | 'nes' | 'md' | 'gba' | 'gb' | 'nds' | 'n3ds' | 'nsw' | 'psp' | 'ps1' | 'ps2' | 'gcn' | 'wii' | 'xbox' | 'x360' | 'pc' | 'other' {
   const map: Record<PlatKey, ReturnType<typeof platformOf>> = {
     N64: 'n64',
     SNES: 'snes',
@@ -1773,6 +1774,7 @@ function platformOf(key: PlatKey): 'n64' | 'snes' | 'nes' | 'md' | 'gba' | 'gb' 
     PSP: 'psp',
     PS1: 'ps1',
     GCN: 'gcn',
+    WII: 'wii',
     XBOX: 'xbox',
     PC: 'pc',
     OTRAS: 'other',

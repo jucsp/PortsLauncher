@@ -1,8 +1,8 @@
 # Catálogo unificado — informe de construcción
 
-- **Generado:** 2026-10-29T19:04:35Z
+- **Generado:** 2026-10-30T21:45:49Z
 - **Versión:** 1.0.0 (schema 1.0.0)
-- **Hash semántico:** `sha256:506dc84c563ae2bff924ab434a0c07e8e567447e687e2d6652e58252d0aea7d4`
+- **Hash semántico:** `sha256:a932c31fa1477689ab42b7d90ca758a290e1382875e0dd045f3d8e6dc4875ec5`
 - **Modo:** offline (fixtures)
 - **Fuente GameWave:** `/home/juancarlos/Proyectos/Personales/PortsLauncher/fixtures/gamewave/catalog.json`
 - **Fuente Quiver:** `/home/juancarlos/Proyectos/Personales/PortsLauncher/fixtures/quiver/apps_unique.json`
@@ -31,7 +31,7 @@
 | Plataforma | Puertos |
 |---|---|
 | pc | 294 |
-| other | 217 |
+| other | 209 |
 | ps1 | 199 |
 | x360 | 133 |
 | n64 | 108 |
@@ -44,6 +44,7 @@
 | nsw | 16 |
 | psp | 16 |
 | gb | 12 |
+| wii | 8 |
 | md | 4 |
 | nds | 4 |
 | n3ds | 3 |
@@ -119,7 +120,7 @@
 | `unchiga-yu-gi-oh-forbidden-memories-recompiled-yugiohforbiddenmemoriesrecomp` | Yu-Gi-Oh! Forbidden Memories · Native Decomp Port | ps1 | gamewave, quiver |
 | `voicedrew11-verdite2-verdite2kingsfield` | Verdite2 · King's Field | ps1 | gamewave, quiver |
 | `yozander2009-stack-metroid-dread-recomp-yozander2009-stack-metroid-dread-recomp` | Metroid Dread · Metroid-Dread-Recomp | nsw | gamewave, quiver |
-| `yunophilia-blackknightrecomp-yunophilia-blackknightrecomp` | Sonic and the Black Knight · BlackKnightRecomp | other | gamewave, quiver |
+| `yunophilia-blackknightrecomp-yunophilia-blackknightrecomp` | Sonic and the Black Knight · BlackKnightRecomp | wii | gamewave, quiver |
 | `yuutatsubasa-chaotixrecompiled-knuckleschaotixchaotixrecompiled` | Knuckles' Chaotix · ChaotixRecompiled | other | gamewave, quiver |
 | `zeldawwhdrecomp-zeldawwhdrecomp-zeldawwhdrecomp` | The Legend of Zelda: The Wind Waker HD · Wii U Recomp | other | gamewave, quiver |
 | `zolaware-reblue-rebluebluedragon` | re:Blue · Blue Dragon | x360 | gamewave, quiver |

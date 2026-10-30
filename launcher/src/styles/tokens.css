@@ -172,6 +172,12 @@
   --p-gcn-ink: #EDE8FF;
   --p-gcn-body: #2A2150;
 
+  /* Wii — blanco / azul cian característico */
+  --p-wii-neon: #00A0E9;
+  --p-wii-sticker: #082838;
+  --p-wii-ink: #EAF8FF;
+  --p-wii-body: #1E2D38;
+
   /* Xbox — verde. */
   --p-xbox-neon: #5CF08A;
   --p-xbox-sticker: #0B2A18;
@@ -552,6 +558,15 @@ canvas {
   --plat-sticker: var(--p-gcn-sticker);
   --plat-ink: var(--p-gcn-ink);
   --plat-body: var(--p-gcn-body);
+}
+
+.plat-wii,
+[data-plat='wii'],
+[data-plat='WII'] {
+  --plat-neon: var(--p-wii-neon);
+  --plat-sticker: var(--p-wii-sticker);
+  --plat-ink: var(--p-wii-ink);
+  --plat-body: var(--p-wii-body);
 }
 
 .plat-xbox,

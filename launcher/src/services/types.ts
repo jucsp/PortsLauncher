@@ -31,6 +31,7 @@ export const SOURCE_PLATFORMS = [
   'ps1',
   'ps2',
   'gcn',
+  'wii',
   'xbox',
   'x360',
   'pc',
@@ -56,6 +57,7 @@ export const PLATFORM_LABELS: Record<SourcePlatform, string> = {
   ps1: 'PlayStation',
   ps2: 'PlayStation 2',
   gcn: 'Nintendo GameCube',
+  wii: 'Nintendo Wii',
   xbox: 'Xbox',
   x360: 'Xbox 360',
   pc: 'PC',
@@ -76,6 +78,7 @@ export const PLATFORM_SHORT: Record<SourcePlatform, string> = {
   ps1: 'PS1',
   ps2: 'PS2',
   gcn: 'GCN',
+  wii: 'WII',
   xbox: 'XBOX',
   x360: 'X360',
   pc: 'PC',
@@ -97,6 +100,7 @@ export const CATALOG_PLATFORMS: readonly KnownPlatform[] = [
   'ps1',
   'ps2',
   'gcn',
+  'wii',
   'xbox',
   'x360',
   'pc',
@@ -228,7 +232,7 @@ export const ROM_BINDING_LABELS: Record<RomBinding, string> = {
 };
 
 /* -------------------------------------------------------------------------- */
-/* Estilos visuales de soporte (16 siluetas, §8 de la spec v5)                 */
+/* Estilos visuales de soporte (17 siluetas, §8 de la spec v5)                 */
 /* -------------------------------------------------------------------------- */
 
 export const MEDIA_STYLES = [
@@ -245,6 +249,7 @@ export const MEDIA_STYLES = [
   'cd',
   'ps1',
   'gcn',
+  'wii',
   'xbox',
   'ps2',
   'x360',
@@ -266,6 +271,7 @@ export const MEDIA_BY_PLATFORM: Record<SourcePlatform, MediaStyle> = {
   ps1: 'ps1',
   ps2: 'ps2',
   gcn: 'gcn',
+  wii: 'wii',
   xbox: 'xbox',
   x360: 'x360',
   pc: 'cd',
