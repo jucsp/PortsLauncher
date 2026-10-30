@@ -30,3 +30,11 @@ Thumbs.db
 *.swp
 *.swo
 .test-out/
+
+# Indexador y herramientas de extracción (privadas / offline)
+catalog-builder/
+tools/
+
+# Variables de entorno y credenciales
+*.env
+.env*
