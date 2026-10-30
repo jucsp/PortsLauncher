@@ -35,6 +35,25 @@ export const bookGlyph = (size = 16): string =>
     size
   );
 
+/**
+ * Glifo de paleta de pintor monocromática.
+ *
+ * Mismo patrón que `addonsGlyph`/`bookGlyph`: 16 px en botones de la UI
+ * (`IC.palette`) y un tamaño mayor en la cabecera del modal de arte.
+ *
+ * Los cuatro puntos llevan `fill="currentColor"` explícito porque `sv()` fija
+ * `fill="none"` en el `<svg>`; el contorno hereda el trazo del envoltorio
+ * (`stroke: currentColor`, `stroke-width: 1.8`).
+ */
+export const paletteGlyph = (size = 16): string =>
+  sv(
+    '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/>' +
+      '<circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/>' +
+      '<path d="M12 2C6.49 2 2 6.49 2 12c0 4.41 3.59 8 8 8 1.1 0 2-.9 2-2 0-.49-.18-.94-.48-1.29-.3-.35-.48-.8-.48-1.29 ' +
+      '0-1.1.9-2 2-2h2.41c4.14 0 7.55-3.41 7.55-7.55C23.49 6.49 18.35 2 12 2z"/>',
+    size
+  );
+
 export const IC = {
   home: sv('<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>'),
   lib: sv(
@@ -69,6 +88,7 @@ export const IC = {
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
     16
   ),
+  palette: paletteGlyph(),
   gear: sv(
     '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1' +
       'a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3' +

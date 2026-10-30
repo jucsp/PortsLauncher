@@ -42,7 +42,7 @@ import {
   mediaWidth,
 } from './model';
 import type { Game } from './model';
-import { IC, addonsGlyph, bookGlyph, sv } from './icons';
+import { IC, addonsGlyph, bookGlyph, paletteGlyph, sv } from './icons';
 import { mediaHTML, miniIcon } from './media';
 import { AI, DEVT, DEV_LEGEND, MEDIA, PLAT, PLAT_KEYS, PLATMEDIA, STRAT } from './platforms';
 import type { PlatKey } from './platforms';
@@ -1216,19 +1216,19 @@ export function renderGame(id: string): string {
   const logoScale = clampLogoScale(game.logoScale);
 
   /* Capa absoluta del logotipo: el usuario decide el ancla (7 puntos) y el
-   * alto (40–220 px) desde «🎨 Ajustar arte». Se coloca antes de la capa de
+   * alto (40–220 px) desde el botón «Ajustar arte». Se coloca antes de la capa de
    * contenido para que los botones sigan siendo clicables por encima. */
   const logoLayer = logo
     ? `<div style="${logoBoxStyle(logoAnchor, logoScale)}">` +
       `<img src="${esc(logo)}" alt="${esc(game.t)}" style="${logoImageStyle(logoScale)}" /></div>`
     : '';
 
-  /* Sin logotipo se pinta el título tipográfico; con logotipo se reserva su
-   * altura para que las píldoras de metadatos no se le monten encima. */
+  /* Enfoque cinematográfico: el hero queda para el arte y el logotipo. El
+   * título tipográfico ya no convive con el logotipo (se pinta en la ficha,
+   * justo encima de las pestañas), así que aquí solo aparece cuando el juego no
+   * tiene logo, como firma visual de la cabecera. */
   const heroTitle = logo
-    ? logoAnchor.indexOf('bottom') === 0
-      ? `<div style="height:${Math.min(logoScale, 140)}px" aria-hidden="true"></div>`
-      : ''
+    ? ''
     : '<div style="display:flex;align-items:center;height:100%;max-height:140px;">' +
       '<h1 style="font-size:clamp(32px,5.5vw,52px);line-height:1.05;' +
       'text-shadow:0 4px 24px rgba(0,0,0,.6);margin:0">' +
@@ -1277,14 +1277,14 @@ export function renderGame(id: string): string {
     '<div style="position:relative;z-index:2;display:flex;flex-direction:column;justify-content:space-between;gap:16px;flex:1 1 auto">' +
     '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;align-self:flex-start">' +
     backBtn +
-    `<button class="pill" data-act="art-modal" data-id="${game.id}" style="background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px;border:1px solid rgba(255,255,255,.15);cursor:pointer;color:var(--text)">🎨 Ajustar arte</button>` +
+    `<button class="pill" data-act="art-modal" data-id="${game.id}" style="background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px;border:1px solid rgba(255,255,255,.15);cursor:pointer;color:var(--text);display:inline-flex;align-items:center;gap:7px">${IC.palette} Ajustar arte</button>` +
     '</div>' +
     '<div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:24px;padding-top:50px">' +
-    /* --- lado IZQUIERDO: logo a toda la altura + meta pills + proyecto/versión */
+    /* --- lado IZQUIERDO: logotipo a toda la altura (la ficha lleva título,
+     *     metadatos y versión, así que la cabecera se deja limpia) ---------- */
     '<div style="flex:1 1 320px;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:12px">' +
     heroTitle +
-    `<div style="display:flex;gap:8px;flex-wrap:wrap">${meta}</div>` +
-    `<div style="font-size:18px">${esc(game.pr)} · última versión ${esc(game.lv)}</div></div>` +
+    '</div>' +
     /* --- lado DERECHO: acciones + estrategia/requisitos de ROM -------------- */
     '<div style="display:flex;flex-direction:column;gap:10px;align-items:flex-end;text-align:right;' +
     'flex:0 1 auto;max-width:360px;margin-left:auto">' +
@@ -1293,8 +1293,15 @@ export function renderGame(id: string): string {
       game.mb ? ` · ~${game.mb} MB` : ''
     }${game.rom ? ' · necesitarás tu ROM' : ''}</div></div></div></div>` +
     /* `dgrid` sale de `.dhero`: las capas absolutas (fondo desenfocado + hero)
-     * no deben superponerse al cuerpo de la ficha. */
+     * no deben superponerse al cuerpo de la ficha.
+     * El título, las píldoras de metadatos y la versión viven ahora aquí: la
+     * cabecera se reserva al arte y al logotipo (enfoque cinematográfico). */
     '</div><div class="dgrid"><div class="dcol">' +
+    '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px">' +
+    `<h1 style="font-size:clamp(24px,3.5vw,34px);line-height:1.15;margin:0;font-weight:700">${esc(game.t)}</h1>` +
+    `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${meta}</div>` +
+    `<div class="muted" style="font-size:14px">${esc(game.pr)} · última versión ${esc(game.lv)}</div>` +
+    '</div>' +
     `<div class="tabs" role="tablist">${tabsHtml}</div>${body}</div>` +
     `<aside class="dside">${rom}${devBox(game)}` +
     '<div class="box"><div style="font:700 17px var(--f-display)">Nivel de verificación</div>' +
@@ -1747,15 +1754,23 @@ export interface ArtModalOptions {
   apiKeyConfigured?: boolean;
 }
 
+/** Altura de la botonera de la cabecera (`← Catálogo` / `Ajustar arte`).
+ *  Los 70 px de las anclas superiores son un margen seguro: el logo nunca
+ *  colisiona ni queda oculto bajo esa botonera. */
+const LOGO_TOP_SAFE = 70;
+/** Equivalente en el recuadro de previsualización del editor (~200 px de alto,
+ *  sin botonera): el margen real dejaría el logo fuera del recorte. */
+const LOGO_TOP_PREVIEW = 20;
+
 /** Ancla → propiedades CSS del contenedor absoluto del logotipo. */
 const LOGO_ANCHOR_CSS: Record<LogoAnchor, string> = {
-  'top-left': 'top:20px;left:30px;',
-  'top-center': 'top:20px;left:50%;transform:translateX(-50%);',
-  'top-right': 'top:20px;right:30px;',
-  center: 'top:50%;left:50%;transform:translate(-50%,-50%);',
-  'bottom-left': 'bottom:24px;left:30px;',
+  'top-left': 'top:70px;left:32px;',
+  'top-center': 'top:70px;left:50%;transform:translateX(-50%);',
+  'top-right': 'top:70px;right:32px;',
+  center: 'top:52%;left:50%;transform:translate(-50%,-50%);',
+  'bottom-left': 'bottom:24px;left:32px;',
   'bottom-center': 'bottom:24px;left:50%;transform:translateX(-50%);',
-  'bottom-right': 'bottom:24px;right:30px;',
+  'bottom-right': 'bottom:24px;right:32px;',
 };
 
 /** Posición CSS (sin `position`) del ancla pedida. */
@@ -1764,14 +1779,37 @@ export function logoAnchorStyle(anchor: LogoAnchor | string | null | undefined):
   return LOGO_ANCHOR_CSS[key] ?? LOGO_ANCHOR_CSS[LOGO_ANCHOR_DEFAULT];
 }
 
-/** Contenedor absoluto del logo dentro de la cabecera (o de la previsualización). */
+/**
+ * Igual que `logoAnchorStyle`, pero con los offsets adaptados al recuadro de
+ * previsualización del editor de arte: el margen seguro de 70 px de la cabecera
+ * real no aplica ahí (no hay botonera y el recuadro solo mide 200 px), así que
+ * se reduce para que el logo siga viéndose entero en las tres anclas «top».
+ */
+export function logoPreviewAnchorStyle(anchor: LogoAnchor | string | null | undefined): string {
+  const css = logoAnchorStyle(anchor);
+  if (css.indexOf(`top:${LOGO_TOP_SAFE}px;`) === 0) {
+    return css.replace(`top:${LOGO_TOP_SAFE}px;`, `top:${LOGO_TOP_PREVIEW}px;`);
+  }
+  /* `center` va al 52 % en la cabecera (compensa la botonera superior); en la
+   * previsualización vuelve al centro geométrico exacto. */
+  if (css.indexOf('top:52%;') === 0) return css.replace('top:52%;', 'top:50%;');
+  return css;
+}
+
+/**
+ * Contenedor absoluto del logo dentro de la cabecera (o de la previsualización).
+ * `preview` cambia los offsets de las anclas superiores (ver
+ * `logoPreviewAnchorStyle`).
+ */
 export function logoBoxStyle(
   anchor: LogoAnchor | string | null | undefined,
-  scale: number | null | undefined
+  scale: number | null | undefined,
+  preview = false
 ): string {
   return (
     'position:absolute;z-index:2;pointer-events:none;' +
-    `${logoAnchorStyle(anchor)}height:${clampLogoScale(scale)}px;max-height:100%;`
+    `${preview ? logoPreviewAnchorStyle(anchor) : logoAnchorStyle(anchor)}` +
+    `height:${clampLogoScale(scale)}px;max-height:100%;`
   );
 }
 
@@ -1917,7 +1955,7 @@ export function artModalHTML(
         ? `<img src="${esc(heroPreview)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;` +
           'object-fit:cover;filter:blur(10px);opacity:.45" />'
         : '') +
-      `<div id="art-logo-box" style="${logoBoxStyle(anchor, scale)}">` +
+      `<div id="art-logo-box" style="${logoBoxStyle(anchor, scale, true)}">` +
       (logoPreview
         ? `<img id="art-logo-img" src="${esc(logoPreview)}" alt="Logo" style="${logoImageStyle(scale)}" />`
         : '<span class="muted" style="font-size:12px">Sin logo</span>') +
@@ -1970,8 +2008,8 @@ export function artModalHTML(
     esc(game.t) +
     '" style="width:min(880px,calc(100vw - 24px))">' +
     '<div class="mhead">' +
-    '<div style="width:44px;height:44px;border-radius:50%;background:var(--accent);color:var(--onaccent);' +
-    'display:grid;place-items:center;font-size:20px">🎨</div>' +
+    '<div style="width:44px;height:44px;border-radius:10px;background:rgba(255,255,255,.04);' +
+    `border:1px solid var(--line);color:var(--accent2);display:grid;place-items:center;flex:0 0 auto">${paletteGlyph(20)}</div>` +
     `<div style="flex:1;min-width:0"><h2 style="font-size:22px">Ajustar arte</h2>` +
     `<div class="muted">${esc(game.t)} · logo, cabecera y carátula al estilo Steam</div></div>` +
     '<button class="btn ico" data-act="close-modal" aria-label="Cerrar">✕</button>' +

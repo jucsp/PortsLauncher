@@ -129,7 +129,7 @@ export interface Game {
   logo: string | null;
   /** Imagen panorámica para la cabecera de la ficha de detalle, si la trae. */
   hero: string | null;
-  /** Arte personalizado del usuario (`🎨 Ajustar arte`), si lo hay. */
+  /** Arte personalizado del usuario (botón «Ajustar arte»), si lo hay. */
   customArt?: CustomArtwork | null;
   /** Punto de anclaje del logotipo en la cabecera. */
   logoAnchor: LogoAnchor;
