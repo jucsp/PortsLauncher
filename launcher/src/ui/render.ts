@@ -42,7 +42,7 @@ import {
   mediaWidth,
 } from './model';
 import type { Game } from './model';
-import { IC, addonsGlyph, sv } from './icons';
+import { IC, addonsGlyph, bookGlyph, sv } from './icons';
 import { mediaHTML, miniIcon } from './media';
 import { AI, DEVT, DEV_LEGEND, MEDIA, PLAT, PLAT_KEYS, PLATMEDIA, STRAT } from './platforms';
 import type { PlatKey } from './platforms';
@@ -799,10 +799,6 @@ function addonCard(addon: Addon): string {
   );
 }
 
-/** Guía pública de plugins (barra de acciones de Addons). */
-const PLUGINS_GUIDE_URL =
-  'https://github.com/juancarlos/PortsLauncher/blob/main/docs/PLUGINS.md';
-
 /** Texto de apoyo de la sección de Addons. */
 const ADDONS_BLURB =
   'Gestiona los plugins que amplían PortsLauncher con herramientas de compilación, ' +
@@ -812,7 +808,8 @@ const ADDONS_BLURB =
  * Barra de acciones de Addons: carpeta de plugins, instalar y guía.
  *
  * La comparten la pestaña de Ajustes y la vista antigua (`renderAddons`), para
- * que ambas ofrezcan exactamente los mismos controles.
+ * que ambas ofrezcan exactamente los mismos controles. La guía abre el modal
+ * local (`pluginsDocModalHTML`): no depende de ninguna URL externa.
  */
 function addonsActions(): string {
   return (
@@ -821,8 +818,8 @@ function addonsActions(): string {
     `${IC.folder} Abrir carpeta de plugins</button>` +
     '<button class="btn sm" data-act="install-addon" style="display:inline-flex;align-items:center;gap:6px">' +
     `${IC.plus} Instalar plugin</button>` +
-    `<a href="${PLUGINS_GUIDE_URL}" target="_blank" rel="noreferrer" class="btn sm ghost" ` +
-    `style="display:inline-flex;align-items:center;gap:6px">${IC.book} Guía para desarrolladores</a>` +
+    '<button class="btn sm ghost" data-act="open-plugins-doc" ' +
+    `style="display:inline-flex;align-items:center;gap:6px">${IC.book} Guía para desarrolladores</button>` +
     '</div>'
   );
 }
@@ -830,8 +827,8 @@ function addonsActions(): string {
 /**
  * Estado vacío de Addons.
  *
- * Explica cómo instalar el primer plugin; las acciones viven en la barra de
- * arriba, así que aquí no se repiten.
+ * Explica cómo instalar el primer plugin y ofrece la guía de desarrollo (el
+ * resto de acciones vive en la barra de arriba, así que aquí no se repiten).
  */
 function addonsEmptyState(): string {
   return (
@@ -841,7 +838,11 @@ function addonsEmptyState(): string {
     '</div>' +
     '<b style="font-size:16px;color:var(--text)">Todavía no hay plugins instalados</b><br>' +
     `Copia la carpeta de un plugin en <span class="mono">${esc(ADDONS_DIR)}</span> y reinicia ` +
-    'el launcher: aquí verás su ficha, su estado y podrás activarlo o desactivarlo.</div>'
+    'el launcher: aquí verás su ficha, su estado y podrás activarlo o desactivarlo.' +
+    '<div style="margin-top:16px;display:flex;justify-content:center">' +
+    '<button class="btn sm ghost" data-act="open-plugins-doc" ' +
+    `style="display:inline-flex;align-items:center;gap:6px">${IC.book} Guía para desarrolladores</button>` +
+    '</div></div>'
   );
 }
 
@@ -878,6 +879,166 @@ export function renderAddons(): string {
     addonsActions() +
     addonsList() +
     '</div>'
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Guía de desarrollo de plugins (modal local)                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Modal «Guía de Desarrollo de Plugins» (`#modal-root`).
+ *
+ * Sustituye al enlace externo que apuntaba a un repositorio inexistente: la
+ * guía viaja dentro del launcher, se abre sin conexión y resume el contrato de
+ * `docs/PLUGINS.md` (ubicación, manifiesto, protocolo CLI/JSON y aviso legal).
+ *
+ * Es HTML puro y no lee estado: `main.ts` lo monta, lo cierra con Escape, con
+ * el scrim o con los botones del pie, y libera el scroll del documento.
+ */
+export function pluginsDocModalHTML(): string {
+  /* Bloque de código: `esc` neutraliza `<`, `>` y las comillas del JSON. */
+  const code = (text: string): string => `<pre class="code">${esc(text)}</pre>`;
+
+  /* Título de sección numerado (`1 · UBICACIÓN LOCAL`). */
+  const section = (n: number, title: string, body: string): string =>
+    '<section style="display:flex;flex-direction:column;gap:8px">' +
+    `<div class="lbl" style="padding:0">${n} · ${title}</div>` +
+    body +
+    '</section>';
+
+  const heading = (text: string): string => `<h3 style="font-size:15px;margin:0">${text}</h3>`;
+
+  const para = (text: string): string => `<div class="muted" style="font-size:13px">${text}</div>`;
+
+  const tree =
+    `${ADDONS_DIR}<id-plugin>/\n` +
+    '├── plugin.json\n' +
+    '├── icon.png\n' +
+    '└── main.py';
+
+  const manifest =
+    '{\n' +
+    '  "$schema": "https://portslauncher.org/schemas/plugin-v1.json",\n' +
+    '  "id": "mi-plugin-ejemplo",\n' +
+    '  "name": "Mi Plugin de Ejemplo",\n' +
+    '  "version": "1.0.0",\n' +
+    '  "description": "Extractor de mis respaldos personales.",\n' +
+    '  "author": "Tu nombre o alias",\n' +
+    '  "type": "asset-provider",\n' +
+    '  "platforms": ["n64", "ps1", "snes", "gba"],\n' +
+    '  "entrypoint": "main.py",\n' +
+    '  "runtime": "python3",\n' +
+    '  "capabilities": ["search", "provision"]\n' +
+    '}';
+
+  const checkOut = '{"ok": true, "version": "1.0.0", "message": "Plugin operativo."}';
+
+  const searchOut =
+    '{\n' +
+    '  "success": true,\n' +
+    '  "results": [\n' +
+    '    {\n' +
+    '      "id": "asset-001",\n' +
+    '      "title": "Mi respaldo (USA)",\n' +
+    '      "platform": "n64",\n' +
+    '      "format": ".z64",\n' +
+    '      "sizeBytes": 8388608,\n' +
+    '      "sha1": "3ce607099631c77507e157201d8f7e8338807d94"\n' +
+    '    }\n' +
+    '  ]\n' +
+    '}';
+
+  const provisionOut =
+    '{"type": "progress", "percent": 25, "status": "Leyendo volcado local..."}\n' +
+    '{"type": "progress", "percent": 75, "status": "Extrayendo assets de audio y texturas..."}\n' +
+    '{"type": "completed", "outputPath": "<salida>/baserom.us.z64", "sha1": "3ce6070…094"}';
+
+  /* Cada comando con su respuesta esperada por `stdout`. */
+  const protocol =
+    heading('Tres comandos, JSON por <span class="mono">stdout</span>') +
+    para(
+      'El launcher ejecuta el <span class="mono">entrypoint</span> con el runtime declarado y lee la ' +
+        'respuesta como JSON. El lenguaje del plugin es libre: el contrato es la línea de órdenes.'
+    ) +
+    '<div class="mono" style="font-size:12px;color:var(--accent2)">1 · check</div>' +
+    code('python3 main.py check') +
+    code(checkOut) +
+    '<div class="mono" style="font-size:12px;color:var(--accent2)">2 · search</div>' +
+    code('python3 main.py search "<titulo>" --platform <plataforma>') +
+    code(searchOut) +
+    '<div class="mono" style="font-size:12px;color:var(--accent2)">3 · provision</div>' +
+    code('python3 main.py provision "<asset-id>" --output "<carpeta-destino>"') +
+    para('El aprovisionamiento informa del progreso con líneas JSON y termina en un evento de cierre.') +
+    code(provisionOut);
+
+  const body =
+    section(
+      1,
+      'UBICACIÓN LOCAL',
+      heading('Una carpeta por plugin') +
+        para(
+          'Cada plugin vive en su propio subdirectorio, con el <span class="mono">id</span> del ' +
+            'manifiesto como nombre de carpeta. El launcher lo detecta al arrancar: no hay instalador ' +
+            'ni descargas de por medio.'
+        ) +
+        code(tree) +
+        '<div class="muted" style="font-size:12px">Windows: ' +
+        '<span class="mono">%APPDATA%\\PortsLauncher\\plugins\\</span> · macOS: ' +
+        '<span class="mono">~/Library/Application Support/PortsLauncher/plugins/</span></div>'
+    ) +
+    section(
+      2,
+      'MANIFIESTO REQUERIDO',
+      heading('<span class="mono">plugin.json</span> en la raíz del plugin') +
+        para(
+          'Obligatorios: <span class="mono">id</span>, <span class="mono">name</span>, ' +
+            '<span class="mono">version</span>, <span class="mono">description</span>, ' +
+            '<span class="mono">type</span>, <span class="mono">entrypoint</span> y ' +
+            '<span class="mono">capabilities</span>.'
+        ) +
+        code(manifest)
+    ) +
+    section(3, 'PROTOCOLO CLI Y JSON ESTÁNDAR', protocol) +
+    section(
+      4,
+      'AVISO LEGAL Y SEGURIDAD',
+      heading('Solo respaldos personales') +
+        para(
+          'Los plugins de aprovisionamiento están pensados para trabajar con volcados de material que ' +
+            'ya posees. No distribuyas ni publiques material comercial protegido por derechos de autor: ' +
+            'PortsLauncher no aloja, no enlaza ni distribuye plugins de terceros, y cada plugin ' +
+            'instalado corre bajo tu exclusiva responsabilidad. Los términos completos están en ' +
+            '<span class="mono">docs/LEGAL.md</span>.'
+        )
+    );
+
+  return (
+    '<div class="scrim" data-act="close-doc-modal"></div>' +
+    '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="doc-title" ' +
+    'style="max-width:760px;width:calc(100vw - 32px);max-height:85vh;display:flex;' +
+    'flex-direction:column;overflow:hidden">' +
+    /* Cabecera: icono, título y cierre. */
+    '<div class="mhead">' +
+    '<div style="width:44px;height:44px;border-radius:10px;background:rgba(255,255,255,.04);' +
+    'border:1px solid var(--line);color:var(--accent2);display:grid;place-items:center;' +
+    `flex:0 0 auto">${bookGlyph(22)}</div>` +
+    '<div style="flex:1;min-width:0">' +
+    '<h2 id="doc-title" style="font-size:22px">Guía de Desarrollo de Plugins</h2>' +
+    '<div class="muted">Contrato local: manifiesto, comandos y aviso legal</div></div>' +
+    '<button class="btn ico" data-act="close-doc-modal" aria-label="Cerrar">✕</button>' +
+    '</div>' +
+    /* Cuerpo: sólo esta zona hace scroll. */
+    '<div class="mbody" style="overflow-y:auto;padding:18px 24px;flex:1 1 auto;min-height:0;gap:22px">' +
+    body +
+    '</div>' +
+    /* Pie: carpeta de plugins a la izquierda y cierre explícito a la derecha. */
+    '<div class="mfoot">' +
+    '<button class="btn sm" data-act="open-addons-dir" style="display:inline-flex;align-items:center;gap:6px">' +
+    `${IC.folder} Abrir carpeta de plugins</button>` +
+    '<span style="flex:1"></span>' +
+    '<button class="btn pri" data-act="close-doc-modal">Entendido</button>' +
+    '</div></div>'
   );
 }
 

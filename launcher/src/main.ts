@@ -42,6 +42,7 @@ import {
   artPatchOf,
   clampLogoScale,
   wizardModalHTML,
+  pluginsDocModalHTML,
   setSteamgridServerReady,
   steamgridConfigured,
   setSettingsTab,
@@ -647,6 +648,35 @@ function finishWizard(): void {
   draw();
 }
 
+/* -------------------------------------------------------------------------- */
+/* Guía de desarrollo de plugins (modal local)                                */
+/* -------------------------------------------------------------------------- */
+
+/** ¿La guía de plugins está abierta ahora mismo? (lo usa la tecla Escape). */
+let pluginsDocOpen = false;
+
+/**
+ * Monta la guía de plugins en `#modal-root`.
+ *
+ * La guía es HTML puro (`pluginsDocModalHTML`) y no depende de la red: se abre
+ * sin conexión desde la barra de Addons o desde su estado vacío.
+ */
+function openPluginsDoc(): void {
+  const root = artRoot();
+  if (!root) return;
+  root.innerHTML = pluginsDocModalHTML();
+  document.body.style.overflow = 'hidden';
+  pluginsDocOpen = true;
+}
+
+/** Cierra la guía y devuelve el scroll al documento. */
+function closePluginsDoc(): void {
+  const root = artRoot();
+  if (root) root.innerHTML = '';
+  document.body.style.overflow = '';
+  pluginsDocOpen = false;
+}
+
 /**
  * Sonda `/api/steamgrid/__status`: ¿tiene clave el servidor de desarrollo?
  *
@@ -946,6 +976,8 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   'open-addons-dir': () => {
     toast('Carpeta: ~/.local/share/portslauncher/plugins/');
   },
+  'open-plugins-doc': () => openPluginsDoc(),
+  'close-doc-modal': () => closePluginsDoc(),
   'install-addon': () => {
     toast('Copia la carpeta de tu plugin en ~/.local/share/portslauncher/plugins/');
   },
@@ -996,6 +1028,10 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape' && wizardOpen) {
     finishWizard();
+    return;
+  }
+  if (e.key === 'Escape' && pluginsDocOpen) {
+    closePluginsDoc();
     return;
   }
   const target = e.target as HTMLElement | null;

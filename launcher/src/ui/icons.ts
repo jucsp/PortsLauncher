@@ -22,6 +22,19 @@ export const addonsGlyph = (size = 20): string =>
     size
   );
 
+/**
+ * Glifo de libro abierto (guía).
+ *
+ * Igual que `addonsGlyph`, se expone como función porque la guía de plugins lo
+ * necesita a 16 px en los botones (`IC.book`) y a 22 px en la cabecera del
+ * modal de documentación.
+ */
+export const bookGlyph = (size = 16): string =>
+  sv(
+    '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+    size
+  );
+
 export const IC = {
   home: sv('<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>'),
   lib: sv(
@@ -51,10 +64,7 @@ export const IC = {
   addons: addonsGlyph(),
   folder: sv('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>', 16),
   plus: sv('<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>', 16),
-  book: sv(
-    '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
-    16
-  ),
+  book: bookGlyph(),
   trash: sv(
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
     16

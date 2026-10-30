@@ -144,6 +144,8 @@ tbody tr{cursor:pointer}tbody tr:hover{background:var(--panel2)}
 .mhead{display:flex;align-items:center;gap:16px;padding:20px 26px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,rgba(61,232,255,.14),transparent)}
 .mbody{padding:24px 26px;display:flex;flex-direction:column;gap:18px}
 .mfoot{display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end;padding:16px 26px;border-top:1px solid var(--line);background:#0F0D22}
+/* Bloques de código de la guía de plugins (`pluginsDocModalHTML`). */
+pre.code{margin:0;padding:14px 16px;border-radius:12px;background:var(--bg);border:1px solid var(--line);color:var(--text);font:12.5px/1.6 var(--f-mono);overflow-x:auto;white-space:pre;tab-size:2}
 .drawer{position:fixed;right:0;top:0;bottom:0;width:min(520px,100vw);overflow:auto;background:var(--panel);border-left:1px solid var(--line);box-shadow:-30px 0 60px rgba(0,0,0,.5);padding:26px 28px;display:flex;flex-direction:column;gap:20px}
 .drop{padding:26px 18px;border-radius:18px;border:2px dashed var(--accent);background:rgba(255,79,163,.06);text-align:center;display:flex;flex-direction:column;align-items:center;gap:8px}
 .drop.over{background:rgba(255,79,163,.18)}
