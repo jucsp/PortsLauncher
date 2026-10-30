@@ -42,7 +42,7 @@ import {
   mediaWidth,
 } from './model';
 import type { Game } from './model';
-import { IC, sv } from './icons';
+import { IC, addonsGlyph, sv } from './icons';
 import { mediaHTML, miniIcon } from './media';
 import { AI, DEVT, DEV_LEGEND, MEDIA, PLAT, PLAT_KEYS, PLATMEDIA, STRAT } from './platforms';
 import type { PlatKey } from './platforms';
@@ -59,7 +59,7 @@ export const NAV: Array<[Route, string, string]> = [
   ['library', 'Biblioteca', IC.lib],
   ['catalog', 'Catálogo', IC.cat],
   ['updates', 'Actualizaciones', IC.upd],
-  ['addons', 'Addons', '🧩'],
+  ['addons', 'Addons', IC.addons],
   ['settings', 'Ajustes', IC.set],
 ];
 
@@ -747,22 +747,22 @@ export function renderUpdates(): string {
 /**
  * Icono de un addon.
  *
- * Respeta `addon.icon` cuando existe (emoji o URL de imagen) y, si no, pinta la
- * pieza de puzle sobre el fondo de acento: la sección nunca queda sin identidad
- * visual aunque el plugin no declare icono.
+ * Respeta `addon.icon` sólo cuando es una imagen (URL o `data:`), que se pinta
+ * recortada dentro del marco. En cualquier otro caso —sin icono o con un
+ * carácter suelto— se usa el glifo vectorial de Addons con la paleta del
+ * launcher: nada de emojis ni de círculos de acento saturados.
  */
 function addonAvatar(addon: Addon): string {
   const base =
-    'width:44px;height:44px;border-radius:50%;background:var(--accent);color:var(--onaccent);' +
-    'display:grid;place-items:center;font-size:20px;flex:0 0 auto;overflow:hidden';
+    'width:44px;height:44px;border-radius:10px;background:rgba(255,255,255,.04);' +
+    'border:1px solid var(--line);color:var(--accent2);display:grid;place-items:center;' +
+    'flex:0 0 auto;overflow:hidden';
   const icon = typeof addon.icon === 'string' ? addon.icon.trim() : '';
   const isImage = /^(https?:|data:)/i.test(icon);
-  const glyph = icon
-    ? isImage
-      ? `<img src="${esc(icon)}" alt="" style="width:100%;height:100%;object-fit:cover" />`
-      : esc(icon)
-    : '🧩';
-  return `<div class="avatar" style="${base}" aria-hidden="true">${glyph}</div>`;
+  const glyph = isImage
+    ? `<img src="${esc(icon)}" alt="" style="width:100%;height:100%;object-fit:cover" />`
+    : `<span style="color:var(--accent2);display:flex">${IC.addons}</span>`;
+  return `<div style="${base}">${glyph}</div>`;
 }
 
 /** Tarjeta de un addon instalado: identidad, estado y acciones. */
@@ -787,8 +787,8 @@ function addonCard(addon: Addon): string {
     `<span class="muted" style="font-size:12px">${
       addon.enabled ? '● Activo' : '○ Desactivado'
     }</span>` +
-    `<button class="btn sm ico" data-act="remove-addon" data-id="${esc(addon.id)}" ` +
-    `aria-label="Desinstalar ${name}" title="Desinstalar ${name}">🗑️</button>` +
+    `<button class="btn sm ico dng" data-act="remove-addon" data-id="${esc(addon.id)}" ` +
+    `aria-label="Desinstalar ${name}" title="Desinstalar ${name}">${IC.trash}</button>` +
     '</div></article>'
   );
 }
@@ -806,13 +806,17 @@ export function renderAddons(): string {
 
   const emptyState =
     '<div class="empty" style="padding:36px 22px">' +
-    '<div style="font-size:34px;line-height:1;margin-bottom:10px">🧩</div>' +
+    '<div style="color:var(--muted);margin-bottom:12px;display:flex;justify-content:center">' +
+    addonsGlyph(40) +
+    '</div>' +
     '<b style="font-size:16px;color:var(--text)">Todavía no hay plugins instalados</b><br>' +
     `Copia la carpeta de un plugin en <span class="mono">${esc(ADDONS_DIR)}</span> y reinicia ` +
     'el launcher: aquí verás su ficha, su estado y podrás activarlo o desactivarlo.' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:14px">' +
-    '<button class="btn sm" data-act="open-addons-dir">📁 Abrir carpeta de plugins</button>' +
-    '<button class="btn sm ghost" data-act="install-addon">➕ Instalar plugin</button>' +
+    '<button class="btn sm" data-act="open-addons-dir" style="display:inline-flex;align-items:center;gap:6px">' +
+    `${IC.folder} Abrir carpeta de plugins</button>` +
+    '<button class="btn sm ghost" data-act="install-addon" style="display:inline-flex;align-items:center;gap:6px">' +
+    `${IC.plus} Instalar plugin</button>` +
     '</div></div>';
 
   const list =
@@ -832,9 +836,12 @@ export function renderAddons(): string {
     'Gestiona los plugins que amplían PortsLauncher con herramientas de compilación, extractores de assets y aprovisionamiento local.' +
     '</div>' +
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px">' +
-    '<button class="btn sm" data-act="open-addons-dir">📁 Abrir carpeta de plugins</button>' +
-    '<button class="btn sm" data-act="install-addon">➕ Instalar plugin</button>' +
-    '<a href="https://github.com/juancarlos/PortsLauncher/blob/main/docs/PLUGINS.md" target="_blank" rel="noreferrer" class="btn sm ghost">📖 Guía para desarrolladores</a>' +
+    '<button class="btn sm" data-act="open-addons-dir" style="display:inline-flex;align-items:center;gap:6px">' +
+    `${IC.folder} Abrir carpeta de plugins</button>` +
+    '<button class="btn sm" data-act="install-addon" style="display:inline-flex;align-items:center;gap:6px">' +
+    `${IC.plus} Instalar plugin</button>` +
+    '<a href="https://github.com/juancarlos/PortsLauncher/blob/main/docs/PLUGINS.md" target="_blank" rel="noreferrer" class="btn sm ghost" style="display:inline-flex;align-items:center;gap:6px">' +
+    `${IC.book} Guía para desarrolladores</a>` +
     '</div>' +
     list
   );
@@ -1588,7 +1595,7 @@ export function artModalHTML(
     `<button class="btn sm" data-act="art-search" data-k="${kind}">Buscar en SteamGridDB</button>` +
     '</div>' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
-    '<label class="btn sm" style="display:inline-flex;align-items:center;gap:6px">📁 Subir archivo' +
+    `<label class="btn sm" style="display:inline-flex;align-items:center;gap:6px">${IC.folder} Subir archivo` +
     `<input type="file" accept="image/*" data-art="file" data-k="${kind}" hidden></label>` +
     `<input class="in-txt" id="art-url-${kind}" data-art="url" data-k="${kind}" ` +
     `value="${esc(current ?? '')}" placeholder="https://…/imagen.png" style="flex:1 1 180px" ` +
