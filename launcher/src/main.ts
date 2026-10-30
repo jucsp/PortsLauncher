@@ -402,13 +402,17 @@ function openArtModal(game: Game): void {
   currentArtGame = game;
   currentArtTab = 'logo';
   currentArtDraft = artDraftOf(game);
-  /* El buscador arranca con el título del juego; el usuario puede afinarlo. */
+  /* El buscador arranca con el mejor título comercial conocido (el nombre
+   * técnico del port no existe en SteamGridDB); el usuario puede afinarlo. */
+  const title = bestGameTitle(game);
   for (const kind of ART_KINDS) {
     currentArtGallery[kind] = [];
     currentArtStatus[kind] = '';
-    currentArtQueries[kind] = game.t;
+    currentArtQueries[kind] = title;
   }
   renderArtModal();
+  /* Con clave configurada, la galería de logos aparece sin pulsar «Buscar». */
+  if (steamgridConfigured(S.settings)) void searchArt('logo');
 }
 
 /** Cierra el modal, limpia el estado y libera el scroll de la página. */
@@ -447,7 +451,32 @@ function applyLogoScale(raw: number): void {
   if (label) label.textContent = `${scale} px`;
 }
 
-/** GET al proxy de desarrollo; devuelve el JSON ya parseado. */
+/** Texto legible del error que devuelve SteamGridDB (o el propio proxy). */
+function steamgridErrorDetail(payload: unknown): string {
+  const body = payload as { error?: unknown; errors?: unknown } | null;
+  const parts: string[] = [];
+  const push = (value: unknown): void => {
+    if (typeof value === 'string' && value.trim()) parts.push(value.trim());
+  };
+
+  push(body?.error);
+  const errors = body?.errors;
+  if (Array.isArray(errors)) errors.forEach(push);
+  else if (errors && typeof errors === 'object') {
+    for (const value of Object.values(errors as Record<string, unknown>)) push(value);
+  } else push(errors);
+
+  return parts.join(' · ');
+}
+
+/**
+ * GET al proxy de desarrollo; devuelve el JSON ya parseado.
+ *
+ * En error se lee el cuerpo de la respuesta para arrastrar el mensaje real de
+ * la API (`error`/`errors`): así el modal «Ajustar arte» y la sincronización
+ * automática distinguen clave inválida (401), rate-limit (429) o falta de
+ * clave (503) en lugar de mostrar un status escueto.
+ */
 async function steamgridJSON(endpoint: string): Promise<unknown> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   /* Clave personal del usuario (si existe) → el proxy la reenvía a la API. */
@@ -455,12 +484,20 @@ async function steamgridJSON(endpoint: string): Promise<unknown> {
     headers['x-steamgrid-key'] = S.settings.steamgridApiKey.trim();
   }
   const response = await fetch(`/api/steamgrid/${endpoint}`, { headers });
-  if (!response.ok) throw new Error(`SteamGridDB ${response.status}`);
+  if (!response.ok) {
+    let detail = '';
+    try {
+      detail = steamgridErrorDetail(await response.json());
+    } catch {
+      /* Cuerpo no JSON (proxy caído, HTML del dev server): sin detalle. */
+    }
+    throw new Error(`SteamGridDB HTTP ${response.status}: ${detail || response.statusText}`);
+  }
   return response.json();
 }
 
 /** `search/autocomplete/<q>` → primer `game_id` de SteamGridDB. */
-async function steamgridGameId(query: string): Promise<number | null> {
+async function steamgridAutocomplete(query: string): Promise<number | null> {
   const payload = (await steamgridJSON(
     `search/autocomplete/${encodeURIComponent(query)}`
   )) as { data?: Array<{ id?: number }> } | null;
@@ -470,12 +507,102 @@ async function steamgridGameId(query: string): Promise<number | null> {
   return first && typeof first.id === 'number' ? first.id : null;
 }
 
+/** Alias de la ficha que se prueban como máximo tras fallar la query inicial. */
+const STEAMGRID_ALIAS_LIMIT = 4;
+
+/** Contenido entre paréntesis o corchetes de un nombre de port («smw (… )»). */
+const PARENTHESIS_RE = /[(\[]([^)\]]{2,})[)\]]/;
+
+/** Clave de comparación de títulos: sin mayúsculas, acentos ni espacios extra. */
+function normalizeTitle(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+/** ¿El nombre parece un título comercial (no el nombre técnico del port)? */
+function isCleanTitle(value: string): boolean {
+  return value.length > 1 && value.length <= 80 && !/[()\[\]{}]/.test(value);
+}
+
+/**
+ * Variantes de búsqueda de un título, de la más fiable a la más genérica.
+ *
+ * El catálogo identifica los ports con su nombre técnico («smw (Super Mario
+ * World)», «Gen1Recomp (Pokemon Red, Blue, & Yellow)»), que SteamGridDB
+ * desconoce: solo entiende títulos comerciales. Por eso, si la query inicial no
+ * devuelve resultados, se prueban el contenido del paréntesis, los alias de la
+ * ficha y, por último, el título base sin subtítulos.
+ */
+function steamgridQueryCandidates(query: string, game?: Game | null): string[] {
+  const out: string[] = [];
+  const push = (value: unknown): void => {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return;
+    if (out.some((seen) => seen.toLowerCase() === text.toLowerCase())) return;
+    out.push(text);
+  };
+
+  push(query);
+
+  /* a) «Zelda 3 Launcher (Zelda: A Link To The Past)» → lo de dentro. */
+  const inner = query.match(PARENTHESIS_RE);
+  if (inner) push(inner[1]);
+
+  /* b) Alias de la ficha: `gameNames` son títulos comerciales y `searchAliases`
+   * añade abreviaturas. Se descartan los nombres técnicos con paréntesis. */
+  const port = game?.port;
+  const aliases = [
+    ...(Array.isArray(port?.gameNames) ? port.gameNames : []),
+    ...(Array.isArray(port?.searchAliases) ? port.searchAliases : []),
+  ].filter((value): value is string => typeof value === 'string' && isCleanTitle(value.trim()));
+
+  for (const alias of aliases.slice(0, STEAMGRID_ALIAS_LIMIT)) push(alias);
+
+  /* c) Último recurso: título sin subtítulos, marcas ni paréntesis. */
+  if (game) push(baseGameTitle(game));
+
+  return out;
+}
+
+/**
+ * Resuelve el `game_id` de SteamGridDB probando variantes del título.
+ *
+ * Los fallos de la API (401/429/503) se propagan a propósito: son condiciones
+ * globales, no del título, y quien llama decide qué hacer (el modal explica el
+ * motivo; la sincronización automática reintenta a los 10 s con un 429).
+ */
+async function steamgridGameId(query: string, game?: Game | null): Promise<number | null> {
+  for (const candidate of steamgridQueryCandidates(query, game)) {
+    const id = await steamgridAutocomplete(candidate);
+    if (id) return id;
+  }
+  return null;
+}
+
 /** Imagen tal y como la devuelve la API v2 de SteamGridDB. */
 interface SteamGridAsset {
   id?: number;
   url?: string;
   thumb?: string;
   style?: string;
+}
+
+/** Mensaje del modal según el fallo de SteamGridDB (clave, límite, red…). */
+function artSearchErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\b401\b/.test(message)) {
+    return 'Clave de SteamGridDB inválida (401). Revísala en Ajustes → Integraciones y Arte.';
+  }
+  if (/\b429\b/.test(message)) {
+    return 'SteamGridDB ha limitado las peticiones (429). Espera unos segundos y vuelve a buscar.';
+  }
+  if (/\b503\b/.test(message)) {
+    return 'Falta la clave de SteamGridDB (503). Pégala en Ajustes → Integraciones y Arte.';
+  }
+  return `No se pudo consultar SteamGridDB: ${message}`;
 }
 
 /** Busca imágenes del tipo activo y las guarda como galería. */
@@ -492,8 +619,12 @@ async function searchArt(kind: ArtKind): Promise<void> {
   renderArtModal();
 
   try {
-    /* `game_id` explícito → nos ahorramos el autocompletado. */
-    const gameId = /^\d+$/.test(query) ? Number(query) : await steamgridGameId(query);
+    /* `game_id` explícito → nos ahorramos el autocompletado. El juego abierto
+     * aporta alias y paréntesis con los que reintentar si el título técnico del
+     * port no existe en SteamGridDB. */
+    const gameId = /^\d+$/.test(query)
+      ? Number(query)
+      : await steamgridGameId(query, currentArtGame);
     if (!gameId) {
       currentArtStatus[kind] = `Sin resultados para «${query}» en SteamGridDB.`;
       renderArtModal();
@@ -522,8 +653,7 @@ async function searchArt(kind: ArtKind): Promise<void> {
       ? `${currentArtGallery[kind].length} imágenes de SteamGridDB (juego #${gameId}).`
       : 'SteamGridDB no tiene imágenes de este tipo para ese juego.';
   } catch (error) {
-    currentArtStatus[kind] =
-      'No se pudo consultar SteamGridDB. Revisa la clave STEAMGRID_API_KEY del servidor.';
+    currentArtStatus[kind] = artSearchErrorMessage(error);
     console.warn('[PortsLauncher] SteamGridDB:', error);
   }
 
@@ -775,6 +905,37 @@ function baseGameTitle(game: Game): string {
 }
 
 /**
+ * Mejor título conocido para buscar arte en SteamGridDB.
+ *
+ * Prioriza un título comercial sobre el nombre técnico del port, por este orden:
+ *   1. Un `gameNames` limpio («The Legend of Zelda: Majora's Mask»), siempre que
+ *      no repita el nombre técnico del port ni lleve marcas de port entre
+ *      paréntesis («Auto-TMC (Zelda: The Minish Cap)»).
+ *   2. El contenido del paréntesis del nombre del port, que en el catálogo casi
+ *      siempre es el título real del juego.
+ *   3. `baseGameTitle()`: nombre técnico sin subtítulo, paréntesis ni marcas.
+ */
+function bestGameTitle(game: Game): string {
+  const port = game.port;
+  const technical = `${port?.name ?? ''}`.trim() || `${game.t ?? ''}`.trim();
+  const technicalKey = normalizeTitle(technical);
+
+  const commercial = (Array.isArray(port?.gameNames) ? port.gameNames : [])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .find((value) => isCleanTitle(value) && normalizeTitle(value) !== technicalKey);
+  if (commercial) return commercial;
+
+  /* «smw (Super Mario World)» → «Super Mario World». */
+  for (const raw of [technical, `${game.t ?? ''}`.trim()]) {
+    const found = raw.match(PARENTHESIS_RE)?.[1]?.trim() ?? '';
+    if (found.length > 1) return found;
+  }
+
+  return baseGameTitle(game);
+}
+
+/**
  * Pinta el estado del motor en Ajustes → Integraciones.
  *
  * Es un no-op cuando el contenedor no está en el DOM (el usuario está en otra
@@ -855,7 +1016,9 @@ async function steamgridFirstArtUrl(kind: ArtKind, gameId: number): Promise<stri
  * imagen: el juego se da por intentado y el bucle pasa al siguiente.
  */
 async function syncGameArt(game: Game): Promise<boolean> {
-  const gameId = await steamgridGameId(baseGameTitle(game));
+  /* Mismo criterio que el modal: título comercial + alias de la ficha, para que
+   * los ports con nombre técnico («smw (… )») también encuentren su arte. */
+  const gameId = await steamgridGameId(bestGameTitle(game), game);
   if (!gameId) return false;
 
   /* Secuencial a propósito: tres peticiones simultáneas por juego agotan el
@@ -1134,6 +1297,11 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
     if (!isArtKind(kind)) return;
     currentArtTab = kind;
     renderArtModal();
+    /* Pestaña sin galería: se pide sola (si hay clave) para no obligar a pulsar
+     * «Buscar» en cada sección al cambiar entre logo, fondo y carátula. */
+    if (steamgridConfigured(S.settings) && currentArtGallery[kind].length === 0) {
+      void searchArt(kind);
+    }
   },
   'set-anchor': (d) => {
     if (!currentArtDraft || typeof d.k !== 'string') return;
@@ -1281,6 +1449,19 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   const target = e.target as HTMLElement | null;
+  /* Buscador del modal «Ajustar arte»: Intro lanza la búsqueda sin tener que
+   * llegar al botón. Se lee el valor del campo porque el evento `input` puede
+   * no haberse procesado todavía (autocompletado, pegado con ratón). */
+  if (e.key === 'Enter' && target?.matches('input[data-art="query"]')) {
+    const input = target as HTMLInputElement;
+    const kind = input.dataset.k;
+    if (isArtKind(kind)) {
+      e.preventDefault();
+      currentArtQueries[kind] = input.value;
+      void searchArt(kind);
+    }
+    return;
+  }
   if (
     (e.key === 'Enter' || e.key === ' ') &&
     target?.matches('[data-act]') &&

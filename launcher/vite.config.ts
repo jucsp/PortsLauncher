@@ -138,7 +138,13 @@ async function steamgridProxy(
     return;
   }
 
-  if (!endpoint || !/^[A-Za-z0-9/_.,%-]+$/.test(endpoint)) {
+  /* Los títulos del catálogo llevan paréntesis, dos puntos, apóstrofes y
+   * ampersands («search/autocomplete/Zelda%3A%20Majora's%20Mask»,
+   * «…/%28Zelda%3A%20Twilight%20Princess%29»): la antigua lista blanca de
+   * caracteres los rechazaba con un 400 antes de llegar a la API. Ahora solo se
+   * bloquea lo peligroso: travesía de directorios (`..`) y caracteres de
+   * control (inyección de cabeceras / corte de línea). */
+  if (!endpoint || endpoint.includes('..') || /[\r\n\x00]/.test(endpoint)) {
     sendJSON(res, 400, { success: false, error: 'Endpoint de SteamGridDB no válido.' });
     return;
   }
