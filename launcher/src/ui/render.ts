@@ -59,7 +59,8 @@ import { AI, DEVT, DEV_LEGEND, MEDIA, PLAT, PLAT_KEYS, PLATMEDIA, STRAT } from '
 import type { PlatKey } from './platforms';
 import { TO_PLATFORM } from './platforms';
 import { B, D, NAVMEM, R, S, updateCount } from './state';
-import type { Route, SortKey } from './state';
+import type { DetailTab, Route, SortKey } from './state';
+import { ensureReadme, readmeBoxHTML } from './readme';
 
 /* -------------------------------------------------------------------------- */
 /* Navegación                                                                 */
@@ -1171,8 +1172,9 @@ export function renderGame(id: string): string {
 
   const status = statusOf(game);
   const tab = D.tab;
-  const tabs: Array<['sum' | 'ver' | 'src', string]> = [
+  const tabs: Array<[DetailTab, string]> = [
     ['sum', 'Resumen'],
+    ['inst', 'Instalación'],
     ['ver', 'Versiones'],
     ['src', 'Fuentes'],
   ];
@@ -1180,6 +1182,11 @@ export function renderGame(id: string): string {
   let body = '';
 
   if (tab === 'sum') {
+    body =
+      `<div id="readme-box" class="readme-body" data-repo="${esc(game.repo ?? '')}">${readmeBoxHTML(game.repo)}</div>`;
+  }
+
+  if (tab === 'inst') {
     body =
       '<section style="display:flex;flex-direction:column;gap:12px">' +
       '<h2 style="font-size:20px">Cómo se instalará</h2>' +
@@ -1303,12 +1310,7 @@ export function renderGame(id: string): string {
       `${esc(game.t)}</h1></div>`;
 
   /* Botón principal de la cabecera según la estrategia del port. */
-  const heroAction =
-    game.strategy === 'external'
-      ? '<button class="btn lg pri" data-act="ext">Abrir página del proyecto</button>'
-      : game.strategy === 'source-only' && !game.inst
-        ? '<button class="btn lg" data-act="toast" data-m="Guía de compilación (simulada)">Ver guía de compilación</button>'
-        : cta;
+  const heroAction = cta;
 
   /* Botón de volver dinámico: la ficha recuerda si el usuario venía del
    * Catálogo o de la Biblioteca (`NAVMEM`), de modo que «←» devuelve siempre al
@@ -1321,7 +1323,7 @@ export function renderGame(id: string): string {
     'style="background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px">' +
     `${backLabel}</a>`;
 
-  return paintMain(
+  const painted = paintMain(
     '<div class="dhero">' +
     /* --- capa 0: fondo desenfocado a sangre --------------------------------- */
     (heroCss
@@ -1417,6 +1419,8 @@ export function renderGame(id: string): string {
     '<div class="muted" style="font-size:12px">La descarga sale siempre del repositorio original del proyecto.</div></div>' +
     '</aside></div>'
   );
+  if (tab === 'sum') ensureReadme(game.repo);
+  return painted;
 }
 
 /* -------------------------------------------------------------------------- */

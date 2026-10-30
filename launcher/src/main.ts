@@ -21,7 +21,7 @@ import { DEFAULT_SETTINGS, LEGACY_VIEW_ALIASES } from './services/types';
 import { catalogService } from './services/catalogService';
 import { libraryService } from './services/libraryService';
 import type { Game } from './ui/model';
-import { toGame, statusOf, esc, styleFor } from './ui/model';
+import { toGame, statusOf, esc, styleFor, folderOf } from './ui/model';
 import { mediaHTML } from './ui/media';
 import { MEDIA, PLAT } from './ui/platforms';
 import { B, D, NAVMEM, R, S, setSnapshot, updateCount } from './ui/state';
@@ -322,11 +322,69 @@ function play(id: string): void {
   renderLayer();
 }
 
+/** Instalación real: descarga/clona el port vía `/api/install` (middleware de Vite). */
+async function installReal(id: string): Promise<void> {
+  const game = S.byId.get(id);
+  if (!game || PROG[id] != null) return;
+  PROG[id] = 0;
+  draw();
+  const setStage = (text: string, pct: number): void => {
+    PROG[id] = pct;
+    document.querySelectorAll<HTMLElement>(`[data-prog="${id}"]`).forEach((e) => {
+      e.style.width = pct + '%';
+    });
+    document.querySelectorAll<HTMLElement>(`[data-stage="${id}"]`).forEach((e) => {
+      e.textContent = text;
+    });
+  };
+  setStage('Descargando…', 10);
+  /* Avance lento mientras el servidor trabaja (sin superar el 90 %). */
+  const iv = setInterval(() => {
+    const cur = PROG[id] ?? 0;
+    setStage(cur < 60 ? 'Descargando…' : 'Instalando…', Math.min(90, cur + 2 + Math.random() * 4));
+  }, 400);
+  try {
+    const folderName = folderOf(game.t);
+    const res = await fetch('/api/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pid: game.id,
+        repo: game.repo,
+        name: game.t,
+        folderName,
+        dest: game.dir,
+      }),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      installDir?: string;
+      error?: string;
+    };
+    if (!res.ok || !data.ok) throw new Error(data.error || `Error ${res.status}`);
+    clearInterval(iv);
+    setStage('Instalando…', 100);
+    delete PROG[id];
+    game.inst = true;
+    game.v = game.lv;
+    if (data.installDir) game.dir = data.installDir;
+    saveState();
+    draw();
+    if (game.rom && !game.romOk) openRom(id, true);
+    else toast(game.t + ' instalado');
+  } catch (error) {
+    clearInterval(iv);
+    delete PROG[id];
+    draw();
+    toast('No se pudo instalar ' + game.t + ': ' + (error instanceof Error ? error.message : String(error)));
+  }
+}
+
 function primaryAction(id: string): void {
   const game = S.byId.get(id);
   if (!game) return;
   const st = statusOf(game);
-  if (st.act === 'install') simulate(id, 'install');
+  if (st.act === 'install') void installReal(id);
   else if (st.act === 'update') simulate(id, 'update');
   else if (st.act === 'rom') openRom(id, false);
   else if (st.act === 'play') play(id);

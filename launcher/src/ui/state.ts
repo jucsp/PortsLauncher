@@ -17,7 +17,7 @@ import type { Game } from './model';
 import { statusOf } from './model';
 
 export type Route = 'home' | 'library' | 'catalog' | 'updates' | 'settings' | 'game' | 'addons';
-export type DetailTab = 'sum' | 'ver' | 'src';
+export type DetailTab = 'sum' | 'inst' | 'ver' | 'src';
 export type SortKey = 'name' | 'status' | 'plat' | 'ver' | 'recent';
 export type FilterKey = 'all' | 'ready' | 'rom' | 'upd' | 'new' | 'inst';
 

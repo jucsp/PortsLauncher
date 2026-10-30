@@ -473,18 +473,6 @@ export function statusOf(game: Game): Status {
     };
   }
   if (!game.inst) {
-    if (game.strategy === 'external') {
-      return { k: 'ext', label: 'Externo', color: 'var(--muted)', cta: 'Abrir página', act: 'ext' };
-    }
-    if (BUILD_STRATEGIES.has(game.strategy)) {
-      return {
-        k: 'build',
-        label: 'Requiere compilar',
-        color: 'var(--muted)',
-        cta: 'Ver guía',
-        act: 'detail',
-      };
-    }
     return {
       k: 'new',
       label: 'Sin instalar',

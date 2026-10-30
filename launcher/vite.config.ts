@@ -3,6 +3,8 @@ import type { Plugin } from 'vite';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 /**
@@ -181,6 +183,184 @@ function steamgridProxyPlugin(): Plugin {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Instalación real (`/api/install`, solo desarrollo / preview)               */
+/* -------------------------------------------------------------------------- */
+
+const execFileAsync = promisify(execFile);
+
+/** Raíz de datos del launcher: `~/PortsLauncher`. */
+const LAUNCHER_HOME = path.join(os.homedir(), 'PortsLauncher');
+
+interface InstallRequest {
+  pid?: string;
+  repo?: string | null;
+  name?: string;
+  folderName?: string;
+  dest?: string;
+}
+
+interface GithubAsset {
+  name: string;
+  browser_download_url: string;
+}
+
+/** Lee y parsea el cuerpo JSON de la petición (máx. 64 KiB). */
+function readJSON(req: IncomingMessage): Promise<InstallRequest> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 65536) {
+        reject(new Error('Cuerpo demasiado grande.'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as InstallRequest);
+      } catch {
+        reject(new Error('JSON no válido.'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Puntúa un asset de release para el SO actual. Devuelve -1 si no es
+ * utilizable (otro sistema operativo, firma, checksum, instalador…).
+ */
+function scoreAsset(asset: GithubAsset): number {
+  const n = asset.name.toLowerCase();
+  const archive = /\.(zip|tar\.gz|tgz|appimage)$/.test(n);
+  if (!archive) return -1;
+  if (/\.(sha\d*|sig|asc|txt|sbom)$/.test(n)) return -1;
+  const platform = process.platform;
+  const isWin = /win(dows|32|64)?\b|\.exe/.test(n);
+  const isMac = /mac|darwin|osx/.test(n);
+  const isLinux = /linux|appimage|x86_64|amd64/.test(n);
+  if (platform === 'linux' && (isWin || isMac)) return -1;
+  if (platform === 'win32' && (isLinux && !isWin)) return -1;
+  if (platform === 'darwin' && (isWin || /linux|appimage/.test(n))) return -1;
+  let score = 1;
+  if (platform === 'linux' && /linux/.test(n)) score += 4;
+  if (platform === 'linux' && n.endsWith('.appimage')) score += 3;
+  if (/x86_64|amd64|x64/.test(n)) score += 2;
+  if (/arm|aarch64/.test(n) && process.arch !== 'arm64') score -= 5;
+  return score;
+}
+
+/** Descarga `url` a `file` siguiendo redirecciones. */
+async function downloadTo(url: string, file: string): Promise<void> {
+  const res = await fetch(url, { headers: { 'User-Agent': 'PortsLauncher' } });
+  if (!res.ok || !res.body) throw new Error(`Descarga fallida (${res.status}).`);
+  fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+}
+
+/** Instala el port: último release empaquetado o, si no hay, `git clone`. */
+async function installPort(body: InstallRequest): Promise<{ installDir: string; method: string }> {
+  const folder = body.folderName ?? '';
+  if (!/^[A-Za-z0-9._-]+$/.test(folder) || folder.startsWith('.')) {
+    throw new Error('folderName no válido.');
+  }
+  const repo = body.repo ?? null;
+  if (repo !== null && !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)) {
+    throw new Error('repo no válido.');
+  }
+
+  /* El destino se fija en el servidor: `dest` solo es informativo. */
+  const installDir = path.join(LAUNCHER_HOME, 'ports', folder);
+  const romsDir = path.join(LAUNCHER_HOME, 'roms', folder);
+  fs.mkdirSync(installDir, { recursive: true });
+  fs.mkdirSync(romsDir, { recursive: true });
+  if (!repo) return { installDir, method: 'folder' };
+
+  let asset: GithubAsset | null = null;
+  try {
+    const rel = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'PortsLauncher' },
+    });
+    if (rel.ok) {
+      const data = (await rel.json()) as { assets?: GithubAsset[] };
+      const ranked = (data.assets ?? [])
+        .map((a) => ({ a, score: scoreAsset(a) }))
+        .filter((x) => x.score >= 0)
+        .sort((x, y) => y.score - x.score);
+      asset = ranked[0]?.a ?? null;
+    }
+  } catch {
+    asset = null;
+  }
+
+  if (asset) {
+    const tmp = path.join(os.tmpdir(), `portslauncher-${process.pid}-${Date.now()}-${path.basename(asset.name)}`);
+    try {
+      await downloadTo(asset.browser_download_url, tmp);
+      const lower = asset.name.toLowerCase();
+      if (lower.endsWith('.zip')) {
+        await execFileAsync('unzip', ['-o', tmp, '-d', installDir]);
+      } else if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
+        await execFileAsync('tar', ['-xzf', tmp, '-C', installDir]);
+      } else {
+        const target = path.join(installDir, path.basename(asset.name));
+        fs.copyFileSync(tmp, target);
+        fs.chmodSync(target, 0o755);
+      }
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
+    return { installDir, method: 'release' };
+  }
+
+  /* Sin release empaquetado: clon superficial en la carpeta del port. */
+  const empty = fs.readdirSync(installDir).length === 0;
+  if (!empty) return { installDir, method: 'existing' };
+  await execFileAsync('git', ['clone', '--depth', '1', `https://github.com/${repo}.git`, installDir]);
+  return { installDir, method: 'clone' };
+}
+
+/** Middleware `POST /api/install`. */
+async function installMiddleware(
+  req: IncomingMessage,
+  res: ServerResponse,
+  next: (err?: unknown) => void
+): Promise<void> {
+  const url = (req.url ?? '').split('?')[0];
+  if (url !== '/api/install') {
+    next();
+    return;
+  }
+  if (req.method !== 'POST') {
+    sendJSON(res, 405, { ok: false, error: 'Usa POST.' });
+    return;
+  }
+  try {
+    const body = await readJSON(req);
+    const result = await installPort(body);
+    sendJSON(res, 200, { ok: true, ...result });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    sendJSON(res, 500, { ok: false, error: detail });
+  }
+}
+
+/** Plugin que enchufa `/api/install` tanto en `vite` como en `vite preview`. */
+function installPlugin(): Plugin {
+  return {
+    name: 'portshub-install',
+    configureServer(server) {
+      server.middlewares.use(installMiddleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(installMiddleware);
+    },
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /* Configuración                                                              */
 /* -------------------------------------------------------------------------- */
 
@@ -188,7 +368,7 @@ export default defineConfig({
   root: '.',
   publicDir: 'public',
 
-  plugins: [steamgridProxyPlugin()],
+  plugins: [steamgridProxyPlugin(), installPlugin()],
 
   build: {
     outDir: 'dist',
