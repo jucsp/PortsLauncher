@@ -758,6 +758,15 @@ export interface Settings {
    * launcher pinta el arte generativo procedural de cada soporte.
    */
   steamgridApiKey?: string;
+  /**
+   * `true` cuando el usuario activó la descarga automática del catálogo.
+   *
+   * Con el flag encendido, `main.ts` recorre en segundo plano los juegos que
+   * aún no tienen carátula propia y consulta SteamGridDB de forma progresiva
+   * (con protección de rate-limit) para guardarla en `customArt`. Con el flag
+   * apagado solo se descarga arte a mano desde el modal «Ajustar arte».
+   */
+  steamgridAutoSync?: boolean;
   /** `true` cuando el asistente de bienvenida ya se completó (no se repite). */
   onboardingDone?: boolean;
 }
@@ -775,6 +784,8 @@ export const DEFAULT_SETTINGS: Settings = {
   romMode: 'link',
   /* Integraciones: sin clave, el arte generativo hace todo el trabajo. */
   steamgridApiKey: '',
+  /* La sincronización masiva del catálogo es opt-in: gasta cuota de la API. */
+  steamgridAutoSync: false,
   onboardingDone: false,
 };
 

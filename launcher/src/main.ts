@@ -726,6 +726,226 @@ async function testSteamgrid(): Promise<void> {
   toast('✗ Clave inválida o error al conectar con SteamGridDB');
 }
 
+/* -------------------------------------------------------------------------- */
+/* Sincronización automática del catálogo                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Descarga masiva de arte en segundo plano (interruptor de Ajustes).
+ *
+ * Recorre `S.games` saltándose los juegos que ya tienen carátula propia en
+ * `customArt`, y por cada pendiente consulta el autocompletado de SteamGridDB y
+ * después sus endpoints de grid (carátula), hero (fondo) y logo. El resultado
+ * se guarda con `libraryService.setCustomArt`, así que sobrevive a recargas y
+ * convive con el arte elegido a mano (que nunca se sobrescribe).
+ *
+ * El recorrido es pausado a propósito: un juego cada 1,5 s y, si la API
+ * responde 429, una espera de 10 s antes de reintentar el mismo juego.
+ */
+
+/** Intervalo entre juegos (protección de rate-limit de la API). */
+const AUTO_SYNC_INTERVAL_MS = 1500;
+
+/** Espera antes de reintentar el mismo juego cuando la API responde 429. */
+const AUTO_SYNC_RATE_LIMIT_MS = 10_000;
+
+/** ¿Hay un recorrido en curso? Evita dos bucles simultáneos. */
+let autoSyncRunning = false;
+
+/** `setTimeout` del próximo juego, o `null` si no hay nada programado. */
+let autoSyncTimer: number | null = null;
+
+/** Progreso que pinta `updateSyncProgressUI()` en `#steamgrid-sync-box`. */
+let autoSyncProgress = { completed: 0, total: 0, current: '', status: '' };
+
+/**
+ * Juegos ya intentados en este recorrido (con o sin arte encontrado).
+ *
+ * Sin este registro, un juego que SteamGridDB no conoce se reintentaría para
+ * siempre y el bucle nunca avanzaría al siguiente. Se vacía en cada arranque
+ * del recorrido, así que reactivar el interruptor reintenta los fallidos.
+ */
+const autoSyncTried = new Set<string>();
+
+/** Título con el que buscar en SteamGridDB (sin subtítulos ni paréntesis). */
+function baseGameTitle(game: Game): string {
+  const raw = `${game.port?.name ?? ''}`.trim() || game.t;
+  const head = raw.split(/[:–—|]/)[0] || raw;
+  return head.replace(/\s*[([].*$/, '').replace(/[™®©]/g, '').trim() || raw;
+}
+
+/**
+ * Pinta el estado del motor en Ajustes → Integraciones.
+ *
+ * Es un no-op cuando el contenedor no está en el DOM (el usuario está en otra
+ * pantalla), de modo que se puede llamar sin condiciones desde el bucle.
+ */
+function updateSyncProgressUI(): void {
+  const box = document.getElementById('steamgrid-sync-box');
+  if (!box) return;
+
+  const { completed, total, current, status } = autoSyncProgress;
+  const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((completed / total) * 100))) : 0;
+  const enabled = !!S.settings.steamgridAutoSync;
+  const flag = enabled
+    ? `● Sincronizando en segundo plano: ${esc(current || 'preparando…')}...`
+    : '○ Sincronización automática desactivada.';
+
+  box.innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">' +
+    `<span class="muted" style="font-size:12.5px">Sincronizados: ${completed} / ${total} juegos</span>` +
+    `<span class="mono muted" style="font-size:12px">${pct}%</span>` +
+    '</div>' +
+    '<div style="height:6px;border-radius:999px;background:var(--line);overflow:hidden">' +
+    `<i style="display:block;height:100%;width:${pct}%;background:var(--accent2);transition:width .3s"></i>` +
+    '</div>' +
+    (status ? `<div class="muted" style="font-size:12px">${esc(status)}</div>` : '') +
+    `<div style="font-size:12px;color:${enabled ? 'var(--accent2)' : 'var(--muted)'}">${flag}</div>`;
+}
+
+/** Detiene el recorrido y cancela la siguiente vuelta programada. */
+function stopAutoSync(): void {
+  autoSyncRunning = false;
+  if (autoSyncTimer !== null) {
+    clearTimeout(autoSyncTimer);
+    autoSyncTimer = null;
+  }
+}
+
+/** Programa la siguiente vuelta del bucle (`delay` ms). */
+function scheduleAutoSync(delay: number): void {
+  if (autoSyncTimer !== null) clearTimeout(autoSyncTimer);
+  autoSyncTimer = window.setTimeout(() => {
+    autoSyncTimer = null;
+    void runAutoSyncLoop();
+  }, delay);
+}
+
+/** Arranca (o reinicia) un recorrido completo del catálogo. */
+function startAutoSync(): void {
+  /* Ya hay un recorrido vivo (p. ej. el del arranque): no se duplica. */
+  if (autoSyncRunning) return;
+  stopAutoSync();
+  autoSyncTried.clear();
+  autoSyncRunning = true;
+  autoSyncProgress = {
+    completed: 0,
+    total: S.games.length,
+    current: '',
+    status: 'Preparando la sincronización…',
+  };
+  updateSyncProgressUI();
+  void runAutoSyncLoop();
+}
+
+/** Primera URL útil de un endpoint de arte de SteamGridDB para un `game_id`. */
+async function steamgridFirstArtUrl(kind: ArtKind, gameId: number): Promise<string | null> {
+  const payload = (await steamgridJSON(STEAMGRID_ENDPOINTS[kind](gameId))) as {
+    data?: SteamGridAsset[];
+  } | null;
+  const list = payload && Array.isArray(payload.data) ? payload.data : [];
+  const found = list.find((item) => typeof item?.url === 'string' && !!item.url.trim());
+  return found && typeof found.url === 'string' ? found.url : null;
+}
+
+/**
+ * Descarga y guarda el arte de un juego concreto.
+ *
+ * Devuelve `false` cuando SteamGridDB no reconoce el título o no tiene ninguna
+ * imagen: el juego se da por intentado y el bucle pasa al siguiente.
+ */
+async function syncGameArt(game: Game): Promise<boolean> {
+  const gameId = await steamgridGameId(baseGameTitle(game));
+  if (!gameId) return false;
+
+  /* Secuencial a propósito: tres peticiones simultáneas por juego agotan el
+   * rate-limit de la API mucho antes que hacerlas en serie. */
+  const coverUrl = await steamgridFirstArtUrl('cover', gameId);
+  const heroUrl = await steamgridFirstArtUrl('hero', gameId);
+  const logoUrl = await steamgridFirstArtUrl('logo', gameId);
+  if (!coverUrl && !heroUrl && !logoUrl) return false;
+
+  libraryService.setCustomArt(game.id, { coverUrl, heroUrl, logoUrl });
+  /* El modelo de vista (`Game`) se muta en sitio: `S.byId` sigue siendo válido. */
+  refreshGameArt(game);
+  return true;
+}
+
+/**
+ * Una vuelta del motor: procesa **un** juego y programa la siguiente.
+ *
+ * Se detiene sola si el interruptor se apagó, si desapareció la clave o si ya
+ * no queda ningún juego sin carátula.
+ */
+async function runAutoSyncLoop(): Promise<void> {
+  if (!S.settings.steamgridAutoSync) {
+    stopAutoSync();
+    autoSyncProgress.status = 'Sincronización automática desactivada.';
+    updateSyncProgressUI();
+    return;
+  }
+  if (!steamgridConfigured(S.settings)) {
+    stopAutoSync();
+    autoSyncProgress.status = 'Falta la clave de SteamGridDB: sincronización detenida';
+    updateSyncProgressUI();
+    return;
+  }
+
+  autoSyncRunning = true;
+  const pending = S.games.filter(
+    (game) => !libraryService.getCustomArt(game.id)?.coverUrl && !autoSyncTried.has(game.id)
+  );
+  autoSyncProgress.total = S.games.length;
+  autoSyncProgress.completed = S.games.length - pending.length;
+
+  if (pending.length === 0) {
+    stopAutoSync();
+    autoSyncProgress.current = '';
+    autoSyncProgress.completed = S.games.length;
+    autoSyncProgress.status = '✓ Catálogo sincronizado al 100%';
+    updateSyncProgressUI();
+    return;
+  }
+
+  const game = pending[0];
+  autoSyncTried.add(game.id);
+  autoSyncProgress.current = game.t;
+  autoSyncProgress.status = `Buscando arte de ${game.t}…`;
+  updateSyncProgressUI();
+
+  let saved = false;
+  try {
+    saved = await syncGameArt(game);
+    autoSyncProgress.status = saved
+      ? `Carátula guardada: ${game.t}`
+      : `Sin arte en SteamGridDB: ${game.t}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/\b429\b/.test(message)) {
+      /* Límite de peticiones: se reintenta el MISMO juego 10 s después. */
+      autoSyncTried.delete(game.id);
+      autoSyncProgress.status = 'SteamGridDB ha limitado las peticiones: reintentando en 10 s';
+      updateSyncProgressUI();
+      scheduleAutoSync(AUTO_SYNC_RATE_LIMIT_MS);
+      return;
+    }
+    console.warn('[PortsLauncher] Sincronización automática:', error);
+    autoSyncProgress.status = `No se pudo descargar el arte de ${game.t}`;
+  }
+
+  if (saved) {
+    autoSyncProgress.completed = Math.min(autoSyncProgress.total, autoSyncProgress.completed + 1);
+  }
+  updateSyncProgressUI();
+
+  /* El usuario pudo apagar el interruptor mientras se descargaba el arte. */
+  if (!S.settings.steamgridAutoSync) {
+    stopAutoSync();
+    return;
+  }
+  scheduleAutoSync(AUTO_SYNC_INTERVAL_MS);
+}
+
 const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   open: (d) => d.id && go('game', d.id),
   nav: (d) => d.to && go(d.to as Route),
@@ -969,6 +1189,32 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
 
   'test-steamgrid': () => {
     void testSteamgrid();
+  },
+  /* Interruptor de descarga masiva del catálogo (Ajustes → Integraciones). */
+  'toggle-auto-art': () => {
+    /* Sin clave (ni del usuario ni del proxy) no hay nada que descargar: el
+     * interruptor no se enciende para no prometer una integración inexistente. */
+    if (!S.settings.steamgridAutoSync && !steamgridConfigured(S.settings)) {
+      toast('Configura tu clave de SteamGridDB primero');
+      return;
+    }
+
+    S.settings.steamgridAutoSync = !S.settings.steamgridAutoSync;
+    saveState();
+    /* Persistencia en la biblioteca local (`ports.json`), además de la copia
+     * rápida de `saveState()` en `localStorage`. */
+    libraryService.updateSettings({ steamgridAutoSync: S.settings.steamgridAutoSync });
+    renderSettings();
+
+    if (S.settings.steamgridAutoSync) {
+      startAutoSync();
+      toast('Sincronización automática activada en segundo plano');
+    } else {
+      stopAutoSync();
+      autoSyncProgress.status = 'Sincronización automática pausada';
+      updateSyncProgressUI();
+      toast('Sincronización automática pausada');
+    }
   },
 
   /* -------------------- addons y extensiones ------------------------------ */
@@ -1228,6 +1474,11 @@ export function draw(fresh = false): void {
       e.style.width = PROG[id] + '%';
     });
   });
+
+  /* Ajustes → Integraciones: el progreso de la sincronización automática vive
+   * en un contenedor que sólo este módulo sabe rellenar. Tras repintar la
+   * pantalla se vuelve a inyectar (no-op si el contenedor no está en el DOM). */
+  updateSyncProgressUI();
 }
 
 function saveState(): void {
@@ -1339,8 +1590,12 @@ async function init(): Promise<void> {
 
   route();
 
-  /* Sonda del proxy de SteamGridDB: no bloquea el arranque. */
-  void probeSteamgridStatus();
+  /* Sonda del proxy de SteamGridDB: no bloquea el arranque. Cuando termina, se
+   * arranca la sincronización automática si el usuario la dejó activa (la sonda
+   * decide si hay clave en el servidor de desarrollo, no solo en Ajustes). */
+  void probeSteamgridStatus().then(() => {
+    if (S.settings.steamgridAutoSync) startAutoSync();
+  });
 
   /* Primer arranque: asistente de bienvenida (3 pasos). */
   if (!S.settings.onboardingDone) {

@@ -1593,7 +1593,28 @@ export function renderSettings(): string {
     '<div class="muted" style="font-size:12px">Consigue tu clave API personal y gratuita en ' +
     '<a href="https://www.steamgriddb.com/profile/preferences/api" target="_blank" ' +
     'rel="noreferrer noopener" style="color:var(--accent2)">steamgriddb.com/profile/preferences/api</a>.' +
-    '</div></section>';
+    '</div>' +
+    /* Descarga masiva del catálogo: el motor vive en `main.ts`, que inyecta el
+     * estado y la barra de progreso en `#steamgrid-sync-box` (de ahí que el
+     * contenedor se pinte vacío aquí). */
+    '<div class="box" style="margin-top:12px">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px">' +
+    '<div>' +
+    '<b style="font-size:15px">Descargar carátulas del catálogo automáticamente</b>' +
+    '<div class="muted" style="font-size:12.5px;max-width:620px;margin-top:3px">' +
+    'Consulta SteamGridDB en segundo plano de forma progresiva (con protección de rate-limit) ' +
+    'para descargar y guardar localmente las carátulas, fondos y logotipos de los 1.166 juegos. ' +
+    'Si se desactiva, solo se descargará arte manualmente.' +
+    '</div>' +
+    '</div>' +
+    `<button class="tog" role="switch" aria-checked="${!!settings.steamgridAutoSync}" ` +
+    'data-act="toggle-auto-art" aria-label="Descargar carátulas automáticamente"><i></i></button>' +
+    '</div>' +
+    '<div id="steamgrid-sync-box" style="margin-top:12px;display:flex;flex-direction:column;gap:6px">' +
+    '<!-- Estado y progreso dinámico inyectado por main.ts -->' +
+    '</div>' +
+    '</div>' +
+    '</section>';
 
   const indexSection =
     /* ÍNDICE */

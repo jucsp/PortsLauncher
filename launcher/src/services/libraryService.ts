@@ -279,6 +279,9 @@ function sanitizeSettings(raw: unknown): Settings {
     settings.steamgridApiKey = raw['steamgridApiKey'].trim();
   }
   settings.onboardingDone = raw['onboardingDone'] === true;
+  /* Descarga automática del catálogo en segundo plano (interruptor de Ajustes):
+   * sólo un `true` explícito la activa, cualquier otro valor la deja apagada. */
+  settings.steamgridAutoSync = raw['steamgridAutoSync'] === true;
 
   const mediaMap = raw['mediaMap'];
   if (isObject(mediaMap)) {
