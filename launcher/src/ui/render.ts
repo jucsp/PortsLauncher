@@ -220,12 +220,30 @@ function searchBlobOf(game: Game): string {
  *
  * La BIBLIOTECA es el único ámbito restringido: solo lo instalado.
  */
+export function supportsDest(game: Game, dest: 'all' | 'Linux' | 'Windows'): boolean {
+  if (dest === 'all') return true;
+  const norm = dest.toLowerCase();
+  if (game.targets.some((t) => t.toLowerCase() === norm)) return true;
+  if ((game.port.targetPlatforms ?? []).some((t) => String(t).toLowerCase() === norm)) return true;
+  const raw = game.port.raw as Record<string, unknown> | undefined;
+  if (norm === 'linux') {
+    if (raw?.linuxCompatible || raw?.linuxUrl || raw?.linuxAsset) return true;
+    if (game.port.assetHints?.linux) return true;
+  } else if (norm === 'windows') {
+    if (raw?.windowsAsset) return true;
+    if (game.port.assetHints?.windows) return true;
+  }
+  return false;
+}
+
 export function filtered(kind: 'library' | 'catalog'): Game[] {
   const query = B.q.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const list = S.games.filter((game) => {
     if (kind === 'library' && !game.inst) return false;
     if (B.plat !== 'all' && game.pl !== B.plat) return false;
     if (B.dev !== 'all' && game.dev.k !== B.dev) return false;
+    const activeDest = B.dest ?? 'all';
+    if (activeDest !== 'all' && !supportsDest(game, activeDest)) return false;
     if (query && !searchBlobOf(game).includes(query)) return false;
 
     switch (B.filter) {
@@ -495,10 +513,12 @@ export function controlsHTML(kind: 'library' | 'catalog'): string {
     '</select>';
 
   /* 2. Sistema de destino de la descarga. */
+  const activeDest = B.dest ?? 'all';
   const destSelect =
     '<select class="sel" id="destsel" aria-label="Sistema de destino">' +
-    `<option value="Linux" ${S.settings.dest === 'Linux' ? 'selected' : ''}>Destino: Linux</option>` +
-    `<option value="Windows" ${S.settings.dest === 'Windows' ? 'selected' : ''}>Destino: Windows</option>` +
+    `<option value="all" ${activeDest === 'all' ? 'selected' : ''}>Destino: Todos</option>` +
+    `<option value="Linux" ${activeDest === 'Linux' ? 'selected' : ''}>Destino: Linux</option>` +
+    `<option value="Windows" ${activeDest === 'Windows' ? 'selected' : ''}>Destino: Windows</option>` +
     '</select>';
 
   /* 3. Plataforma de origen. */

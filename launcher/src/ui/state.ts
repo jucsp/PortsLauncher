@@ -44,6 +44,7 @@ export interface BrowseState {
   filter: FilterKey;
   plat: PlatKey | 'all';
   dev: DevKey | 'all';
+  dest: 'all' | 'Linux' | 'Windows';
   sort: SortKey;
   dir: 1 | -1;
 }
@@ -67,6 +68,7 @@ export const B: BrowseState = {
   filter: 'all',
   plat: 'all',
   dev: 'all',
+  dest: 'all',
   sort: 'name',
   dir: 1,
 };

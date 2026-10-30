@@ -1208,6 +1208,7 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   },
   dest: () => {
     S.settings.dest = S.settings.dest === 'Linux' ? 'Windows' : 'Linux';
+    B.dest = S.settings.dest;
     saveState();
     draw();
     toast('Destino: ' + S.settings.dest);
@@ -1617,9 +1618,13 @@ document.addEventListener('change', (e) => {
     refreshBrowse();
   }
   if (t.id === 'destsel') {
-    S.settings.dest = t.value as any;
-    saveState();
-    draw();
+    const val = t.value as 'all' | 'Linux' | 'Windows';
+    B.dest = val;
+    if (val === 'Linux' || val === 'Windows') {
+      S.settings.dest = val;
+      saveState();
+    }
+    refreshBrowse();
   }
   if (t.id === 'platsel') {
     B.plat = t.value as any;
