@@ -26,6 +26,10 @@ import type {
 } from './types';
 
 import {
+  COVER_OFFSET_MAX,
+  COVER_OFFSET_MIN,
+  COVER_SCALE_MAX,
+  COVER_SCALE_MIN,
   DEFAULT_SETTINGS,
   defaultAddons,
   HERO_SCALE_MAX,
@@ -135,6 +139,18 @@ function artHeroScale(value: unknown): number | undefined {
   return Math.max(HERO_SCALE_MIN, Math.min(HERO_SCALE_MAX, Math.round(value)));
 }
 
+/** Zoom de la carátula dentro del soporte acotado a su slider (80–200 %). */
+function artCoverScale(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(COVER_SCALE_MIN, Math.min(COVER_SCALE_MAX, Math.round(value)));
+}
+
+/** Desplazamiento de la carátula dentro del soporte (-50…50 %). */
+function artCoverOffset(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(COVER_OFFSET_MIN, Math.min(COVER_OFFSET_MAX, Math.round(value)));
+}
+
 /**
  * Sanea el arte personalizado leído de disco o de `localStorage`.
  *
@@ -157,6 +173,12 @@ export function sanitizeCustomArt(raw: unknown): CustomArtwork | null {
   if (logoScale !== undefined) art.logoScale = logoScale;
   const heroScale = artHeroScale(raw['heroScale']);
   if (heroScale !== undefined) art.heroScale = heroScale;
+  const coverScale = artCoverScale(raw['coverScale']);
+  if (coverScale !== undefined) art.coverScale = coverScale;
+  const coverY = artCoverOffset(raw['coverY']);
+  if (coverY !== undefined) art.coverY = coverY;
+  const coverX = artCoverOffset(raw['coverX']);
+  if (coverX !== undefined) art.coverX = coverX;
 
   return Object.keys(art).length > 0 ? art : null;
 }

@@ -401,6 +401,26 @@ export const HERO_SCALE_MIN = 100; // 100%
 export const HERO_SCALE_MAX = 250; // 250%
 export const HERO_SCALE_DEFAULT = 115; // 115%
 
+/**
+ * Rango del slider de zoom de la carátula **dentro del soporte** (porcentaje).
+ *
+ * El 100 % dibuja la imagen tal cual la recorta `object-fit:cover`; por debajo
+ * se ve más arte del original y por encima se amplía desde el centro de la
+ * etiqueta. Es independiente del tamaño del soporte (`--mz`), que lo decide el
+ * layout.
+ */
+export const COVER_SCALE_MIN = 80; // 80%
+export const COVER_SCALE_MAX = 200; // 200%
+export const COVER_SCALE_DEFAULT = 100; // 100%
+
+/**
+ * Rango del desplazamiento de la carátula dentro del soporte (porcentaje del
+ * tamaño de la imagen). El 0 % la deja centrada.
+ */
+export const COVER_OFFSET_MIN = -50;
+export const COVER_OFFSET_MAX = 50;
+export const COVER_OFFSET_DEFAULT = 0;
+
 /** Ajustes de arte que el usuario puede sobrescribir por juego. */
 export interface CustomArtwork {
   /** Carátula del soporte (cartucho/caja/disco). `null` = usar la del índice. */
@@ -413,6 +433,12 @@ export interface CustomArtwork {
   logoScale?: number;
   /** Escala del fondo de cabecera en porcentaje (100–250). */
   heroScale?: number;
+  /** Zoom de la carátula dentro del soporte en porcentaje (80–200). */
+  coverScale?: number;
+  /** Desplazamiento vertical de la carátula dentro del soporte (-50…50 %). */
+  coverY?: number;
+  /** Desplazamiento horizontal de la carátula dentro del soporte (-50…50 %). */
+  coverX?: number;
 }
 
 /** `true` si el valor es uno de los siete anclas válidos. */

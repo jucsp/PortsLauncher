@@ -20,6 +20,12 @@ import type {
   SourcePlatform,
 } from '../services/types';
 import {
+  COVER_OFFSET_DEFAULT,
+  COVER_OFFSET_MAX,
+  COVER_OFFSET_MIN,
+  COVER_SCALE_DEFAULT,
+  COVER_SCALE_MAX,
+  COVER_SCALE_MIN,
   HERO_SCALE_DEFAULT,
   HERO_SCALE_MAX,
   HERO_SCALE_MIN,
@@ -145,6 +151,12 @@ export interface Game {
   logoScale: number;
   /** Escala del fondo de cabecera en porcentaje (100–250). */
   heroScale: number;
+  /** Zoom de la carátula dentro del soporte en porcentaje (80–200). */
+  coverScale: number;
+  /** Desplazamiento vertical de la carátula dentro del soporte (-50…50 %). */
+  coverY: number;
+  /** Desplazamiento horizontal de la carátula dentro del soporte (-50…50 %). */
+  coverX: number;
   /** Archivos que debe aportar el usuario (ROM), o `null`. */
   rom: RomReq | null;
   /** Nivel de asistencia por IA declarado. */
@@ -346,6 +358,23 @@ export function clampLogoScale(value: number | null | undefined): number {
 export function clampHeroScale(value: number | null | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return HERO_SCALE_DEFAULT;
   return Math.max(HERO_SCALE_MIN, Math.min(HERO_SCALE_MAX, Math.round(value)));
+}
+
+/** Zoom de la carátula dentro del soporte (80–200 %). */
+export function clampCoverScale(value: number | null | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return COVER_SCALE_DEFAULT;
+  return Math.max(COVER_SCALE_MIN, Math.min(COVER_SCALE_MAX, Math.round(value)));
+}
+
+/**
+ * Desplazamiento de la carátula dentro del soporte (-50…50 %).
+ *
+ * Se redondea al entero y se acota para que `translate()` nunca empuje la
+ * imagen fuera del recorte de la etiqueta más de media caja.
+ */
+export function clampCoverOffset(value: number | null | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return COVER_OFFSET_DEFAULT;
+  return Math.max(COVER_OFFSET_MIN, Math.min(COVER_OFFSET_MAX, Math.round(value)));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -614,6 +643,9 @@ export function toGame(
     logoAnchor: custom?.logoAnchor ?? LOGO_ANCHOR_DEFAULT,
     logoScale: clampLogoScale(custom?.logoScale ?? LOGO_SCALE_DEFAULT),
     heroScale: clampHeroScale(custom?.heroScale ?? HERO_SCALE_DEFAULT),
+    coverScale: clampCoverScale(custom?.coverScale ?? COVER_SCALE_DEFAULT),
+    coverY: clampCoverOffset(custom?.coverY ?? COVER_OFFSET_DEFAULT),
+    coverX: clampCoverOffset(custom?.coverX ?? COVER_OFFSET_DEFAULT),
     rom: romOf(port),
     ai: port.aiLevel || 'unknown',
     exp: dev.k === 'exp',

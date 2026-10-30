@@ -21,7 +21,8 @@ import { DEFAULT_SETTINGS, LEGACY_VIEW_ALIASES } from './services/types';
 import { catalogService } from './services/catalogService';
 import { libraryService } from './services/libraryService';
 import type { Game } from './ui/model';
-import { toGame, statusOf, esc } from './ui/model';
+import { toGame, statusOf, esc, styleFor } from './ui/model';
+import { mediaHTML } from './ui/media';
 import { MEDIA, PLAT } from './ui/platforms';
 import { B, D, NAVMEM, R, S, setSnapshot, updateCount } from './ui/state';
 import type { Route } from './ui/state';
@@ -40,6 +41,8 @@ import {
   artModalHTML,
   artDraftOf,
   artPatchOf,
+  clampCoverOffset,
+  clampCoverScale,
   clampHeroScale,
   clampLogoScale,
   wizardModalHTML,
@@ -461,6 +464,52 @@ function applyHeroScale(raw: number): void {
   if (img) img.style.transform = `scale(${scale / 100})`;
   const label = document.getElementById('art-hero-scale-val');
   if (label) label.textContent = `${scale}%`;
+}
+
+/**
+ * Repinta el soporte de la previsualización con el zoom y el desplazamiento
+ * vigentes del borrador.
+ *
+ * Se sustituye solo el interior de `#art-cover-preview-box` (el soporte ya
+ * montado) y no el modal entero: así el arrastre de los sliders no pierde el
+ * foco ni el `value` que el navegador mantiene mientras se mueve el pulgar.
+ */
+function refreshCoverPreview(): void {
+  if (!currentArtGame || !currentArtDraft) return;
+  const box = document.getElementById('art-cover-preview-box');
+  if (!box) return;
+  const style = styleFor(currentArtGame, S.settings) ?? S.settings.mediaDef ?? 'n64';
+  const coverUrl = currentArtDraft.coverUrl ?? currentArtGame.coverHorizontal ?? currentArtGame.cover ?? null;
+  const previewGame: Game = {
+    ...currentArtGame,
+    coverHorizontal: coverUrl,
+    coverSquare: coverUrl,
+    coverVertical: coverUrl,
+    cover: coverUrl,
+    coverScale: clampCoverScale(currentArtDraft.coverScale),
+    coverY: clampCoverOffset(currentArtDraft.coverY),
+  };
+  box.innerHTML = mediaHTML(previewGame, style, false);
+}
+
+/** Ajusta el zoom de la carátula dentro del soporte (80–200 %). */
+function applyCoverScale(raw: number): void {
+  if (!currentArtDraft) return;
+  const scale = clampCoverScale(raw);
+  currentArtDraft.coverScale = scale;
+  const label = document.getElementById('art-cover-scale-val');
+  if (label) label.textContent = `${scale}%`;
+  refreshCoverPreview();
+}
+
+/** Ajusta el desplazamiento vertical de la carátula dentro del soporte. */
+function applyCoverY(raw: number): void {
+  if (!currentArtDraft) return;
+  const y = clampCoverOffset(raw);
+  currentArtDraft.coverY = y;
+  const label = document.getElementById('art-cover-y-val');
+  if (label) label.textContent = `${y > 0 ? `+${y}` : y}%`;
+  refreshCoverPreview();
 }
 
 /** Texto legible del error que devuelve SteamGridDB (o el propio proxy). */
@@ -1328,6 +1377,13 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   'set-hero-scale': () => {
     /* Intencionadamente vacío: el valor se aplica en `input`/`change`. */
   },
+  /* Y para los dos sliders de la carátula del soporte. */
+  'set-cover-scale': () => {
+    /* Intencionadamente vacío: el valor se aplica en `input`/`change`. */
+  },
+  'set-cover-y': () => {
+    /* Intencionadamente vacío: el valor se aplica en `input`/`change`. */
+  },
   'art-search': (d) => {
     const kind = d.k;
     if (!isArtKind(kind)) return;
@@ -1532,6 +1588,12 @@ document.addEventListener('input', (e) => {
   if (t.dataset.art === 'hero-scale') {
     applyHeroScale(Number(t.value));
   }
+  if (t.dataset.art === 'cover-scale') {
+    applyCoverScale(Number(t.value));
+  }
+  if (t.dataset.art === 'cover-y') {
+    applyCoverY(Number(t.value));
+  }
 });
 
 document.addEventListener('change', (e) => {
@@ -1593,6 +1655,12 @@ document.addEventListener('change', (e) => {
   }
   if (t.dataset.art === 'hero-scale') {
     applyHeroScale(Number(t.value));
+  }
+  if (t.dataset.art === 'cover-scale') {
+    applyCoverScale(Number(t.value));
+  }
+  if (t.dataset.art === 'cover-y') {
+    applyCoverY(Number(t.value));
   }
 });
 

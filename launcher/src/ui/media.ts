@@ -46,12 +46,24 @@ const COVER_VEIL = 'linear-gradient(180deg,rgba(0,0,0,.12),rgba(0,0,0,.5))';
  * Es la vía infalible: el `background` en línea queda como respaldo, pero la
  * imagen se dibuja con un elemento propio (`object-fit:cover`) que no puede
  * romper el atributo `style` del contenedor.
+ *
+ * @param scale zoom en porcentaje (80–200): `100` deja la imagen tal cual.
+ * @param y     desplazamiento vertical en % del tamaño de la imagen.
+ * @param x     desplazamiento horizontal en % del tamaño de la imagen.
+ *
+ * El `transform` sólo se emite cuando el usuario ha tocado algún control
+ * (`scale !== 100 || y !== 0 || x !== 0`): así el caso por defecto no crea una
+ * capa de composición nueva ni altera el recorte de `object-fit:cover`.
  */
-function coverImg(url: string | null): string {
+function coverImg(url: string | null, scale = 100, y = 0, x = 0): string {
   if (!url) return '';
+  const transform =
+    scale !== 100 || y !== 0 || x !== 0
+      ? `transform:scale(${scale / 100}) translate(${x}%,${y}%);transform-origin:center;`
+      : '';
   return (
     `<img src="${escText(url)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;` +
-    'object-fit:cover;object-position:center;pointer-events:none;border-radius:inherit;" />'
+    `object-fit:cover;object-position:center;pointer-events:none;border-radius:inherit;${transform}" />`
   );
 }
 
@@ -113,8 +125,13 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
   const face = artwork ? `${COVER_VEIL}, ${cover}` : cover;
   /* Capas nativas (foto + velo) que se inyectan DENTRO del contenedor de la
    * etiqueta: así la carátula real se ve siempre, aunque el `background` en
-   * línea falle o el navegador ignore la propiedad. */
-  const coverMarkup = coverImg(artwork) + coverVeil(artwork);
+   * línea falle o el navegador ignore la propiedad. El zoom y el desplazamiento
+   * del usuario (`Ajustar arte → Carátula del soporte`) los aplica el propio
+   * `<img>`; la capa de `background` se queda como respaldo sin tocar. */
+  const coverScale = game.coverScale ?? 100;
+  const coverY = game.coverY ?? 0;
+  const coverX = game.coverX ?? 0;
+  const coverMarkup = coverImg(artwork, coverScale, coverY, coverX) + coverVeil(artwork);
   /* Sin carátula real: el soporte luce su patrón procedural y su título. */
   const generative = !artwork;
   const tagColor = (PLAT[game.pl] ?? PLAT.OTRAS).tag;

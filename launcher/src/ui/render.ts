@@ -22,6 +22,11 @@ import type {
 } from '../services/types';
 import {
   ADDONS_DIR,
+  COVER_OFFSET_MAX,
+  COVER_OFFSET_MIN,
+  COVER_SCALE_DEFAULT,
+  COVER_SCALE_MAX,
+  COVER_SCALE_MIN,
   HERO_SCALE_DEFAULT,
   HERO_SCALE_MAX,
   HERO_SCALE_MIN,
@@ -35,6 +40,8 @@ import {
 import {
   esc,
   devChip as chipOf,
+  clampCoverOffset,
+  clampCoverScale,
   clampHeroScale,
   clampLogoScale,
   flagOf,
@@ -1444,6 +1451,9 @@ function sampleFor(style: MediaStyle): Game {
     logoAnchor: LOGO_ANCHOR_DEFAULT,
     logoScale: 110,
     heroScale: HERO_SCALE_DEFAULT,
+    coverScale: COVER_SCALE_DEFAULT,
+    coverY: 0,
+    coverX: 0,
     rom: null,
     ai: 'none',
     exp: false,
@@ -1796,6 +1806,12 @@ export interface ArtDraft {
   logoScale: number;
   /** Escala del fondo de cabecera en porcentaje (100–250). */
   heroScale?: number;
+  /** Zoom de la carátula dentro del soporte en porcentaje (80–200). */
+  coverScale?: number;
+  /** Desplazamiento vertical de la carátula dentro del soporte (-50…50 %). */
+  coverY?: number;
+  /** Desplazamiento horizontal de la carátula dentro del soporte (-50…50 %). */
+  coverX?: number;
 }
 
 /** Miniatura de la galería devuelta por `/api/steamgrid/...`. */
@@ -1913,6 +1929,9 @@ export function artDraftOf(game: Game): ArtDraft {
     logoAnchor: game.logoAnchor ?? LOGO_ANCHOR_DEFAULT,
     logoScale: clampLogoScale(game.logoScale),
     heroScale: clampHeroScale(game.heroScale),
+    coverScale: clampCoverScale(game.coverScale),
+    coverY: clampCoverOffset(game.coverY),
+    coverX: clampCoverOffset(game.coverX),
   };
 }
 
@@ -1925,14 +1944,26 @@ export function artPatchOf(draft: ArtDraft): CustomArtwork {
     logoAnchor: draft.logoAnchor,
     logoScale: clampLogoScale(draft.logoScale),
     heroScale: clampHeroScale(draft.heroScale),
+    coverScale: clampCoverScale(draft.coverScale),
+    coverY: clampCoverOffset(draft.coverY),
+    coverX: clampCoverOffset(draft.coverX),
   };
 }
 
 /* Reexportaciones de conveniencia: `main.ts` consume el modal y su modelo de
  * borrador junto a las escalas y el tipo de ancla, sin depender de tres
  * módulos. */
-export { clampHeroScale, clampLogoScale } from './model';
-export { HERO_SCALE_DEFAULT, HERO_SCALE_MAX, HERO_SCALE_MIN } from '../services/types';
+export { clampCoverOffset, clampCoverScale, clampHeroScale, clampLogoScale } from './model';
+export {
+  COVER_OFFSET_MAX,
+  COVER_OFFSET_MIN,
+  COVER_SCALE_DEFAULT,
+  COVER_SCALE_MAX,
+  COVER_SCALE_MIN,
+  HERO_SCALE_DEFAULT,
+  HERO_SCALE_MAX,
+  HERO_SCALE_MIN,
+} from '../services/types';
 export type { LogoAnchor } from '../services/types';
 
 /**
@@ -2083,16 +2114,43 @@ export function artModalHTML(
   }
 
   if (activeTab === 'cover') {
+    /* Previsualización del soporte ya montado (cartucho, caja o disco) con el
+     * zoom y el desplazamiento del borrador: es el único modo de ver el efecto
+     * real de los sliders, porque la carátula se pinta DENTRO de la silueta. */
+    const style = styleFor(game, S.settings) ?? S.settings.mediaDef ?? 'n64';
+    const coverScale = clampCoverScale(draft.coverScale);
+    const coverY = clampCoverOffset(draft.coverY);
+    const previewGame: Game = {
+      ...game,
+      coverHorizontal: coverPreview,
+      coverSquare: coverPreview,
+      coverVertical: coverPreview,
+      cover: coverPreview,
+      coverScale,
+      coverY,
+    };
     panel =
-      '<div class="lbl" style="padding:0">PREVISUALIZACIÓN</div>' +
-      '<div style="position:relative;height:200px;border-radius:14px;overflow:hidden;' +
-      'border:1px solid var(--line);background:var(--panel2)">' +
-      (coverPreview
-        ? `<img src="${esc(coverPreview)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" />`
-        : '<span class="muted" style="position:absolute;inset:0;display:grid;place-items:center">Sin carátula</span>') +
-      '</div>' +
+      '<div class="lbl" style="padding:0">PREVISUALIZACIÓN DEL SOPORTE</div>' +
+      '<div style="position:relative;height:240px;border-radius:14px;overflow:hidden;' +
+      'border:1px solid var(--line);background:var(--panel2);display:flex;align-items:center;' +
+      'justify-content:center;padding:16px">' +
+      '<div id="art-cover-preview-box" style="transform:scale(1.15);transform-origin:center">' +
+      mediaHTML(previewGame, style, false) +
+      '</div></div>' +
       '<div class="muted" style="font-size:12px">Es la imagen que luce el soporte: etiqueta del cartucho, ' +
       'caja o disco según la plataforma.</div>' +
+      '<div class="lbl" style="padding:0">TAMAÑO DE LA IMAGEN (ZOOM)</div>' +
+      '<div style="display:flex;align-items:center;gap:12px">' +
+      `<input id="art-cover-scale" type="range" min="${COVER_SCALE_MIN}" max="${COVER_SCALE_MAX}" step="2" ` +
+      `value="${coverScale}" data-art="cover-scale" data-act="set-cover-scale" aria-label="Tamaño de la carátula" style="flex:1">` +
+      `<span class="mono" id="art-cover-scale-val" style="min-width:66px;text-align:right">${coverScale}%</span>` +
+      '</div>' +
+      '<div class="lbl" style="padding:0">POSICIÓN VERTICAL</div>' +
+      '<div style="display:flex;align-items:center;gap:12px">' +
+      `<input id="art-cover-y" type="range" min="${COVER_OFFSET_MIN}" max="${COVER_OFFSET_MAX}" step="1" ` +
+      `value="${coverY}" data-art="cover-y" data-act="set-cover-y" aria-label="Posición vertical" style="flex:1">` +
+      `<span class="mono" id="art-cover-y-val" style="min-width:66px;text-align:right">${coverY > 0 ? `+${coverY}` : coverY}%</span>` +
+      '</div>' +
       sourceBlock('cover', 'CARÁTULA DEL SOPORTE', 'GoldenEye 007', draft.coverUrl);
   }
 
