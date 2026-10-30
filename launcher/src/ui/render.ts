@@ -843,13 +843,36 @@ export function renderGame(id: string): string {
     )
     .join('');
 
-  /* Imagen principal de la cabecera: panorámica de detalle → grid horizontal →
-   * portada genérica. */
-  const heroImg = game.hero || game.coverHorizontal || game.cover;
+  /* Imagen principal de la cabecera: SOLO heros horizontales.
+   * Nunca `coverVertical` ni `game.cover` (poster vertical 600x900): una imagen
+   * vertical en el centro de la cabecera rompe la composición. Si no hay hero
+   * horizontal simplemente no se pinta imagen central. */
+  const heroImg = game.hero || (game.coverHorizontal ? game.coverHorizontal : null);
   /* URL saneada para `url('…')`: el escapado HTML ya ha convertido las comillas
    * en entidades, que aquí se eliminan para no romper la cadena CSS. */
   const heroCss = heroImg ? esc(heroImg).replace(/&quot;|&#39;/g, '') : null;
   const logo = game.logo;
+
+  /* Logotipo oficial (o título si no hay logo) a la IZQUIERDA de la cabecera:
+   * ocupa toda la altura disponible (tope 140px) manteniendo proporciones. */
+  const heroTitle =
+    '<div style="display:flex;align-items:center;height:100%;max-height:140px;">' +
+    (logo
+      ? `<img src="${esc(logo)}" alt="${esc(game.t)}" style="height:100%;max-height:140px;` +
+        'max-width:min(100%,460px);object-fit:contain;object-position:left center;' +
+        'filter:drop-shadow(0 6px 20px rgba(0,0,0,.9));" />'
+      : '<h1 style="font-size:clamp(32px,5.5vw,52px);line-height:1.05;' +
+        'text-shadow:0 4px 24px rgba(0,0,0,.6);margin:0">' +
+        `${esc(game.t)}</h1>`) +
+    '</div>';
+
+  /* Botón principal de la cabecera según la estrategia del port. */
+  const heroAction =
+    game.strategy === 'external'
+      ? '<button class="btn lg pri" data-act="ext">Abrir página del proyecto</button>'
+      : game.strategy === 'source-only' && !game.inst
+        ? '<button class="btn lg" data-act="toast" data-m="Guía de compilación (simulada)">Ver guía de compilación</button>'
+        : cta;
 
   return paintMain(
     '<div class="dhero">' +
@@ -870,28 +893,20 @@ export function renderGame(id: string): string {
         `<img src="${esc(heroImg)}" alt="" style="max-height:100%;max-width:100%;object-fit:contain;border-radius:6px;` +
         'filter:drop-shadow(0 12px 32px rgba(0,0,0,.8));" /></div>'
       : '') +
-    /* --- capa 2: contenido, logotipo y acciones ----------------------------- */
+    /* --- capa 2: contenido, logotipo (izquierda) y acciones (derecha) -------- */
     '<div style="position:relative;z-index:2;display:flex;flex-direction:column;justify-content:space-between;gap:16px;flex:1 1 auto">' +
     '<a href="#biblioteca" data-act="nav" data-to="library" class="pill" style="align-self:flex-start;background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px">← Biblioteca</a>' +
     '<div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:24px;padding-top:50px">' +
-    '<div style="flex:1 1 320px;min-width:0">' +
-    `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${meta}</div>` +
-    (logo
-      ? `<h1 style="font-size:clamp(32px,6vw,52px);line-height:1;text-shadow:0 4px 24px rgba(0,0,0,.5)">${esc(game.t)}</h1>`
-      : '') +
-    `<div style="margin-top:8px;font-size:18px">${esc(game.pr)} · última versión ${esc(game.lv)}</div></div>` +
-    '<div style="display:flex;flex-direction:column;gap:10px;align-items:stretch;flex:0 1 auto;max-width:360px;margin-left:auto">' +
-    (logo
-      ? `<img src="${esc(logo)}" alt="${esc(game.t)}" style="max-height:85px;max-width:320px;object-fit:contain;` +
-        'filter:drop-shadow(0 4px 16px rgba(0,0,0,.85));align-self:flex-end;" />'
-      : '<h1 style="margin:0;font-size:clamp(28px,5vw,44px);line-height:1;text-align:right;text-shadow:0 4px 24px rgba(0,0,0,.5)">' +
-        `${esc(game.t)}</h1>`) +
-    (game.strategy === 'external'
-      ? '<button class="btn lg pri" data-act="ext">Abrir página del proyecto</button>'
-      : game.strategy === 'source-only' && !game.inst
-        ? '<button class="btn lg" data-act="toast" data-m="Guía de compilación (simulada)">Ver guía de compilación</button>'
-        : cta) +
-    `<div style="text-align:center;font-size:12px">${esc(game.st)}${
+    /* --- lado IZQUIERDO: logo a toda la altura + meta pills + proyecto/versión */
+    '<div style="flex:1 1 320px;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:12px">' +
+    heroTitle +
+    `<div style="display:flex;gap:8px;flex-wrap:wrap">${meta}</div>` +
+    `<div style="font-size:18px">${esc(game.pr)} · última versión ${esc(game.lv)}</div></div>` +
+    /* --- lado DERECHO: acciones + estrategia/requisitos de ROM -------------- */
+    '<div style="display:flex;flex-direction:column;gap:10px;align-items:flex-end;text-align:right;' +
+    'flex:0 1 auto;max-width:360px;margin-left:auto">' +
+    heroAction +
+    `<div style="font-size:12px">${esc(game.st)}${
       game.mb ? ` · ~${game.mb} MB` : ''
     }${game.rom ? ' · necesitarás tu ROM' : ''}</div></div></div></div>` +
     /* `dgrid` sale de `.dhero`: las capas absolutas (fondo desenfocado + hero)

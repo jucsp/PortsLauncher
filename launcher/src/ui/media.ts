@@ -25,12 +25,41 @@ const IRI = 'conic-gradient(from 30deg,#EDEDF7,#B7C3FF,#F6C2FF,#C2FFF0,#FFF3C2,#
  * mostrando su portada procedural en lugar de un hueco.
  */
 function coverLayer(url: string): string {
-  const safe = escText(url).replace(/[\r\n]+/g, '');
-  return `url("${safe}") center / cover no-repeat`;
+  /* Las comillas dobles DENTRO de `style="…"` cortaban el atributo en el parser
+   * HTML (el atributo terminaba en `url("`), invalidando todo el `background`.
+   * Ahora la cadena CSS usa comillas simples y cualquier comilla de la URL se
+   * codifica como percent-encoding, que es válido en una URL. */
+  const safe = String(url)
+    .replace(/[\r\n]+/g, '')
+    .replace(/"/g, '%22')
+    .replace(/'/g, '%27')
+    .trim();
+  return `url('${safe}') center / cover no-repeat`;
 }
 
 /** Velo tenue sobre la carátula: garantiza contraste del texto encima. */
 const COVER_VEIL = 'linear-gradient(180deg,rgba(0,0,0,.12),rgba(0,0,0,.5))';
+
+/**
+ * Carátula real pintada como `<img>` nativo.
+ *
+ * Es la vía infalible: el `background` en línea queda como respaldo, pero la
+ * imagen se dibuja con un elemento propio (`object-fit:cover`) que no puede
+ * romper el atributo `style` del contenedor.
+ */
+function coverImg(url: string | null): string {
+  if (!url) return '';
+  return (
+    `<img src="${escText(url)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;` +
+    'object-fit:cover;object-position:center;pointer-events:none;border-radius:inherit;" />'
+  );
+}
+
+/** Velo superpuesto a la foto para que la pegatina de plataforma mantenga contraste. */
+function coverVeil(url: string | null): string {
+  if (!url) return '';
+  return `<div style="position:absolute;inset:0;background:${COVER_VEIL};pointer-events:none"></div>`;
+}
 
 /**
  * Dibuja un soporte físico.
@@ -53,6 +82,10 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
    * mantenga contraste, igual que el sombreado del mock sobre el arte.
    */
   const face = artwork ? `${COVER_VEIL}, ${cover}` : cover;
+  /* Capas nativas (foto + velo) que se inyectan DENTRO del contenedor de la
+   * etiqueta: así la carátula real se ve siempre, aunque el `background` en
+   * línea falle o el navegador ignore la propiedad. */
+  const coverMarkup = coverImg(artwork) + coverVeil(artwork);
   const tagColor = (PLAT[game.pl] ?? PLAT.OTRAS).tag;
   const label = game.pl;
 
@@ -81,10 +114,10 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
   if (cart) {
     const body = cart.bg ?? bodyOf(game.pl);
     const inner = cart.row
-      ? '<div style="display:flex;align-items:flex-end;justify-content:flex-end;width:100%;' +
-        `height:100%;padding:7px 10px;box-sizing:border-box">${sticker}</div>`
-      : '<div style="display:flex;flex-direction:column;justify-content:flex-start;width:100%;' +
-        `height:100%;padding:${cart.hdr ? '22px 9px 6px' : '6px 9px'};box-sizing:border-box">` +
+      ? '<div style="position:relative;z-index:2;display:flex;align-items:flex-end;justify-content:flex-end;' +
+        `width:100%;height:100%;padding:7px 10px;box-sizing:border-box">${sticker}</div>`
+      : '<div style="position:relative;z-index:2;display:flex;flex-direction:column;justify-content:flex-start;' +
+        `width:100%;height:100%;padding:${cart.hdr ? '22px 9px 6px' : '6px 9px'};box-sizing:border-box">` +
         `<span style="align-self:flex-start">${sticker}</span></div>`;
 
     markup =
@@ -92,7 +125,7 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
       layer(
         `${cart.lab};background:${face};overflow:hidden;box-sizing:border-box;` +
           `border-radius:${cart.rad};border:${cart.bd};box-shadow:0 0 0 2px rgba(255,255,255,.1)`,
-        inner
+        coverMarkup + inner
       );
 
     if (cart.hdr) {
@@ -139,7 +172,10 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
     const color = style === 'ps2' ? '#2C45C8' : '#6CB31B';
     const dark = style === 'ps2' ? '#16248A' : '#3F7A0C';
     markup =
-      layer(`inset:0;border-radius:8px;background:${face};box-shadow:inset 0 0 0 2px rgba(0,0,0,.45)`) +
+      layer(
+        `inset:0;border-radius:8px;background:${face};box-shadow:inset 0 0 0 2px rgba(0,0,0,.45);overflow:hidden`,
+        coverMarkup
+      ) +
       layer(
         `left:0;top:0;bottom:0;width:15px;border-radius:8px 0 0 8px;` +
           `background:linear-gradient(90deg,${dark},${color})`
@@ -176,7 +212,8 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
       layer(`inset:0;border-radius:50%;background:${disc.rim}`) +
       layer(
         `inset:${disc.inset}px;border-radius:50%;background:${face};border:2px solid rgba(0,0,0,.25);overflow:hidden`,
-        `<span style="position:absolute;left:0;right:0;bottom:13%;text-align:center;` +
+        coverMarkup +
+          `<span style="position:absolute;left:0;right:0;bottom:13%;z-index:2;text-align:center;` +
           `font:500 10px var(--f-mono);color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.6)">${label}</span>`
       ) +
       layer(
