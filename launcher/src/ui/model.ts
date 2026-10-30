@@ -402,7 +402,7 @@ const HORIZONTAL_COVER_STYLES: readonly MediaStyle[] = [
  *
  * Coincide con `BOX_PLATFORMS` del indexado (grid 600x900).
  */
-const VERTICAL_COVER_STYLES: readonly MediaStyle[] = ['ps2', 'x360', 'nsw'];
+const VERTICAL_COVER_STYLES: readonly MediaStyle[] = ['ps2', 'x360', 'nsw', 'ps3', 'ps4', 'wiiu', 'xbone', 'vita'];
 
 /** Devuelve la URL si es una cadena con contenido; `null` en cualquier otro caso. */
 const usableCover = (url: string | null | undefined): string | null =>

@@ -1,8 +1,8 @@
 # Catálogo unificado — informe de construcción
 
-- **Generado:** 2026-10-30T21:45:49Z
+- **Generado:** 2026-10-30T21:55:37Z
 - **Versión:** 1.0.0 (schema 1.0.0)
-- **Hash semántico:** `sha256:a932c31fa1477689ab42b7d90ca758a290e1382875e0dd045f3d8e6dc4875ec5`
+- **Hash semántico:** `sha256:b4f7d0516780594ab4840d9967153c563bc67e9f46b3825ff647e22d581cad92`
 - **Modo:** offline (fixtures)
 - **Fuente GameWave:** `/home/juancarlos/Proyectos/Personales/PortsLauncher/fixtures/gamewave/catalog.json`
 - **Fuente Quiver:** `/home/juancarlos/Proyectos/Personales/PortsLauncher/fixtures/quiver/apps_unique.json`
@@ -31,15 +31,17 @@
 | Plataforma | Puertos |
 |---|---|
 | pc | 294 |
-| other | 209 |
 | ps1 | 199 |
+| other | 150 |
 | x360 | 133 |
 | n64 | 108 |
 | gba | 31 |
 | gcn | 31 |
 | snes | 31 |
+| ps4 | 29 |
 | ps2 | 25 |
 | nes | 21 |
+| ps3 | 21 |
 | xbox | 21 |
 | nsw | 16 |
 | psp | 16 |
@@ -47,7 +49,10 @@
 | wii | 8 |
 | md | 4 |
 | nds | 4 |
+| wiiu | 4 |
 | n3ds | 3 |
+| xbone | 3 |
+| dc | 2 |
 
 ## Puertos por estado (status.tag)
 
@@ -75,7 +80,7 @@
 
 | pid | Nombre | Plataforma origen | Fuentes |
 |---|---|---|---|
-| `abdelmoumendeghbouche-wipeout-pc-abdelmoumendeghbouche-wipeout-pc` | WipEout Omega Collection · wipeout_pc | other | gamewave, quiver |
+| `abdelmoumendeghbouche-wipeout-pc-abdelmoumendeghbouche-wipeout-pc` | WipEout Omega Collection · wipeout_pc | ps4 | gamewave, quiver |
 | `aikatore-recvx-enhanced-port-aikatore-recvx-enhanced-port` | Resident Evil Code: Veronica X · Enhanced PC Port | ps2 | gamewave, quiver |
 | `akratch-goldenballoon-goldenballoon` | Golden Balloon (Diddy Kong Racing) | n64 | gamewave, quiver |
 | `alexbeavs-ps1-ports-alien-resurrection-recomp-alienresurrection` | Alien Resurrection | ps1 | gamewave, quiver |
@@ -87,7 +92,7 @@
 | `bryantmh-rush2recompiled-rush2recompiled` | Rush 2 Recompiled · Rush 2: Extreme Racing USA | n64 | gamewave, quiver |
 | `chrissotraidis-sunpad-supermariosunshine` | Super Mario Sunshine | gcn | gamewave, quiver |
 | `dahsidiabdallah-conkerbfdreloaded-dahsidiabdallah-conkerbfdreloaded` | Conker's Bad Fur Day · Reloaded | n64 | gamewave, quiver |
-| `deadinside28-bloodborne-pc-bloodborne-bbport` | Bloodborne · bbport | other | gamewave, quiver |
+| `deadinside28-bloodborne-pc-bloodborne-bbport` | Bloodborne · bbport | ps4 | gamewave, quiver |
 | `exult-exult-exult` | Exult · Ultima VII | pc | gamewave, quiver |
 | `harbourmasters-2ship2harkinian-2ship2harkinian` | 2 Ship 2 Harkinian (Zelda: Majora's Mask) | n64 | gamewave, quiver |
 | `harbourmasters-ghostship-ghostship` | Ghostship (Super Mario 64) | n64 | gamewave, quiver |
@@ -122,7 +127,7 @@
 | `yozander2009-stack-metroid-dread-recomp-yozander2009-stack-metroid-dread-recomp` | Metroid Dread · Metroid-Dread-Recomp | nsw | gamewave, quiver |
 | `yunophilia-blackknightrecomp-yunophilia-blackknightrecomp` | Sonic and the Black Knight · BlackKnightRecomp | wii | gamewave, quiver |
 | `yuutatsubasa-chaotixrecompiled-knuckleschaotixchaotixrecompiled` | Knuckles' Chaotix · ChaotixRecompiled | other | gamewave, quiver |
-| `zeldawwhdrecomp-zeldawwhdrecomp-zeldawwhdrecomp` | The Legend of Zelda: The Wind Waker HD · Wii U Recomp | other | gamewave, quiver |
+| `zeldawwhdrecomp-zeldawwhdrecomp-zeldawwhdrecomp` | The Legend of Zelda: The Wind Waker HD · Wii U Recomp | wiiu | gamewave, quiver |
 | `zolaware-reblue-rebluebluedragon` | re:Blue · Blue Dragon | x360 | gamewave, quiver |
 
 ## Repositorios multi-ficha verificados (1)

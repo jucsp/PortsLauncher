@@ -66,6 +66,12 @@ export const PLATMEDIA: Record<KnownPlatform | 'other', MediaStyle> = {
   wii: 'wii',
   xbox: 'xbox',
   x360: 'x360',
+  ps3: 'ps3',
+  ps4: 'ps4',
+  wiiu: 'wiiu',
+  dc: 'dc',
+  vita: 'vita',
+  xbone: 'xbone',
   pc: 'cd',
   other: 'cd',
 };
@@ -89,6 +95,12 @@ export const MEDIA_LABELS: Record<MediaStyle, string> = {
   xbox: 'Disco Xbox',
   ps2: 'DVD PS2',
   x360: 'DVD Xbox 360',
+  ps3: 'Caja PS3',
+  ps4: 'Caja PS4',
+  wiiu: 'Caja Wii U',
+  dc: 'Disco Dreamcast',
+  vita: 'Caja PS Vita',
+  xbone: 'Caja Xbox One',
 };
 
 export const VIEW_LABELS: Record<ViewMode, string> = {

@@ -34,6 +34,12 @@ export const SOURCE_PLATFORMS = [
   'wii',
   'xbox',
   'x360',
+  'ps3',
+  'ps4',
+  'wiiu',
+  'dc',
+  'vita',
+  'xbone',
   'pc',
   'other',
 ] as const;
@@ -60,6 +66,12 @@ export const PLATFORM_LABELS: Record<SourcePlatform, string> = {
   wii: 'Nintendo Wii',
   xbox: 'Xbox',
   x360: 'Xbox 360',
+  ps3: 'PlayStation 3',
+  ps4: 'PlayStation 4',
+  wiiu: 'Nintendo Wii U',
+  dc: 'Dreamcast',
+  vita: 'PlayStation Vita',
+  xbone: 'Xbox One',
   pc: 'PC',
   other: 'Otras plataformas',
 };
@@ -81,6 +93,12 @@ export const PLATFORM_SHORT: Record<SourcePlatform, string> = {
   wii: 'WII',
   xbox: 'XBOX',
   x360: 'X360',
+  ps3: 'PS3',
+  ps4: 'PS4',
+  wiiu: 'WIIU',
+  dc: 'DC',
+  vita: 'VITA',
+  xbone: 'XONE',
   pc: 'PC',
   other: 'OTRAS',
 };
@@ -103,6 +121,12 @@ export const CATALOG_PLATFORMS: readonly KnownPlatform[] = [
   'wii',
   'xbox',
   'x360',
+  'ps3',
+  'ps4',
+  'wiiu',
+  'dc',
+  'vita',
+  'xbone',
   'pc',
 ];
 
@@ -253,6 +277,12 @@ export const MEDIA_STYLES = [
   'xbox',
   'ps2',
   'x360',
+  'ps3',
+  'ps4',
+  'wiiu',
+  'dc',
+  'vita',
+  'xbone',
 ] as const;
 export type MediaStyle = (typeof MEDIA_STYLES)[number];
 
@@ -274,6 +304,12 @@ export const MEDIA_BY_PLATFORM: Record<SourcePlatform, MediaStyle> = {
   wii: 'wii',
   xbox: 'xbox',
   x360: 'x360',
+  ps3: 'ps3',
+  ps4: 'ps4',
+  wiiu: 'wiiu',
+  dc: 'dc',
+  vita: 'vita',
+  xbone: 'xbone',
   pc: 'cd',
   other: 'cd',
 };

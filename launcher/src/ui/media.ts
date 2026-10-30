@@ -219,10 +219,26 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
             'background:#17171D;border:3px solid rgba(255,255,255,.65)'
         );
     }
-  } else if (style === 'ps2' || style === 'x360') {
-    /* --------------------------- cajas DVD ------------------------------- */
-    const color = style === 'ps2' ? '#2C45C8' : '#6CB31B';
-    const dark = style === 'ps2' ? '#16248A' : '#3F7A0C';
+  } else if (
+    style === 'ps2' ||
+    style === 'x360' ||
+    style === 'ps3' ||
+    style === 'ps4' ||
+    style === 'wiiu' ||
+    style === 'xbone' ||
+    style === 'vita'
+  ) {
+    /* --------------------------- cajas DVD / Blu-ray --------------------- */
+    const boxThemes: Record<string, [string, string]> = {
+      ps2: ['#2C45C8', '#16248A'],
+      x360: ['#6CB31B', '#3F7A0C'],
+      ps3: ['#20222A', '#101115'],
+      ps4: ['#003791', '#001D54'],
+      wiiu: ['#009AC7', '#005B75'],
+      xbone: ['#107C10', '#0A4D0A'],
+      vita: ['#0066CC', '#003366'],
+    };
+    const [color, dark] = boxThemes[style] ?? ['#2C45C8', '#16248A'];
     markup =
       layer(
         `inset:0;border-radius:8px;background:${face};box-shadow:inset 0 0 0 2px rgba(0,0,0,.45);overflow:hidden`,
@@ -263,6 +279,11 @@ export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string
       },
       xbox: {
         rim: 'conic-gradient(from 10deg,#0E3A12,#3FA84A,#0A2A0E,#7BE08A,#0E3A12)',
+        inset: 12,
+        hole: 28,
+      },
+      dc: {
+        rim: 'conic-gradient(from 45deg,#FFFFFF,#FF9933,#FFFFFF,#FF6600,#FFFFFF)',
         inset: 12,
         hole: 28,
       },

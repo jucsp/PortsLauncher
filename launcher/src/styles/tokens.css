@@ -190,6 +190,42 @@
   --p-x360-ink: #F1FFE0;
   --p-x360-body: #26301C;
 
+  /* PS3 — rojo / carbón */
+  --p-ps3-neon: #E51B24;
+  --p-ps3-sticker: #2A080A;
+  --p-ps3-ink: #FFE6E8;
+  --p-ps3-body: #251B1D;
+
+  /* PS4 — azul oficial PlayStation */
+  --p-ps4-neon: #0072CE;
+  --p-ps4-sticker: #0A1C33;
+  --p-ps4-ink: #E6F0FA;
+  --p-ps4-body: #16243A;
+
+  /* Wii U — azul cian */
+  --p-wiiu-neon: #00B4E6;
+  --p-wiiu-sticker: #062835;
+  --p-wiiu-ink: #E6F8FF;
+  --p-wiiu-body: #172C36;
+
+  /* Dreamcast — naranja espiral */
+  --p-dc-neon: #FF6600;
+  --p-dc-sticker: #331500;
+  --p-dc-ink: #FFEADB;
+  --p-dc-body: #2B1E19;
+
+  /* Vita — azul celeste */
+  --p-vita-neon: #0099FF;
+  --p-vita-sticker: #051E33;
+  --p-vita-ink: #E6F5FF;
+  --p-vita-body: #1A2838;
+
+  /* Xbox One — verde */
+  --p-xbone-neon: #107C10;
+  --p-xbone-sticker: #082108;
+  --p-xbone-ink: #E8F5E8;
+  --p-xbone-body: #1A261A;
+
   /* PC — ámbar de "compatible". */
   --p-pc-neon: #FFC857;
   --p-pc-sticker: #2B2210;
@@ -585,6 +621,60 @@ canvas {
   --plat-sticker: var(--p-x360-sticker);
   --plat-ink: var(--p-x360-ink);
   --plat-body: var(--p-x360-body);
+}
+
+.plat-ps3,
+[data-plat='ps3'],
+[data-plat='PS3'] {
+  --plat-neon: var(--p-ps3-neon);
+  --plat-sticker: var(--p-ps3-sticker);
+  --plat-ink: var(--p-ps3-ink);
+  --plat-body: var(--p-ps3-body);
+}
+
+.plat-ps4,
+[data-plat='ps4'],
+[data-plat='PS4'] {
+  --plat-neon: var(--p-ps4-neon);
+  --plat-sticker: var(--p-ps4-sticker);
+  --plat-ink: var(--p-ps4-ink);
+  --plat-body: var(--p-ps4-body);
+}
+
+.plat-wiiu,
+[data-plat='wiiu'],
+[data-plat='WIIU'] {
+  --plat-neon: var(--p-wiiu-neon);
+  --plat-sticker: var(--p-wiiu-sticker);
+  --plat-ink: var(--p-wiiu-ink);
+  --plat-body: var(--p-wiiu-body);
+}
+
+.plat-dc,
+[data-plat='dc'],
+[data-plat='DC'] {
+  --plat-neon: var(--p-dc-neon);
+  --plat-sticker: var(--p-dc-sticker);
+  --plat-ink: var(--p-dc-ink);
+  --plat-body: var(--p-dc-body);
+}
+
+.plat-vita,
+[data-plat='vita'],
+[data-plat='VITA'] {
+  --plat-neon: var(--p-vita-neon);
+  --plat-sticker: var(--p-vita-sticker);
+  --plat-ink: var(--p-vita-ink);
+  --plat-body: var(--p-vita-body);
+}
+
+.plat-xbone,
+[data-plat='xbone'],
+[data-plat='XBONE'] {
+  --plat-neon: var(--p-xbone-neon);
+  --plat-sticker: var(--p-xbone-sticker);
+  --plat-ink: var(--p-xbone-ink);
+  --plat-body: var(--p-xbone-body);
 }
 
 .plat-pc,

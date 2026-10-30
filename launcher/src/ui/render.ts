@@ -1422,6 +1422,12 @@ const STYLE_PLAT: Record<MediaStyle, PlatKey> = {
   xbox: 'XBOX',
   ps2: 'PS2',
   x360: 'X360',
+  ps3: 'PS3',
+  ps4: 'PS4',
+  wiiu: 'WIIU',
+  dc: 'DC',
+  vita: 'VITA',
+  xbone: 'XBONE',
 };
 
 /** Ficha sintética para previsualizar un soporte sin datos reales. */
@@ -1758,7 +1764,7 @@ export function renderSettings(): string {
 }
 
 /** Traduce una clave visual a `sourcePlatform`. */
-function platformOf(key: PlatKey): 'n64' | 'snes' | 'nes' | 'md' | 'gba' | 'gb' | 'nds' | 'n3ds' | 'nsw' | 'psp' | 'ps1' | 'ps2' | 'gcn' | 'wii' | 'xbox' | 'x360' | 'pc' | 'other' {
+function platformOf(key: PlatKey): 'n64' | 'snes' | 'nes' | 'md' | 'gba' | 'gb' | 'nds' | 'n3ds' | 'nsw' | 'psp' | 'ps1' | 'ps2' | 'gcn' | 'wii' | 'xbox' | 'x360' | 'ps3' | 'ps4' | 'wiiu' | 'dc' | 'vita' | 'xbone' | 'pc' | 'other' {
   const map: Record<PlatKey, ReturnType<typeof platformOf>> = {
     N64: 'n64',
     SNES: 'snes',
@@ -1776,6 +1782,12 @@ function platformOf(key: PlatKey): 'n64' | 'snes' | 'nes' | 'md' | 'gba' | 'gb' 
     GCN: 'gcn',
     WII: 'wii',
     XBOX: 'xbox',
+    PS3: 'ps3',
+    PS4: 'ps4',
+    WIIU: 'wiiu',
+    DC: 'dc',
+    VITA: 'vita',
+    XBONE: 'xbone',
     PC: 'pc',
     OTRAS: 'other',
   };

@@ -52,6 +52,12 @@ export const MEDIA: Record<MediaStyle, MediaDim> = {
   xbox: { w: 140, h: 140, name: 'Xbox', hint: 'Disco verde' },
   ps2: { w: 112, h: 156, name: 'PlayStation 2', hint: 'Caja DVD azul' },
   x360: { w: 112, h: 156, name: 'Xbox 360', hint: 'Caja DVD verde' },
+  ps3: { w: 112, h: 156, name: 'PlayStation 3', hint: 'Caja Blu-ray oscura' },
+  ps4: { w: 112, h: 156, name: 'PlayStation 4', hint: 'Caja Blu-ray azul' },
+  wiiu: { w: 112, h: 156, name: 'Wii U', hint: 'Caja azul cian' },
+  dc: { w: 140, h: 140, name: 'Dreamcast', hint: 'Disco blanco / naranja' },
+  vita: { w: 100, h: 130, name: 'PS Vita', hint: 'Caja azul compacta' },
+  xbone: { w: 112, h: 156, name: 'Xbox One', hint: 'Caja verde oscuro' },
 };
 
 /** Estilo → plataforma de origen representativa (para las miniaturas). */
@@ -73,6 +79,12 @@ const PLAT_FOR_STYLE: Record<MediaStyle, SourcePlatform> = {
   xbox: 'xbox',
   ps2: 'ps2',
   x360: 'x360',
+  ps3: 'ps3',
+  ps4: 'ps4',
+  wiiu: 'wiiu',
+  dc: 'dc',
+  vita: 'vita',
+  xbone: 'xbone',
 };
 
 /* -------------------------------------------------------------------------- */
@@ -105,6 +117,12 @@ const PLAT_HEX: Record<string, PlatColors> = {
   wii: { neon: '#00A0E9', tag: '#EAF8FF', dsh: ['#EAF8FF', '#00A0E9'] },
   xbox: { neon: '#52E070', tag: '#8CF0A2', dsh: ['#52E070', '#1F7A34'] },
   x360: { neon: '#A9D14A', tag: '#C2E86B', dsh: ['#A9D14A', '#567A18'] },
+  ps3: { neon: '#E51B24', tag: '#FFE6E8', dsh: ['#E51B24', '#251B1D'] },
+  ps4: { neon: '#0072CE', tag: '#E6F0FA', dsh: ['#0072CE', '#16243A'] },
+  wiiu: { neon: '#00B4E6', tag: '#E6F8FF', dsh: ['#00B4E6', '#172C36'] },
+  dc: { neon: '#FF6600', tag: '#FFEADB', dsh: ['#FF6600', '#2B1E19'] },
+  vita: { neon: '#0099FF', tag: '#E6F5FF', dsh: ['#0099FF', '#1A2838'] },
+  xbone: { neon: '#107C10', tag: '#E8F5E8', dsh: ['#107C10', '#1A261A'] },
   pc: { neon: '#FFC857', tag: '#FFD98A', dsh: ['#5A5A72', '#2A2A3A'] },
   other: { neon: '#A9A4D4', tag: '#C9C4F0', dsh: ['#8A86B0', '#4A476E'] },
 };
@@ -396,6 +414,7 @@ interface DiscDef {
 }
 
 const DISC: Partial<Record<MediaStyle, DiscDef>> = {
+  dc: { rim: 'conic-gradient(from 45deg,#FFFFFF,#FF9933,#FFFFFF,#FF6600,#FFFFFF)', ins: 12, hole: 28 },
   cd: { rim: IRIDESCENT, ins: 11, hole: 30 },
   ps1: {
     rim: 'conic-gradient(from 20deg,#3A3A44,#6A6A78,#2A2A32,#7A7A88,#3A3A44)',
@@ -548,9 +567,25 @@ export function mediaHTML(
           'background:#17171D;border:3px solid rgba(255,255,255,.65)'
       );
     }
-  } else if (style === 'ps2' || style === 'x360') {
-    const col = style === 'ps2' ? '#2C45C8' : '#6CB31B';
-    const dk = style === 'ps2' ? '#16248A' : '#3F7A0C';
+  } else if (
+    style === 'ps2' ||
+    style === 'x360' ||
+    style === 'ps3' ||
+    style === 'ps4' ||
+    style === 'wiiu' ||
+    style === 'xbone' ||
+    style === 'vita'
+  ) {
+    const boxThemes: Record<string, [string, string]> = {
+      ps2: ['#2C45C8', '#16248A'],
+      x360: ['#6CB31B', '#3F7A0C'],
+      ps3: ['#20222A', '#101115'],
+      ps4: ['#003791', '#001D54'],
+      wiiu: ['#009AC7', '#005B75'],
+      xbone: ['#107C10', '#0A4D0A'],
+      vita: ['#0066CC', '#003366'],
+    };
+    const [col, dk] = boxThemes[style] ?? ['#2C45C8', '#16248A'];
     h += abs(`inset:0;border-radius:8px;background:${art};box-shadow:inset 0 0 0 2px rgba(0,0,0,.45)`);
     h += abs(
       `left:0;top:0;bottom:0;width:15px;border-radius:8px 0 0 8px;` +
