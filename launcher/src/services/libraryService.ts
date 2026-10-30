@@ -28,6 +28,8 @@ import type {
 import {
   DEFAULT_SETTINGS,
   defaultAddons,
+  HERO_SCALE_MAX,
+  HERO_SCALE_MIN,
   LIBRARY_SCHEMA_VERSION,
   LIBRARY_STORAGE_KEY,
   LIBRARY_STATES,
@@ -127,6 +129,12 @@ function artScale(value: unknown): number | undefined {
   return Math.max(LOGO_SCALE_MIN, Math.min(LOGO_SCALE_MAX, Math.round(value)));
 }
 
+/** Escala del fondo de cabecera acotada al rango del slider (100–250 %). */
+function artHeroScale(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(HERO_SCALE_MIN, Math.min(HERO_SCALE_MAX, Math.round(value)));
+}
+
 /**
  * Sanea el arte personalizado leído de disco o de `localStorage`.
  *
@@ -147,6 +155,8 @@ export function sanitizeCustomArt(raw: unknown): CustomArtwork | null {
   if (isLogoAnchor(raw['logoAnchor'])) art.logoAnchor = raw['logoAnchor'] as LogoAnchor;
   const logoScale = artScale(raw['logoScale']);
   if (logoScale !== undefined) art.logoScale = logoScale;
+  const heroScale = artHeroScale(raw['heroScale']);
+  if (heroScale !== undefined) art.heroScale = heroScale;
 
   return Object.keys(art).length > 0 ? art : null;
 }

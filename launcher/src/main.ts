@@ -40,6 +40,7 @@ import {
   artModalHTML,
   artDraftOf,
   artPatchOf,
+  clampHeroScale,
   clampLogoScale,
   wizardModalHTML,
   pluginsDocModalHTML,
@@ -449,6 +450,17 @@ function applyLogoScale(raw: number): void {
   if (img) img.style.height = `${scale}px`;
   const label = document.getElementById('art-scale-val');
   if (label) label.textContent = `${scale} px`;
+}
+
+/** Ajusta el zoom del fondo de cabecera y refresca la previsualización sin repintar. */
+function applyHeroScale(raw: number): void {
+  if (!currentArtDraft) return;
+  const scale = clampHeroScale(raw);
+  currentArtDraft.heroScale = scale;
+  const img = document.getElementById('art-hero-preview-img');
+  if (img) img.style.transform = `scale(${scale / 100})`;
+  const label = document.getElementById('art-hero-scale-val');
+  if (label) label.textContent = `${scale}%`;
 }
 
 /** Texto legible del error que devuelve SteamGridDB (o el propio proxy). */
@@ -1312,6 +1324,10 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   'set-scale': () => {
     /* Intencionadamente vacío: el valor se aplica en `input`/`change`. */
   },
+  /* Mismo contrato para el slider de zoom del fondo (`data-art="hero-scale"`). */
+  'set-hero-scale': () => {
+    /* Intencionadamente vacío: el valor se aplica en `input`/`change`. */
+  },
   'art-search': (d) => {
     const kind = d.k;
     if (!isArtKind(kind)) return;
@@ -1513,6 +1529,9 @@ document.addEventListener('input', (e) => {
   if (t.dataset.art === 'scale') {
     applyLogoScale(Number(t.value));
   }
+  if (t.dataset.art === 'hero-scale') {
+    applyHeroScale(Number(t.value));
+  }
 });
 
 document.addEventListener('change', (e) => {
@@ -1571,6 +1590,9 @@ document.addEventListener('change', (e) => {
   }
   if (t.dataset.art === 'scale') {
     applyLogoScale(Number(t.value));
+  }
+  if (t.dataset.art === 'hero-scale') {
+    applyHeroScale(Number(t.value));
   }
 });
 

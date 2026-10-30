@@ -22,6 +22,9 @@ import type {
 } from '../services/types';
 import {
   ADDONS_DIR,
+  HERO_SCALE_DEFAULT,
+  HERO_SCALE_MAX,
+  HERO_SCALE_MIN,
   LOGO_ANCHORS,
   LOGO_ANCHOR_DEFAULT,
   LOGO_ANCHOR_GLYPHS,
@@ -32,6 +35,7 @@ import {
 import {
   esc,
   devChip as chipOf,
+  clampHeroScale,
   clampLogoScale,
   flagOf,
   PROG,
@@ -1100,6 +1104,21 @@ export function devBox(game: Game): string {
   );
 }
 
+/**
+ * Máscara elíptica ESTÁTICA que funde el hero con el lienzo.
+ *
+ * Se aplica al contenedor (nunca al `<img>` escalado: `transform` movería
+ * también su máscara), de modo que el desvanecimiento queda anclado al hueco de
+ * la cabecera y la imagen se agranda/mueve por dentro. Los stops tocan
+ * `transparent` al 85 % de una elipse 65 % 60 %, muy por dentro de los bordes
+ * físicos: los cuatro lados son invisibles y no queda ningún corte rectangular.
+ * Se emiten `-webkit-*` y estándar (WebKit/Blink y Gecko).
+ */
+const HERO_MASK_CSS =
+  '-webkit-mask-image:radial-gradient(ellipse 65% 60% at 50% 50%,black 25%,rgba(0,0,0,0.85) 45%,rgba(0,0,0,0.2) 65%,transparent 85%);' +
+  'mask-image:radial-gradient(ellipse 65% 60% at 50% 50%,black 25%,rgba(0,0,0,0.85) 45%,rgba(0,0,0,0.2) 65%,transparent 85%);' +
+  '-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;';
+
 export function renderGame(id: string): string {
   const game = S.byId.get(id);
   if (!game) return '<div class="empty">Esta ficha no está en el índice.</div>';
@@ -1214,6 +1233,9 @@ export function renderGame(id: string): string {
   const logo = game.logo;
   const logoAnchor = game.logoAnchor ?? LOGO_ANCHOR_DEFAULT;
   const logoScale = clampLogoScale(game.logoScale);
+  /* Escala del fondo (100–250 %): la imagen se agranda desde el centro dentro
+   * de la máscara estática, así el fundido perimetral no se mueve con el zoom. */
+  const heroScale = clampHeroScale(game.heroScale);
 
   /* Capa absoluta del logotipo: el usuario decide el ancla (7 puntos) y el
    * alto (40–220 px) desde el botón «Ajustar arte». Se coloca antes de la capa de
@@ -1270,29 +1292,26 @@ export function renderGame(id: string): string {
       ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:1;' +
         'pointer-events:none;padding:12px 60px">' +
         /* El hero se funde con el lienzo mediante una máscara radial elíptica
-         * aplicada DOS veces: al wrapper y al propio `<img>`. El wrapper
-         * garantiza el recorte aunque `object-fit: contain` deje franjas
-         * transparentes dentro de la caja del `<img>` (los motores calculan la
-         * máscara sobre la caja del elemento, no sobre el píxel pintado), y la
-         * máscara del `<img>` evita que un navegador que ignore la del contenedor
-         * deje ver las esquinas rectas.
-         * Stops muy generosos: la opacidad plena solo llega al 20 % del radio y
-         * el degradado toca `transparent` al 90 % de una elipse 75 % 70 %, es
-         * decir, bastante ANTES de los bordes físicos, de modo que los cuatro
-         * lados son invisibles y se funden con el fondo desenfocado.
-         * Se emiten `-webkit-mask-image` y `mask-image` para WebKit/Blink y Gecko.
+         * ESTÁTICA aplicada solo al wrapper: si se aplicara al `<img>`, el
+         * `transform: scale` del slider de escala movería también la máscara y
+         * el fundido dejaría de estar anclado a la cabecera (además de
+         * multiplicar las alfas y lavar el arte).
          * El wrapper ocupa todo el área disponible (`width/height: 100%`) a
-         * propósito: así la elipse de la máscara se mide sobre el hueco de la
-         * cabecera y no sobre la caja de la imagen, de modo que el rectángulo
-         * del arte queda SIEMPRE dentro de la zona degradada (sea panorámico o
-         * casi cuadrado) y además el `max-height: 100%` del `<img>` vuelve a
-         * resolverse contra una altura definida y no puede desbordar el hero. */
-        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;' +
-        '-webkit-mask-image:radial-gradient(ellipse 75% 70% at 50% 50%,black 20%,rgba(0,0,0,0.75) 45%,rgba(0,0,0,0.2) 70%,transparent 90%);' +
-        'mask-image:radial-gradient(ellipse 75% 70% at 50% 50%,black 20%,rgba(0,0,0,0.75) 45%,rgba(0,0,0,0.2) 70%,transparent 90%);">' +
+         * propósito: así la elipse se mide sobre el hueco de la cabecera y no
+         * sobre la caja de la imagen (los motores calculan la máscara sobre la
+         * caja del elemento, no sobre el píxel pintado), de modo que el
+         * rectángulo del arte queda SIEMPRE dentro de la zona degradada, sea
+         * panorámico o casi cuadrado, y el `max-height: 100%` del `<img>` vuelve
+         * a resolverse contra una altura definida.
+         * `overflow:hidden` recorta el zoom (`scale` > 1) en una zona que la
+         * máscara ya ha dejado en `transparent`, así que no reaparece ningún
+         * borde recto ni se repite el degradado fuera de la caja. */
+        '<div style="width:100%;height:100%;overflow:hidden;display:flex;align-items:center;justify-content:center;' +
+        HERO_MASK_CSS +
+        '">' +
         `<img src="${esc(heroImg)}" alt="" style="max-height:100%;max-width:100%;object-fit:contain;display:block;` +
-        '-webkit-mask-image:radial-gradient(ellipse 75% 70% at 50% 50%,black 20%,rgba(0,0,0,0.75) 45%,rgba(0,0,0,0.2) 70%,transparent 90%);' +
-        'mask-image:radial-gradient(ellipse 75% 70% at 50% 50%,black 20%,rgba(0,0,0,0.75) 45%,rgba(0,0,0,0.2) 70%,transparent 90%);" /></div></div>'
+        `transform:scale(${heroScale / 100});transform-origin:center;transition:transform .15s ease-out" />` +
+        '</div></div>'
       : '') +
     /* --- capa 2: contenido, logotipo (izquierda) y acciones (derecha) -------- */
     logoLayer +
@@ -1401,6 +1420,7 @@ function sampleFor(style: MediaStyle): Game {
     customArt: null,
     logoAnchor: LOGO_ANCHOR_DEFAULT,
     logoScale: 110,
+    heroScale: HERO_SCALE_DEFAULT,
     rom: null,
     ai: 'none',
     exp: false,
@@ -1751,6 +1771,8 @@ export interface ArtDraft {
   coverUrl: string | null;
   logoAnchor: LogoAnchor;
   logoScale: number;
+  /** Escala del fondo de cabecera en porcentaje (100–250). */
+  heroScale?: number;
 }
 
 /** Miniatura de la galería devuelta por `/api/steamgrid/...`. */
@@ -1867,6 +1889,7 @@ export function artDraftOf(game: Game): ArtDraft {
     coverUrl: game.customArt?.coverUrl ?? null,
     logoAnchor: game.logoAnchor ?? LOGO_ANCHOR_DEFAULT,
     logoScale: clampLogoScale(game.logoScale),
+    heroScale: clampHeroScale(game.heroScale),
   };
 }
 
@@ -1878,12 +1901,15 @@ export function artPatchOf(draft: ArtDraft): CustomArtwork {
     logoUrl: draft.logoUrl,
     logoAnchor: draft.logoAnchor,
     logoScale: clampLogoScale(draft.logoScale),
+    heroScale: clampHeroScale(draft.heroScale),
   };
 }
 
 /* Reexportaciones de conveniencia: `main.ts` consume el modal y su modelo de
- * borrador junto a la escala y el tipo de ancla, sin depender de tres módulos. */
-export { clampLogoScale } from './model';
+ * borrador junto a las escalas y el tipo de ancla, sin depender de tres
+ * módulos. */
+export { clampHeroScale, clampLogoScale } from './model';
+export { HERO_SCALE_DEFAULT, HERO_SCALE_MAX, HERO_SCALE_MIN } from '../services/types';
 export type { LogoAnchor } from '../services/types';
 
 /**
@@ -1994,6 +2020,10 @@ export function artModalHTML(
   }
 
   if (activeTab === 'hero') {
+    /* Misma máscara estática que la cabecera: la previsualización debe mostrar
+     * exactamente el fundido que se verá en la ficha, y el zoom (`scale`) se
+     * aplica a la imagen de dentro para que la máscara no se mueva. */
+    const heroScale = clampHeroScale(draft.heroScale);
     panel =
       '<div class="lbl" style="padding:0">PREVISUALIZACIÓN</div>' +
       '<div style="position:relative;height:170px;border-radius:14px;overflow:hidden;' +
@@ -2001,12 +2031,24 @@ export function artModalHTML(
       (heroPreview
         ? `<img src="${esc(heroPreview)}" alt="" style="position:absolute;inset:-30px;width:calc(100% + 60px);` +
           'height:calc(100% + 60px);object-fit:cover;filter:blur(26px);opacity:.6" />' +
-          `<img src="${esc(heroPreview)}" alt="" style="position:absolute;inset:0;width:100%;height:100%;` +
-          'object-fit:contain" />'
+          '<div style="position:absolute;inset:0;overflow:hidden;display:flex;align-items:center;' +
+          'justify-content:center;padding:8px 20px;' +
+          HERO_MASK_CSS +
+          '">' +
+          `<img id="art-hero-preview-img" src="${esc(heroPreview)}" alt="" style="max-width:100%;` +
+          'max-height:100%;object-fit:contain;display:block;' +
+          `transform:scale(${heroScale / 100});transform-origin:center;transition:transform .15s ease-out" />` +
+          '</div>'
         : '<span class="muted" style="position:absolute;inset:0;display:grid;place-items:center">Sin fondo</span>') +
       '</div>' +
       '<div class="muted" style="font-size:12px">Al aplicarlo, la cabecera usa el fondo difuminado al máximo ' +
       'y el desvanecimiento lateral hacia el lienzo.</div>' +
+      '<div class="lbl" style="padding:0">ESCALA DEL FONDO</div>' +
+      '<div style="display:flex;align-items:center;gap:12px">' +
+      `<input id="art-hero-scale" type="range" min="${HERO_SCALE_MIN}" max="${HERO_SCALE_MAX}" step="2" ` +
+      `value="${heroScale}" data-art="hero-scale" data-act="set-hero-scale" aria-label="Escala del fondo" style="flex:1">` +
+      `<span class="mono" id="art-hero-scale-val" style="min-width:66px;text-align:right">${heroScale}%</span>` +
+      '</div>' +
       sourceBlock('hero', 'FONDO DE CABECERA (HERO)', 'GoldenEye 007', draft.heroUrl);
   }
 

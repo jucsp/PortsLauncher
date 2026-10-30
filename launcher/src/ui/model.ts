@@ -19,7 +19,15 @@ import type {
   Settings,
   SourcePlatform,
 } from '../services/types';
-import { LOGO_ANCHOR_DEFAULT, LOGO_SCALE_DEFAULT, LOGO_SCALE_MAX, LOGO_SCALE_MIN } from '../services/types';
+import {
+  HERO_SCALE_DEFAULT,
+  HERO_SCALE_MAX,
+  HERO_SCALE_MIN,
+  LOGO_ANCHOR_DEFAULT,
+  LOGO_SCALE_DEFAULT,
+  LOGO_SCALE_MAX,
+  LOGO_SCALE_MIN,
+} from '../services/types';
 import { catalogService } from '../services/catalogService';
 import { libraryService } from '../services/libraryService';
 import { DEVT, DSSH, FROM_PLATFORM, MEDIA, PLAT, PLATMEDIA, STRAT, TO_PLATFORM } from './platforms';
@@ -135,6 +143,8 @@ export interface Game {
   logoAnchor: LogoAnchor;
   /** Alto del logotipo en píxeles (40–220). */
   logoScale: number;
+  /** Escala del fondo de cabecera en porcentaje (100–250). */
+  heroScale: number;
   /** Archivos que debe aportar el usuario (ROM), o `null`. */
   rom: RomReq | null;
   /** Nivel de asistencia por IA declarado. */
@@ -330,6 +340,12 @@ export const artOf = (game: Game): string => art(game.c, game.p);
 export function clampLogoScale(value: number | null | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return LOGO_SCALE_DEFAULT;
   return Math.max(LOGO_SCALE_MIN, Math.min(LOGO_SCALE_MAX, Math.round(value)));
+}
+
+/** Escala del fondo de cabecera acotada al rango del slider (100–250 %). */
+export function clampHeroScale(value: number | null | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return HERO_SCALE_DEFAULT;
+  return Math.max(HERO_SCALE_MIN, Math.min(HERO_SCALE_MAX, Math.round(value)));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -597,6 +613,7 @@ export function toGame(
     customArt: custom,
     logoAnchor: custom?.logoAnchor ?? LOGO_ANCHOR_DEFAULT,
     logoScale: clampLogoScale(custom?.logoScale ?? LOGO_SCALE_DEFAULT),
+    heroScale: clampHeroScale(custom?.heroScale ?? HERO_SCALE_DEFAULT),
     rom: romOf(port),
     ai: port.aiLevel || 'unknown',
     exp: dev.k === 'exp',

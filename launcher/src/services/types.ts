@@ -390,6 +390,17 @@ export const LOGO_SCALE_MIN = 40;
 export const LOGO_SCALE_MAX = 220;
 export const LOGO_SCALE_DEFAULT = 110;
 
+/**
+ * Rango del slider de escala del fondo de cabecera (porcentaje).
+ *
+ * El 100 % muestra el hero entero dentro de su hueco; por encima se agranda
+ * desde el centro (`transform: scale`) para recortar los bordes de la imagen
+ * sin tocar la máscara estática que la funde con el lienzo.
+ */
+export const HERO_SCALE_MIN = 100; // 100%
+export const HERO_SCALE_MAX = 250; // 250%
+export const HERO_SCALE_DEFAULT = 115; // 115%
+
 /** Ajustes de arte que el usuario puede sobrescribir por juego. */
 export interface CustomArtwork {
   /** Carátula del soporte (cartucho/caja/disco). `null` = usar la del índice. */
@@ -400,6 +411,8 @@ export interface CustomArtwork {
   logoUrl?: string | null;
   logoAnchor?: LogoAnchor;
   logoScale?: number;
+  /** Escala del fondo de cabecera en porcentaje (100–250). */
+  heroScale?: number;
 }
 
 /** `true` si el valor es uno de los siete anclas válidos. */
