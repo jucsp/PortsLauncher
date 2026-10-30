@@ -210,7 +210,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "material",
         "steamGridDbGameId": 24046
-      }
+      },
+      "coverVerticalUrl": "https://cdn2.steamgriddb.com/grid/0838b43cd426373043e340b9f79985bd.png"
     },
     {
       "pid": "stonedmodder-auto-tmc-autotmc",
@@ -357,7 +358,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 34539
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/71894113c3d99bd18547f4a115b7892c.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/2e405b15462930fe38bd7ab3ca37869b.jpg"
     },
     {
       "pid": "bryanthaboi-gen1recomp-gen1recomp",
@@ -572,7 +575,9 @@
         "coverStyle": "alternate",
         "steamGridDbGameId": 35291,
         "coverMatchMethod": "aprobacion_masiva_v4_mejor_candidato"
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/b5346c9f1590412e92e6245b38720bca.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/09c9e2d4a95bbada9230220c9d53e26d.png"
     },
     {
       "pid": "mstan-megamanxsnesrecomp-megamanxsnesrecomp",
@@ -731,7 +736,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 35466
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/7bf17f30c1f576659768de560cd07b4c.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/25426a9fcea03b93d254bdd1adfd3c01.png"
     },
     {
       "pid": "snesrev-smw-smw",
@@ -1039,7 +1046,8 @@
         "coverStyle": "no_logo",
         "steamGridDbGameId": 35571,
         "coverMatchMethod": "aprobacion_masiva_v4_mejor_candidato"
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/2979158b9c1e72755a8961f03e3580f5.png"
     },
     {
       "pid": "jhdev2006-super-mario-bros-remastered-public-supermariobrosremastered",
@@ -1183,7 +1191,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 37382
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/be9dadc4eb25081aecdf678ce9987b59.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/105f777347c73908a23cbf0de0c33d3b.png"
     },
     {
       "pid": "radzprower-super-metroid-launcher-supermetroidlauncher",
@@ -1323,7 +1333,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 38157
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/f2b3d811e11b4d9edf249db3e3ea2e82.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/2dec8d122fa3447e2baa42fbe4fe7918.png"
     },
     {
       "pid": "radzprower-zelda-3-launcher-zelda3launcher",
@@ -1468,7 +1480,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 38124
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/15c98518a261391f8fd947b25747008c.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/e8b1cbd05f6e6a358a81dee52493dd06.png"
     },
     {
       "pid": "flyngmt-acgc-pc-port-acpcport",
@@ -1607,7 +1621,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 34931
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/8a061f5bc5b5bf7596bfc81024ddf032.png"
     },
     {
       "pid": "twilitrealm-dusklight-dusklight",
@@ -1845,7 +1860,8 @@
         "projectId": "kh7agap3w3pm2f856181hhk5h58f4qbv",
         "projectName": "Dusklight",
         "projectType": "port"
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/3e786bb12cb766f6b060a41e3d76eead.png"
     },
     {
       "pid": "expansionpak-moderngekko-kirbywiirecomp",
@@ -1985,7 +2001,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 5255202
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/bb9b8f636da01545487dd1da1f916492.png"
     },
     {
       "pid": "mariopartyrd-marioparty4-marioparty4",
@@ -2128,7 +2145,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 33887
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/182e6c2d3d78eef40e5dac7da77a748f.png"
     },
     {
       "pid": "kumapauz-project-reignition-projectreignition",
@@ -2271,7 +2289,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 38588
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/9cdb5346cfab5707bf1b7eefd0e0a761.png"
     },
     {
       "pid": "patchzyy-wiicompiled-wiicompiled",
@@ -2430,7 +2449,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 36054
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/abdeb6f575ac5c6676b747bca8d09cc2.png"
     },
     {
       "pid": "harbourmasters-2ship2harkinian-2ship2harkinian",
@@ -2696,7 +2716,9 @@
         "projectId": "kh72v4f492af74zf3jwhs5956s8f4033",
         "projectName": "2 Ship 2 Harkinian",
         "projectType": "port"
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/93f56e33053be5d9e391480a49bcd0d0.jpg",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/b8350cc348bb078b75742d7cc09f5b25.png"
     },
     {
       "pid": "alondero-automobililamborghini-recomp-automobililamborghini",
@@ -2858,7 +2880,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 38290
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/66819cba05ce0680763101c5655f4833.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/7acc6b8a4fb3eecc9bdffe7ff1f88c25.png"
     },
     {
       "pid": "banjorecomp-banjorecomp-banjo64recompiled",
@@ -3011,7 +3035,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 35564
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/e6c2499a1ed8c47929d6680094dd4d3e.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/5c34dc67a4178be566ff98512d6721d5.png"
     },
     {
       "pid": "jrickey-battleship-battleship",
@@ -3324,7 +3350,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 34001
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/54f44b0d3f61946abafb340debea6ea4.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/b8cb6b3e3fbbe240152724d977bb8fec.png"
     },
     {
       "pid": "revosucks-bm64recomp-bm64recompiled",
@@ -3467,7 +3495,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 1680
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/c6f2808cacad2bd81ecc51c62ab0b728.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/3a06105cf87a4a0d2b22ca218aca4783.png"
     },
     {
       "pid": "revosucks-bmherorecomp-bmherorecompiled",
@@ -3616,7 +3646,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 38377
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/3b7d09dac07c9ccd3aae2025cc195250.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/2cc18398df2e6692fffc29a610cb72e3.png"
     },
     {
       "pid": "fliperama86-cvlod-recomp-cvlodrecompiled",
@@ -3761,7 +3793,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 12888
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/9729c9467900e712f46044a2e54da67f.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/e5b8a279cf6f57a64bef77259348e714.png"
     },
     {
       "pid": "rainchus-chameleontwist1-jp-recomp-chameleontwistrecompiled",
@@ -3900,7 +3934,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 36237
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/dc3057816d58116a2a3d584741eb463e.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/e4d9158658821b779fefcceffe2fbacf.jpg"
     },
     {
       "pid": "conker64recomp-conker64-recompiled-conker64recompiled",
@@ -4043,7 +4079,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 36366
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/d69bc0b1aeafcc63c7d99509a65e0492.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/1a04f965818a8533f5613003c7db243d.png"
     },
     {
       "pid": "thatguymcd-dkr-r-dkrport",
@@ -4184,7 +4222,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 36929
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/723cae5b3e5291141a34a208e3f1d096.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/d0889e004cf23c71fbbe485591ccb636.jpg"
     },
     {
       "pid": "dinosaurplanetrecomp-dino-recomp-dinoplanetrecompiled",
@@ -4322,7 +4362,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 5278393
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/dc0ad704a57df1a1c7e4032441a24b33.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/417cce83a9373223e4aae3b833114354.jpg"
     },
     {
       "pid": "rainchus-donkey-kong-64-recompiled-dk64recompiled",
@@ -4473,7 +4515,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 37695
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/e86db08de401d331119974b57ca4f794.png"
     },
     {
       "pid": "theboy181-drmario64-recomp-plus-drmario64recompiledplus",
@@ -4617,7 +4660,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 37541
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/b285712525588e82902550a4dd0d546d.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/3a0d1535e1f1929f76f28f007a57584c.jpg"
     },
     {
       "pid": "zorkats-g-diffuser-g-diffuser",
@@ -5019,7 +5064,9 @@
         "_adapterWarnings": [
           "setupFiles #0: 2 hash(es) SHA-1 descartado(s)"
         ]
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/892ad1e93a41fffdaed87c16c066bc14.jpg",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/2d9d0ea2b599ee9880ce1bb7fc9ab74c.jpg"
     },
     {
       "pid": "klorfmorf-goemon64recomp-goemon64recompiled",
@@ -5161,7 +5208,9 @@
         "coverStyle": "alternate",
         "steamGridDbGameId": 5355366,
         "coverMatchMethod": "user_approved_round4"
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/5c3142452578757144809ef0159bd315.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/92940475655accafc96bc9744150a053.png"
     },
     {
       "pid": "akratch-goldenballoon-goldenballoon",
@@ -5516,7 +5565,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 35297
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/8b88deddb91dad147fa341ddd1e95702.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/4a65fd714997aaca6455b8d338cc61c6.png"
     },
     {
       "pid": "brawmario-infinite-mario-64-ever-infinitemario64ever",
@@ -5661,7 +5712,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 37177
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/00c789922f4d3c2920404efb84b91247.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/7f8b2279965c6d04202568d039689ea9.png"
     },
     {
       "pid": "harbourmasters-lighthouse-lighthouse",
@@ -5950,7 +6003,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 37399
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/0be04380d8d0a7cb9c7dff34df9a0d0b.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/423971c507756f83500704f0e8d9214b.png"
     },
     {
       "pid": "perfect-dark-pc-port-perfect-dark-perfectdarkport",
@@ -6159,7 +6214,9 @@
         "projectId": "kh7bfhrkbbm3sa9q5cs9cb0ygs8f5qma",
         "projectName": "Perfect Dark PC Port",
         "projectType": "port"
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/9df811bc0ec3cd1b8ce8e8f1bab30be4.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/eb454ad6be830064d49727814426bb6e.png"
     },
     {
       "pid": "mstan-pokemonstadiumrecomp-pokemonstadiumrecompiled",
@@ -6305,7 +6362,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 36269
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/5455b984d88b183aa7274186832afdaf.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/84b069ebd287d467cb7fd26e53c6a0c9.png"
     },
     {
       "pid": "rainchus-quest64-recomp-quest64recompiled",
@@ -6450,7 +6509,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 38121
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/4d183f3e97e6e359f142a8cd62358d6f.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/4a1d5168500965ca6f5d3022242bb51d.jpg"
     },
     {
       "pid": "harbourmasters-shipwright-shipofharkinian",
@@ -6629,7 +6690,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 21202
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/c30f5f4476fe7f05207f0479b0358ee8.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/9060b6f07473839fc0bbda82aea5cd31.png"
     },
     {
       "pid": "coop-deluxe-sm64coopdx-sm64coopdx",
@@ -6917,7 +6980,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 1667
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/8b40fef7240e57c3b486aaf7bef5faa0.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/4ee0331f55ba0c795f89feffdfdf1e77.png"
     },
     {
       "pid": "cellenseres-sssv-recomp-sssvrecompiled",
@@ -7057,7 +7122,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 35559
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/ca886eb9edb61a42256192745c72cd79.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/c59caa3f79c08451d88f41392a4e5ae7.png"
     },
     {
       "pid": "harbourmasters-spaghettikart-spaghettikart",
@@ -7302,7 +7369,9 @@
         "_adapterWarnings": [
           "setupFiles #0: 1 hash(es) SHA-1 descartado(s)"
         ]
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/80274c85de7606020be963ac556612a4.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/ead380f26b8ce97b18d7d82f1a8245c5.jpg"
     },
     {
       "pid": "harbourmasters-starship-starship",
@@ -7730,7 +7799,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 5293673
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/bbc9af8b43b5f12d4a5e9e575c1a57f4.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/c673c1518b43645438e7b3fc1e6552cc.png"
     },
     {
       "pid": "jessetbh-vpw64recomp-vpw64recomp",
@@ -7873,7 +7944,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 5293672
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/f396cd9b52b03743627597016bcf72c6.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/6cdb225ad1e6bf01938afc91ac384296.png"
     },
     {
       "pid": "jessetbh-wcwvsnwoworldtourrecomp-wcwvsnwoworldtourrecomp",
@@ -8018,7 +8091,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 34761
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/33ce7ff5a3464fa51fe2ee83f51f934b.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/8af8384d12df7752fbedd58ff37f25f7.jpg"
     },
     {
       "pid": "jessetbh-wcwnworevengerecomp-wcwnworevengerecomp",
@@ -8163,7 +8238,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 38314
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/a421a066993fe6710441d0fa141f5ca0.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/70515a2dc22fc2fa3af4b5f7d1aa0d98.png"
     },
     {
       "pid": "jessetbh-wwfnomercyrecomp-wwfnomercyrecomp",
@@ -8307,7 +8384,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 29850
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/d651798bd3df91429d2e3fa21f904321.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/a7930d030ebb7a111f8e3adcb9d6a10c.png"
     },
     {
       "pid": "jessetbh-wwfwrestlemania2000recomp-wwfwrestlemania2000recomp",
@@ -8451,7 +8530,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 35493
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/c89540269cd3437b6561297d6d387722.jpg",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/36a213dec58f9ae20b81cd14d3358981.jpg"
     },
     {
       "pid": "zelda64recomp-zelda64recomp-zelda64recompiled",
@@ -8606,7 +8687,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 34302
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/fe343ddd652652744e717b9ad3bcb11b.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/3f5380bb675dc58c512ecc65878e3e14.png"
     },
     {
       "pid": "cybervisi0n-pokeplatinum-pokeplatinum",
@@ -8750,7 +8833,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 38536
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/296791ab4def9788dcce6174d413939d.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/15fd459bc66aa8401543d8f4d1d80d97.png"
     },
     {
       "pid": "mstan-metroidprimehuntersrecomp-metroidprimehuntersrecomp",
@@ -8912,7 +8997,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 34541
-      }
+      },
+      "coverHorizontalUrl": "https://cdn2.steamgriddb.com/grid/5c2c9708d81868e412274a23c852568a.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/8a1ce8873f0ebe6634da275019155b10.png"
     },
     {
       "pid": "aliveteam-alive-reversing-relive",
@@ -9064,7 +9151,8 @@
         "coverStyle": "alternate",
         "steamGridDbGameId": 1490,
         "coverMatchMethod": "aprobacion_masiva_v4_mejor_candidato"
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/40f2165a405edf2145b3840fa4bd1c75.png"
     },
     {
       "pid": "opendriver2-redriver2-redriver2",
@@ -9208,7 +9296,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 36700
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/5c958d1725948a4fd11d162712d1c92b.png"
     },
     {
       "pid": "hedge-dev-unleashedrecomp-unleashedrecompiled",
@@ -9359,7 +9448,9 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 34584
-      }
+      },
+      "coverVerticalUrl": "https://cdn2.steamgriddb.com/grid/b80c0932cb6f7be27c8d37b4c847a8bd.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/2fc1df7ac6e00ffac3509b070b117ddc.png"
     },
     {
       "pid": "wipeout-phantom-edition-wipeout-phantom-edition-wipeoutphantomedition",
@@ -9710,7 +9801,8 @@
         "projectId": "kh774mtvkw4qj38kewfg8qyn8n8f581n",
         "projectName": "ApeEscapeRecomp",
         "projectType": "port"
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/b19344473680a608f6216314a9df63a2.png"
     },
     {
       "pid": "matteo842-crashbandicoot-launcher-crashbandicoot",
@@ -9937,7 +10029,8 @@
         "projectId": "kh7dykfydv63yycgx20ryvzq7n8f4wwk",
         "projectName": "Crash Bandicoot Launcher",
         "projectType": "port"
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/c281d780ae00740bafb97fea5389bbc9.png"
     },
     {
       "pid": "ctr-tools-ctr-native-ctrnative",
@@ -10220,7 +10313,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 38273
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/7818e42b0e7cbc2af4feed7bcfb238d4.png"
     },
     {
       "pid": "gtteancum-jet-moto-anthology-jetmotoanthology",
@@ -10358,7 +10452,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 35487
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/66b7353f1946e0406d8130770d96279b.png"
     },
     {
       "pid": "mstan-megamanx6recomp-megamanx6recomp",
@@ -10510,7 +10605,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "no_logo",
         "steamGridDbGameId": 33539
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/449813ff3f5a8a8d9fbc3fc03edce90b.png"
     },
     {
       "pid": "mikompilation-mikupan-mikupan",
@@ -10656,7 +10752,9 @@
         "coverStyle": "alternate",
         "steamGridDbGameId": 34783,
         "coverMatchMethod": "aprobacion_masiva_v4_mejor_candidato"
-      }
+      },
+      "coverVerticalUrl": "https://cdn2.steamgriddb.com/grid/bc9aad4a2cba8d35c0df8f847508ac8e.png",
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/9b5af8696030810f396c315b9577ffd0.png"
     },
     {
       "pid": "khasinski-rage-racer-pc-rage-racer-pc",
@@ -10798,7 +10896,8 @@
         "coverSource": "SteamGridDB",
         "coverStyle": "alternate",
         "steamGridDbGameId": 5173845
-      }
+      },
+      "heroUrl": "https://cdn2.steamgriddb.com/hero/9efd228f67d1bffa56c0e5f73bdcc18e.png"
     },
     {
       "pid": "legend-of-dragoon-modding-severed-chains-severedchains",

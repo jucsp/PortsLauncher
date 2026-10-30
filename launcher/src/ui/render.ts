@@ -245,11 +245,15 @@ const devChip = (game: Game, size?: string): string => chipOf(game, size);
  * La carátula real va como PRIMERA capa y el arte generativo del mock debajo:
  * si la imagen falta o falla, el hueco lo cubre la portada procedural, nunca
  * un fondo liso.
+ *
+ * @param game  ficha del modelo de vista.
+ * @param cover carátula a usar; por defecto `game.cover`. Permite pintar el
+ *              banner panorámico (`game.hero`) en las cabeceras.
  */
-export function bgOf(game: Game): string {
+export function bgOf(game: Game, cover: string | null = game.cover): string {
   const procedural = artOf(game);
-  if (!game.cover) return procedural;
-  const url = esc(game.cover).replace(/[\r\n]+/g, '');
+  if (!cover) return procedural;
+  const url = esc(cover).replace(/[\r\n]+/g, '');
   return `url('${url}') center / cover no-repeat, ${procedural}`;
 }
 
@@ -478,7 +482,7 @@ export function heroHTML(): string {
   if (!game || !game.inst) return '';
   const status = statusOf(game);
   return (
-    `<section class="hero" style="background:${bgOf(game)}"><div class="shade"></div><div class="in">` +
+    `<section class="hero" style="background:${bgOf(game, game.hero ?? game.cover)}"><div class="shade"></div><div class="in">` +
     '<div style="flex:1 1 280px">' +
     `<div class="mono" style="font-size:11px;letter-spacing:.14em;color:var(--accent2)">CONTINUAR JUGANDO</div>` +
     `<h2>${esc(game.t)}</h2>` +
@@ -840,7 +844,7 @@ export function renderGame(id: string): string {
     .join('');
 
   return paintMain(
-    `<div class="dhero" style="background:${bgOf(game)}">` +
+    `<div class="dhero" style="background:${bgOf(game, game.hero ?? game.cover)}">` +
     '<div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(10,9,18,.15),rgba(10,9,18,.85))"></div>' +
     '<a href="#biblioteca" data-act="nav" data-to="library" class="pill" style="position:relative;align-self:flex-start;background:rgba(10,9,18,.7);backdrop-filter:blur(6px);padding:8px 14px">← Biblioteca</a>' +
     '<div style="position:relative;display:flex;flex-wrap:wrap;align-items:flex-end;gap:24px;padding-top:70px">' +
@@ -927,6 +931,9 @@ function sampleFor(style: MediaStyle): Game {
     c: ['#1B1035', '#5B2BD9', '#FF4FA3'],
     p: 'grid',
     cover: null,
+    coverHorizontal: null,
+    coverVertical: null,
+    hero: null,
     rom: null,
     ai: 'none',
     exp: false,

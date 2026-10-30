@@ -10,7 +10,7 @@
  * ========================================================================== */
 
 import type { MediaStyle } from '../services/types';
-import { art, bodyOf } from './model';
+import { art, bodyOf, coverForStyle } from './model';
 import type { Game } from './model';
 import { CART, DSSH, MEDIA, PLAT } from './platforms';
 
@@ -42,14 +42,17 @@ const COVER_VEIL = 'linear-gradient(180deg,rgba(0,0,0,.12),rgba(0,0,0,.5))';
 export function mediaHTML(game: Game, style: MediaStyle, flag: boolean | [string, string] | null): string {
   const info = MEDIA[style];
   const art_ = art(game.c, game.p);
+  /* Carátula que corresponde al soporte: grid horizontal en cartuchos, grid
+   * vertical en cajas y `cover` en el resto (discos, PC, otros). */
+  const artwork = coverForStyle(game, style);
   /* Carátula real encima (si existe) y arte generativo siempre debajo. */
-  const cover = game.cover ? `${coverLayer(game.cover)}, ${art_}` : art_;
+  const cover = artwork ? `${coverLayer(artwork)}, ${art_}` : art_;
   /**
    * Variante para las caras impresas (etiqueta de cartucho, disco, caja DVD):
    * con foto real se antepone un velo para que el título y la pegatina
    * mantengan contraste, igual que el sombreado del mock sobre el arte.
    */
-  const face = game.cover ? `${COVER_VEIL}, ${cover}` : cover;
+  const face = artwork ? `${COVER_VEIL}, ${cover}` : cover;
   const tagColor = (PLAT[game.pl] ?? PLAT.OTRAS).tag;
   const title = escText(game.cv);
   const label = game.pl;

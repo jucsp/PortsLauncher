@@ -273,6 +273,73 @@ export const MEDIA_BY_PLATFORM: Record<SourcePlatform, MediaStyle> = {
 };
 
 /* -------------------------------------------------------------------------- */
+/* Selección de carátula según el soporte físico                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Plataformas que el launcher dibuja como **cartucho**: la etiqueta usa el grid
+ * horizontal (`coverHorizontalUrl`). Debe coincidir con
+ * `CARTRIDGE_PLATFORMS` del indexador (`catalog-builder/enrichment/steamgrid.py`).
+ */
+export const CARTRIDGE_PLATFORMS: readonly SourcePlatform[] = [
+  'n64',
+  'snes',
+  'nes',
+  'md',
+  'gba',
+  'gb',
+  'nds',
+  'n3ds',
+];
+
+/**
+ * Plataformas que el launcher dibuja como **caja DVD/tarjeta**: la carátula usa
+ * el grid vertical (`coverVerticalUrl`). Coincide con `BOX_PLATFORMS` del
+ * indexador.
+ */
+export const BOX_PLATFORMS: readonly SourcePlatform[] = ['ps2', 'x360', 'nsw'];
+
+export interface CoverSources {
+  coverUrl?: string | null;
+  coverHorizontalUrl?: string | null;
+  coverVerticalUrl?: string | null;
+}
+
+/** Devuelve la primera URL no vacía de las dos candidatas (o `null`). */
+function firstUrl(primary?: string | null, fallback?: string | null): string | null {
+  const a = typeof primary === 'string' ? primary.trim() : '';
+  if (a) return a;
+  const b = typeof fallback === 'string' ? fallback.trim() : '';
+  return b || null;
+}
+
+/**
+ * Carátula que corresponde a un soporte físico.
+ *
+ * - **Cartuchos** (`n64`, `snes`, `nes`, `md`, `gba`, `gb`, `nds`, `n3ds`):
+ *   `coverHorizontalUrl` (grid 920x430 / 460x215).
+ * - **Cajas** (`ps2`, `x360`, `nsw`): `coverVerticalUrl` (grid 600x900).
+ * - **Otros soportes** (discos, `pc`, `other`…): `coverUrl`.
+ *
+ * En todos los casos se degrada a `coverUrl` si el arte específico falta; si no
+ * hay ninguna imagen, devuelve `null` y el launcher pinta el arte generativo
+ * procedural.
+ */
+export function coverForPlatform(
+  platform: SourcePlatform | string | null | undefined,
+  sources: CoverSources
+): string | null {
+  const key = String(platform ?? 'other');
+  if (CARTRIDGE_PLATFORMS.includes(key as SourcePlatform)) {
+    return firstUrl(sources.coverHorizontalUrl, sources.coverUrl);
+  }
+  if (BOX_PLATFORMS.includes(key as SourcePlatform)) {
+    return firstUrl(sources.coverVerticalUrl, sources.coverUrl);
+  }
+  return firstUrl(sources.coverUrl, null);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Catálogo: `data/ports.index.json`                                          */
 /* -------------------------------------------------------------------------- */
 
@@ -383,6 +450,12 @@ export interface PortItem {
   folderName?: string | null;
   iconUrl?: string | null;
   coverUrl?: string | null;
+  /** Grid horizontal (920x430 / 460x215): etiqueta de cartuchos. */
+  coverHorizontalUrl?: string | null;
+  /** Grid vertical (600x900): carátula de cajas PS2 / Xbox 360 / Switch. */
+  coverVerticalUrl?: string | null;
+  /** Imagen panorámica (1920x620): fondo de la cabecera de detalle. */
+  heroUrl?: string | null;
   requiresUserFiles: RequiresUserFiles;
   gameData?: unknown;
   installRecipe?: Record<string, unknown> | null;

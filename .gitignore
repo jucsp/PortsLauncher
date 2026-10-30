@@ -38,3 +38,4 @@ tools/
 # Variables de entorno y credenciales
 *.env
 .env*
+data/cache/

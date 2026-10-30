@@ -95,6 +95,12 @@ export interface Game {
   p: Pattern;
   /** Portada real, si el índice la trae. */
   cover: string | null;
+  /** Grid horizontal (etiqueta de cartucho), si el índice la trae. */
+  coverHorizontal: string | null;
+  /** Grid vertical (carátula de caja PS2 / Xbox 360 / Switch), si la trae. */
+  coverVertical: string | null;
+  /** Imagen panorámica para la cabecera de la ficha de detalle, si la trae. */
+  hero: string | null;
   /** Archivos que debe aportar el usuario (ROM), o `null`. */
   rom: RomReq | null;
   /** Nivel de asistencia por IA declarado. */
@@ -225,6 +231,58 @@ export function art(color: Palette, pattern: Pattern): string {
 
 /** Atajo del prototipo: `art(g.c, g.p)`. */
 export const artOf = (game: Game): string => art(game.c, game.p);
+
+/* -------------------------------------------------------------------------- */
+/* Carátula según el soporte físico                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Siluetas que lucen la etiqueta del **grid horizontal** del cartucho.
+ *
+ * Coincide con `CARTRIDGE_PLATFORMS` del indexado (grid 920x430 / 460x215).
+ */
+const HORIZONTAL_COVER_STYLES: readonly MediaStyle[] = [
+  'n64',
+  'snes',
+  'nes',
+  'md',
+  'gba',
+  'gb',
+  'nds',
+  'n3ds',
+];
+
+/**
+ * Siluetas que lucen la carátula del **grid vertical** de la caja.
+ *
+ * Coincide con `BOX_PLATFORMS` del indexado (grid 600x900).
+ */
+const VERTICAL_COVER_STYLES: readonly MediaStyle[] = ['ps2', 'x360', 'nsw'];
+
+/** Devuelve la URL si es una cadena con contenido; `null` en cualquier otro caso. */
+const usableCover = (url: string | null | undefined): string | null =>
+  typeof url === 'string' && url.trim() ? url : null;
+
+/**
+ * Carátula que corresponde al soporte que se está dibujando.
+ *
+ * - **Cartuchos** (`n64`, `snes`, `nes`, `md`, `gba`, `gb`, `nds`, `n3ds`):
+ *   `coverHorizontal` (grid horizontal de la etiqueta).
+ * - **Cajas** (`ps2`, `x360`, `nsw`): `coverVertical` (grid vertical).
+ * - **Resto** (discos, PC, otros): `cover` (portada genérica).
+ *
+ * Si el arte específico falta se degrada a `cover`; si tampoco hay, `null` y el
+ * soporte pinta su arte generativo procedural.
+ */
+export function coverForStyle(game: Game, style: MediaStyle): string | null {
+  if (HORIZONTAL_COVER_STYLES.includes(style)) {
+    return usableCover(game.coverHorizontal) ?? usableCover(game.cover);
+  }
+  if (VERTICAL_COVER_STYLES.includes(style)) {
+    return usableCover(game.coverVertical) ?? usableCover(game.cover);
+  }
+  return usableCover(game.cover);
+}
 
 /* -------------------------------------------------------------------------- */
 /* Estado de la ficha (`status` y `flagOf` del prototipo)                     */
@@ -413,6 +471,9 @@ export function toGame(
     c: paletteFromPid(port.pid, platform),
     p: patternFromPid(port.pid),
     cover: port.coverUrl ?? null,
+    coverHorizontal: port.coverHorizontalUrl ?? null,
+    coverVertical: port.coverVerticalUrl ?? null,
+    hero: port.heroUrl ?? null,
     rom: romOf(port),
     ai: port.aiLevel || 'unknown',
     exp: dev.k === 'exp',
