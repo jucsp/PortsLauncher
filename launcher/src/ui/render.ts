@@ -1269,14 +1269,30 @@ export function renderGame(id: string): string {
     (heroImg
       ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:1;' +
         'pointer-events:none;padding:12px 60px">' +
-        /* El hero se funde con el lienzo mediante una máscara radial elíptica:
-         * el centro queda nítido (100 % opaco hasta el 45 %) y los cuatro
-         * bordes se desvanecen a transparente, de modo que no hay cortes duros
-         * ni marco rectangular visible sobre el fondo desenfocado. Se emiten
-         * `-webkit-mask-image` y `mask-image` para cubrir WebKit/Blink y Gecko. */
-        `<img src="${esc(heroImg)}" alt="" style="max-height:100%;max-width:100%;object-fit:contain;` +
-        '-webkit-mask-image:radial-gradient(ellipse 90% 85% at 50% 50%,black 45%,rgba(0,0,0,0.85) 65%,rgba(0,0,0,0.25) 88%,transparent 100%);' +
-        'mask-image:radial-gradient(ellipse 90% 85% at 50% 50%,black 45%,rgba(0,0,0,0.85) 65%,rgba(0,0,0,0.25) 88%,transparent 100%);" /></div>'
+        /* El hero se funde con el lienzo mediante una máscara radial elíptica
+         * aplicada DOS veces: al wrapper y al propio `<img>`. El wrapper
+         * garantiza el recorte aunque `object-fit: contain` deje franjas
+         * transparentes dentro de la caja del `<img>` (los motores calculan la
+         * máscara sobre la caja del elemento, no sobre el píxel pintado), y la
+         * máscara del `<img>` evita que un navegador que ignore la del contenedor
+         * deje ver las esquinas rectas.
+         * Stops muy generosos: la opacidad plena solo llega al 20 % del radio y
+         * el degradado toca `transparent` al 90 % de una elipse 75 % 70 %, es
+         * decir, bastante ANTES de los bordes físicos, de modo que los cuatro
+         * lados son invisibles y se funden con el fondo desenfocado.
+         * Se emiten `-webkit-mask-image` y `mask-image` para WebKit/Blink y Gecko.
+         * El wrapper ocupa todo el área disponible (`width/height: 100%`) a
+         * propósito: así la elipse de la máscara se mide sobre el hueco de la
+         * cabecera y no sobre la caja de la imagen, de modo que el rectángulo
+         * del arte queda SIEMPRE dentro de la zona degradada (sea panorámico o
+         * casi cuadrado) y además el `max-height: 100%` del `<img>` vuelve a
+         * resolverse contra una altura definida y no puede desbordar el hero. */
+        '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;' +
+        '-webkit-mask-image:radial-gradient(ellipse 75% 70% at 50% 50%,black 20%,rgba(0,0,0,0.75) 45%,rgba(0,0,0,0.2) 70%,transparent 90%);' +
+        'mask-image:radial-gradient(ellipse 75% 70% at 50% 50%,black 20%,rgba(0,0,0,0.75) 45%,rgba(0,0,0,0.2) 70%,transparent 90%);">' +
+        `<img src="${esc(heroImg)}" alt="" style="max-height:100%;max-width:100%;object-fit:contain;display:block;` +
+        '-webkit-mask-image:radial-gradient(ellipse 75% 70% at 50% 50%,black 20%,rgba(0,0,0,0.75) 45%,rgba(0,0,0,0.2) 70%,transparent 90%);' +
+        'mask-image:radial-gradient(ellipse 75% 70% at 50% 50%,black 20%,rgba(0,0,0,0.75) 45%,rgba(0,0,0,0.2) 70%,transparent 90%);" /></div></div>'
       : '') +
     /* --- capa 2: contenido, logotipo (izquierda) y acciones (derecha) -------- */
     logoLayer +
