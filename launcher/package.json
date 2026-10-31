@@ -11,6 +11,8 @@
   },
   "scripts": {
     "dev": "vite",
+    "icon": "node build/generate-icon.mjs",
+    "prebuild": "node build/generate-icon.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
@@ -21,6 +23,7 @@
   "build": {
     "appId": "cl.garagelabs.portslauncher",
     "productName": "PortsLauncher",
+    "icon": "build/icon.png",
     "directories": {
       "output": "dist-electron"
     },

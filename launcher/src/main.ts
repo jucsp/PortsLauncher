@@ -467,7 +467,9 @@ async function checkLauncherUpdates(silent = false): Promise<void> {
  *
  * La ruta existe tanto en Electron (servidor propio) como en `vite`/`preview`
  * (`electron/api.cjs` vía middleware), así que el camino feliz no abre el
- * navegador: el fichero queda descargado y, en Linux, ejecutable. Si no hay
+ * navegador: el fichero queda descargado y, en Linux, ejecutable. Se pide al
+ * backend `execute: true` para que además lance el instalador desacoplado; si
+ * no lo hace, el toast informa de la ruta donde quedó guardado. Si no hay
  * backend (build servida desde otro origen) o la petición falla, se recurre a la
  * descarga directa del release: `window.open` pasa por `setWindowOpenHandler` en
  * Electron, que delega en `shell.openExternal`.
@@ -489,10 +491,21 @@ async function openUpdateDownload(): Promise<void> {
         downloadUrl: url,
         assetName: state.result.assetName,
         version: state.result.latestVersion,
+        /* El backend lanza el instalador desacoplado tras descargarlo. */
+        execute: true,
       }),
     });
     if (res.ok) {
-      const data = (await res.json()) as { ok?: boolean; path?: string };
+      const data = (await res.json()) as {
+        ok?: boolean;
+        path?: string;
+        executed?: boolean;
+        message?: string;
+      };
+      if (data.ok && data.executed) {
+        toast('✓ Lanzando actualización...');
+        return;
+      }
       if (data.ok && data.path) {
         toast('✓ Actualización guardada en: ' + data.path);
         return;

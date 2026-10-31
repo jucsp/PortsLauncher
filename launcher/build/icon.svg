@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="PortsLauncher">
+  <title>PortsLauncher</title>
+  <!-- Fondo nocturno arcade: casi negro con un halo violeta muy tenue. -->
+  <defs>
+    <radialGradient id="fondo" cx="50%" cy="42%" r="72%">
+      <stop offset="0%" stop-color="#171233" />
+      <stop offset="100%" stop-color="#0A0912" />
+    </radialGradient>
+    <linearGradient id="neon-fucsia" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF8AC4" />
+      <stop offset="55%" stop-color="#FF4FA3" />
+      <stop offset="100%" stop-color="#C42A78" />
+    </linearGradient>
+    <filter id="glow-cian" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <filter id="glow-fucsia" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="9" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Placa base redondeada. -->
+  <rect x="0" y="0" width="512" height="512" rx="112" ry="112" fill="url(#fondo)" />
+
+  <!-- Rejilla de scanlines sutil (estética CRT). -->
+  <g opacity="0.07" fill="#3DE8FF">
+    <rect x="0" y="64" width="512" height="2" />
+    <rect x="0" y="128" width="512" height="2" />
+    <rect x="0" y="192" width="512" height="2" />
+    <rect x="0" y="256" width="512" height="2" />
+    <rect x="0" y="320" width="512" height="2" />
+    <rect x="0" y="384" width="512" height="2" />
+    <rect x="0" y="448" width="512" height="2" />
+  </g>
+
+  <!-- Marco neón cian con bloom. -->
+  <rect x="36" y="36" width="440" height="440" rx="88" ry="88" fill="none"
+        stroke="#3DE8FF" stroke-width="16" filter="url(#glow-cian)" />
+  <rect x="52" y="52" width="408" height="408" rx="74" ry="74" fill="none"
+        stroke="#3DE8FF" stroke-opacity="0.28" stroke-width="3" />
+
+  <!-- Cruz direccional retro (d-pad) en cian, guiño arcade. -->
+  <g fill="#3DE8FF" opacity="0.55">
+    <rect x="228" y="404" width="56" height="16" rx="7" />
+    <rect x="248" y="384" width="16" height="56" rx="7" />
+  </g>
+
+  <!-- Letra P estilizada en fucsia neón. -->
+  <g filter="url(#glow-fucsia)">
+    <!-- Asta vertical. -->
+    <rect x="158" y="118" width="62" height="278" rx="16" fill="url(#neon-fucsia)" />
+    <!-- Bucle: anillo que se fusiona con el asta. -->
+    <circle cx="292" cy="222" r="72" fill="none" stroke="url(#neon-fucsia)" stroke-width="64" />
+  </g>
+  <!-- Brillo interior del asta. -->
+  <rect x="168" y="132" width="12" height="240" rx="6" fill="#FFFFFF" opacity="0.18" />
+
+  <!-- Píxel de estado (encendido). -->
+  <circle cx="386" cy="386" r="18" fill="#FF4FA3" filter="url(#glow-fucsia)" />
+</svg>

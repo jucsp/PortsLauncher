@@ -37,7 +37,7 @@ function stubFetch(impl: FetchMock) {
   return spy;
 }
 
-const REPO = 'juancarlosf/PortsLauncher';
+const REPO = 'jucsp/PortsLauncher';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -163,7 +163,7 @@ describe('checkForUpdates', () => {
         name: 'PortsLauncher 0.2.0',
         body: '## Novedades\n- Auto-actualizador',
         published_at: '2026-01-02T10:00:00Z',
-        html_url: 'https://github.com/juancarlosf/PortsLauncher/releases/tag/v0.2.0',
+        html_url: 'https://github.com/jucsp/PortsLauncher/releases/tag/v0.2.0',
         assets: [
           { name: 'PortsLauncher-0.2.0.AppImage', browser_download_url: 'https://x/appimage' },
           { name: 'PortsLauncher Setup 0.2.0.exe', browser_download_url: 'https://x/exe' },
@@ -249,7 +249,7 @@ describe('checkForUpdates', () => {
     stubFetch(async () =>
       jsonResponse({
         tag_name: 'v0.4.0',
-        html_url: 'https://github.com/juancarlosf/PortsLauncher/releases/tag/v0.4.0',
+        html_url: 'https://github.com/jucsp/PortsLauncher/releases/tag/v0.4.0',
         assets: [{ name: 'PortsLauncher-0.4.0.dmg', browser_download_url: 'https://x/dmg' }],
       })
     );
@@ -258,7 +258,7 @@ describe('checkForUpdates', () => {
     expect(result.hasUpdate).toBe(true);
     expect(result.assetName).toBeNull();
     expect(result.downloadUrl).toBe(
-      'https://github.com/juancarlosf/PortsLauncher/releases/tag/v0.4.0'
+      'https://github.com/jucsp/PortsLauncher/releases/tag/v0.4.0'
     );
   });
 });

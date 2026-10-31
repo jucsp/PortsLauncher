@@ -17,7 +17,7 @@
 export const CURRENT_VERSION = '0.1.0';
 
 /** Repositorio de releases por defecto (configurable en Ajustes). */
-export const DEFAULT_UPDATE_REPO = 'juancarlosf/PortsLauncher';
+export const DEFAULT_UPDATE_REPO = 'jucsp/PortsLauncher';
 
 /** Clave de `localStorage` donde vive el repositorio elegido. */
 const REPO_STORAGE_KEY = 'portshub-update-repo';

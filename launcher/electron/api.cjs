@@ -335,6 +335,11 @@ async function handleInstall(req, res) {
  *
  * El nombre del fichero pasa por `path.basename`: aunque el cuerpo venga del
  * frontend, no puede escapar de `~/Downloads` con `../`.
+ *
+ * Cuerpo aceptado: `{ downloadUrl, assetName?, version?, execute? }`. Con
+ * `execute: true` el instalador descargado se lanza en segundo plano de forma
+ * desacoplada (`spawn` + `unref`), de modo que puede reemplazar la app en marcha;
+ * la respuesta añade `executed: true` para que la UI lo confirme al usuario.
  */
 async function handleSelfUpdate(req, res) {
   if (req.method !== 'POST') {
@@ -362,11 +367,33 @@ async function handleSelfUpdate(req, res) {
     const fileName = requested && requested !== '.' && requested !== '..' ? requested : fallback;
     const targetPath = path.join(downloadsDir, fileName);
 
+    /* El renderer puede pedir que, tras descargar, se lance el instalador. */
+    const execute = Boolean(body && body.execute);
+
     await downloadTo(downloadUrl, targetPath);
 
     /* Un AppImage sin permiso de ejecución no arranca tras la descarga. */
     if (process.platform === 'linux' && fileName.toLowerCase().endsWith('.appimage')) {
       fs.chmodSync(targetPath, 0o755);
+    }
+
+    if (execute) {
+      /* Lanzamiento desacoplado: el hijo sobrevive al proceso del launcher y el
+       * instalador puede reemplazar la app en marcha sin bloquear la respuesta. */
+      const { spawn } = require('node:child_process');
+      try {
+        const sub = spawn(targetPath, [], { detached: true, stdio: 'ignore' });
+        sub.unref();
+      } catch (e) {
+        console.warn('No se pudo auto-lanzar:', e);
+      }
+      sendJSON(res, 200, {
+        ok: true,
+        path: targetPath,
+        executed: true,
+        message: 'Actualización iniciada: ' + targetPath,
+      });
+      return;
     }
 
     sendJSON(res, 200, {
