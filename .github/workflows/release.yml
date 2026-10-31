@@ -28,7 +28,7 @@ jobs:
       # sigue y deja sus artefactos igualmente.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
 
     # Todos los `run:` se ejecutan dentro de `launcher/`, así que no hace falta
     # prefijar cada comando con `npm --prefix launcher`. Las rutas de artefactos
@@ -51,8 +51,10 @@ jobs:
           cache-dependency-path: launcher/package-lock.json
 
       # electron-builder genera el `.rpm` con `fpm`, que a su vez invoca las
-      # herramientas nativas de RPM. `ubuntu-latest` no las trae de fábrica y el
+      # herramientas nativas de RPM. La imagen no las trae de fábrica y el
       # target `rpm` fallaría con "cannot find executable rpmbuild".
+      # Se fija `ubuntu-24.04` (rpm 4.18) en lugar de `ubuntu-latest`, que trae
+      # rpm 6.0: incompatible con fpm 1.9.3, hace fallar rpmbuild.
       - name: Instalar rpmbuild (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y rpm
