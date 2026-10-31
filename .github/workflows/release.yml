@@ -30,6 +30,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
 
+    # Todos los `run:` se ejecutan dentro de `launcher/`, así que no hace falta
+    # prefijar cada comando con `npm --prefix launcher`. Las rutas de artefactos
+    # y de ficheros del release se resuelven desde la raíz del repo, por eso
+    # conservan el prefijo `launcher/`.
+    defaults:
+      run:
+        working-directory: launcher
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,17 +50,24 @@ jobs:
           cache: npm
           cache-dependency-path: launcher/package-lock.json
 
+      # electron-builder genera el `.rpm` con `fpm`, que a su vez invoca las
+      # herramientas nativas de RPM. `ubuntu-latest` no las trae de fábrica y el
+      # target `rpm` fallaría con "cannot find executable rpmbuild".
+      - name: Instalar rpmbuild (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
       # `npm install` (no `ci`) para que la primera ejecución pueda refrescar el
       # lockfile con las dependencias de Electron. Una vez versionado el lock
       # actualizado, `npm ci` es preferible: es reproducible y más rápido.
       - name: Instalar dependencias
-        run: npm --prefix launcher install
+        run: npm install
 
       - name: Tests (vitest)
-        run: npm --prefix launcher run test
+        run: npm test
 
       - name: Build + electron-builder
-        run: npm --prefix launcher run dist
+        run: npm run dist
         env:
           # electron-builder no debe publicar por su cuenta: del release se
           # encarga el paso siguiente, para que ambos SO suban al mismo.
