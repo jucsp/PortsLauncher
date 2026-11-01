@@ -23,6 +23,8 @@ const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { execFile } = require('node:child_process');
+const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
@@ -247,11 +249,17 @@ function scoreAsset(asset) {
   return score;
 }
 
-/** Descarga `url` a `file` siguiendo redirecciones. */
+/**
+ * Descarga `url` a `file` siguiendo redirecciones.
+ *
+ * Se escribe en streaming: con `arrayBuffer()` un asset de port de cientos de
+ * MB (o más) quedaba entero en memoria antes de tocar el disco, que es el mismo
+ * vector de OOM que sufría la extracción.
+ */
 async function downloadTo(url, file) {
   const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
   if (!res.ok || !res.body) throw new Error(`Descarga fallida (${res.status}).`);
-  fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(file));
 }
 
 /** Valida el `folderName` (sin rutas, sin ocultos, sin `..`). */
@@ -289,16 +297,92 @@ function findEOCD(buf) {
   return -1;
 }
 
+/** Tope de bytes descomprimidos por archivo (protección anti *zip bomb*). */
+const MAX_EXTRACTED_BYTES = 4 * 1024 * 1024 * 1024; /* 4 GB */
+
+/**
+ * `true` si el SO trae un `unzip` utilizable.
+ *
+ * Se resuelve una sola vez por proceso. En Windows no hay `unzip` de serie y se
+ * mantiene el lector ZIP propio; en Linux/macOS casi siempre está y evitar el
+ * camino que carga el archivo entero en memoria.
+ */
+let systemUnzip = null;
+
+async function hasSystemUnzip() {
+  if (systemUnzip !== null) return systemUnzip;
+  systemUnzip = false;
+  if (process.platform !== 'win32') {
+    try {
+      await execFileAsync('unzip', ['-v'], { timeout: 10_000 });
+      systemUnzip = true;
+    } catch {
+      systemUnzip = false;
+    }
+  }
+  return systemUnzip;
+}
+
+/** Suma de los ficheros regulares de `dir` (0 si no existe o no se puede leer). */
+function dirBytes(dir) {
+  let total = 0;
+  let items;
+  try {
+    items = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const item of items) {
+    const full = path.join(dir, item.name);
+    try {
+      if (item.isDirectory()) total += dirBytes(full);
+      else if (item.isFile()) total += fs.statSync(full).size;
+    } catch {
+      /* Entrada ilegible (enlace roto, permisos): se ignora el tamaño. */
+    }
+  }
+  return total;
+}
+
+/**
+ * Extrae un ZIP en `dest`.
+ *
+ * En Linux/macOS delega en el `unzip` del sistema: escribe en streaming al
+ * disco, mientras que el lector propio (`extractZipSync`) carga el archivo
+ * completo con `readFileSync` y lo infla de forma síncrona. Con assets de port
+ * de cientos de MB eso significaba `ERR_FS_FILE_TOO_LARGE`/OOM y el bucle de
+ * eventos congelado durante la descompresión. En Windows, donde no existe
+ * `unzip`, se conserva el lector propio.
+ *
+ * Ambos caminos respetan `MAX_EXTRACTED_BYTES`: un archivo manipulado (*zip
+ * bomb*) no debe llenar el disco ni agotar la memoria.
+ *
+ * @throws si el ZIP es ilegible o el resultado excede el tope de bytes.
+ */
+async function extractZip(file, dest) {
+  if (await hasSystemUnzip()) {
+    const before = dirBytes(dest);
+    await execFileAsync('unzip', ['-qq', '-o', file, '-d', dest], { timeout: 10 * 60 * 1000 });
+    if (dirBytes(dest) - before > MAX_EXTRACTED_BYTES) {
+      throw new Error('El contenido descomprimido supera el límite de 4 GB.');
+    }
+    return;
+  }
+
+  extractZipSync(file, dest);
+}
+
 /**
  * Extrae un ZIP sin depender del binario `unzip`.
  *
- * `unzip` no existe en Windows y no está garantizado en un Linux mínimo, así
- * que se lee el directorio central y se infla cada entrada con `zlib`
- * (métodos «store» 0 e «inflate» 8, los que usan los releases). Las entradas
- * que escapan del destino (`../`, rutas absolutas) se descartan: protección
- * contra *zip slip*.
+ * `unzip` no existe en Windows, así que se lee el directorio central y se infla
+ * cada entrada con `zlib` (métodos «store» 0 e «inflate» 8, los que usan los
+ * releases). Las entradas que escapan del destino (`../`, rutas absolutas) se
+ * descartan: protección contra *zip slip*. El presupuesto de bytes se recorta
+ * entrada a entrada para que una única entrada bomba falle en `zlib` en vez de
+ * en el asignador del sistema.
  */
-function extractZip(file, dest) {
+function extractZipSync(file, dest) {
   const buf = fs.readFileSync(file);
   const eocd = findEOCD(buf);
   if (eocd < 0) throw new Error('ZIP no válido: falta el directorio central.');
@@ -306,6 +390,7 @@ function extractZip(file, dest) {
   const total = buf.readUInt16LE(eocd + 10);
   let offset = buf.readUInt32LE(eocd + 16);
   let written = 0;
+  let extracted = 0;
 
   for (let index = 0; index < total; index += 1) {
     if (offset + 46 > buf.length || buf.readUInt32LE(offset) !== 0x02014b50) break;
@@ -337,8 +422,17 @@ function extractZip(file, dest) {
     const raw = buf.subarray(start, start + compressedSize);
     let data;
     if (method === 0) data = raw;
-    else if (method === 8) data = zlib.inflateRawSync(raw);
-    else throw new Error(`ZIP con compresión no soportada (método ${method}).`);
+    else if (method === 8) {
+      /* `maxOutputLength` corta la inflada dentro de zlib: sin él, una entrada
+       * bomba se materializa entera en RAM antes de poder medirla. */
+      const budget = MAX_EXTRACTED_BYTES - extracted;
+      data = zlib.inflateRawSync(raw, { maxOutputLength: Math.max(1, budget) });
+    } else throw new Error(`ZIP con compresión no soportada (método ${method}).`);
+
+    extracted += data.length;
+    if (extracted > MAX_EXTRACTED_BYTES) {
+      throw new Error('El contenido descomprimido supera el límite de 4 GB.');
+    }
 
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, data);
@@ -398,12 +492,14 @@ function looksExecutable(file) {
   const ext = path.extname(base).replace(/^\./, '').toLowerCase();
   if (ext) return EXEC_EXTENSIONS.has(ext);
 
-  /* Sin extensión: sólo si la cabecera es un ejecutable real. */
+  /* Sin extensión: sólo si la cabecera es un ejecutable real. El descriptor se
+   * libera en `finally`: un fallo entre `openSync` y la lectura (permisos, I/O)
+   * dejaba el `fd` abierto en el camino de excepción. */
+  let fd = null;
   try {
-    const fd = fs.openSync(file, 'r');
+    fd = fs.openSync(file, 'r');
     const head = Buffer.alloc(4);
     const read = fs.readSync(fd, head, 0, 4, 0);
-    fs.closeSync(fd);
     if (read < 4) return false;
     if (head[0] === 0x7f && head.toString('ascii', 1, 4) === 'ELF') return true;
     if (head[0] === 0x23 && head[1] === 0x21) return true; /* #! */
@@ -411,6 +507,14 @@ function looksExecutable(file) {
     return false;
   } catch {
     return false;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* Descriptor ya cerrado o inválido: no hay nada que liberar. */
+      }
+    }
   }
 }
 
@@ -462,7 +566,7 @@ async function extractInto(name, file, dest) {
   const n = String(name || '').toLowerCase();
 
   if (n.endsWith('.zip')) {
-    extractZip(file, dest);
+    await extractZip(file, dest);
     return 'zip';
   }
 
@@ -518,7 +622,55 @@ async function latestRelease(repo) {
 const REPO_BRANCHES = ['main', 'master'];
 
 /**
+ * Nombres de primer nivel de `dir` (vacío si el directorio no existe).
+ *
+ * Es la foto que permite distinguir, tras un fallo, lo que creó el intento de
+ * instalación de lo que ya estaba antes.
+ */
+function snapshotDir(dir) {
+  try {
+    return new Set(fs.readdirSync(dir));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Borra de `dir` todo lo que no estuviera en `before`.
+ *
+ * Si la extracción se rompe a mitad (CRC, formato no soportado, disco lleno),
+ * la carpeta queda con ficheros corruptos. Dejarlos provoca dos fallos: el port
+ * parece instalado y el frontend lo marca «listo», y el siguiente método de la
+ * cascada ve el destino «no vacío» y responde `method: 'existing'` sobre basura.
+ *
+ * Sólo se purga lo añadido por el intento fallido: si el usuario ya tenía una
+ * instalación válida ahí, se conserva intacta.
+ */
+function purgeNewEntries(dir, before) {
+  let items;
+  try {
+    items = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of items) {
+    if (before.has(name)) continue;
+    try {
+      fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    } catch (error) {
+      console.warn(
+        `[install] no se pudo limpiar el residuo ${name}:`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+}
+
+/**
  * Descarga y extrae el ZIP del propio repositorio (`refs/heads/main.zip`).
+ *
+ * Cada intento fallido purga lo que haya escrito antes de probar la siguiente
+ * rama, para que el destino no quede mezclado.
  *
  * @returns `{ branch, kind }` o `null` si ninguna rama se pudo descargar.
  */
@@ -528,14 +680,17 @@ async function downloadRepoZip(repo, dest) {
       os.tmpdir(),
       `portslauncher-${process.pid}-${Date.now()}-${branch}.zip`
     );
+    const before = snapshotDir(dest);
     try {
       await downloadTo(`https://github.com/${repo}/archive/refs/heads/${branch}.zip`, tmp);
-      const wasEmpty = fs.readdirSync(dest).length === 0;
-      extractZip(tmp, dest);
+      const wasEmpty = before.size === 0;
+      await extractZip(tmp, dest);
       if (wasEmpty) flattenSingleRoot(dest);
       return { branch, kind: 'zip' };
     } catch (error) {
-      /* Rama inexistente (404) o ZIP ilegible: se prueba la siguiente. */
+      /* Rama inexistente (404) o ZIP ilegible: se borra lo extraído y se pasa
+       * a la siguiente rama. */
+      purgeNewEntries(dest, before);
       console.warn(
         `[install] ${repo}@${branch} no se pudo bajar:`,
         error instanceof Error ? error.message : error
@@ -561,6 +716,10 @@ async function downloadRepoZip(repo, dest) {
  *   4. `existing`  → la carpeta ya tenía contenido y ningún método pudo mejorarla.
  *   5. `folder`    → el port no declara repositorio (sólo se crean las carpetas).
  *
+ * Todo método que falla a mitad purga lo que escribió (`purgeNewEntries`), de
+ * modo que el destino nunca queda con archivos corruptos ni provoca un
+ * `existing` falso en el siguiente intento.
+ *
  * Siempre se devuelve la ruta física final (`installDir`), el método usado y,
  * cuando se conoce, la versión publicada del release.
  */
@@ -578,6 +737,10 @@ async function installPort(body) {
   fs.mkdirSync(romsDir, { recursive: true });
   if (!repo) return { installDir, method: 'folder', version: null, executables: [] };
 
+  /* Foto previa: cualquier método que falle a mitad purga lo añadido, de modo
+   * que un fallo no se confunda con una instalación existente. */
+  const before = snapshotDir(installDir);
+
   /* 1. Release con binarios precompilados ------------------------------- */
   const release = await latestRelease(repo);
   if (release && release.asset) {
@@ -588,7 +751,7 @@ async function installPort(body) {
     );
     try {
       await downloadTo(asset.browser_download_url, tmp);
-      const wasEmpty = fs.readdirSync(installDir).length === 0;
+      const wasEmpty = before.size === 0;
       const kind = await extractInto(asset.name, tmp, installDir);
       if (kind) {
         if (wasEmpty) flattenSingleRoot(installDir);
@@ -603,8 +766,9 @@ async function installPort(body) {
         };
       }
     } catch (error) {
-      /* Asset inservible (formato raro, fallo de red): se degrada al ZIP del
-       * repositorio en vez de dejar el port «Broken». */
+      /* Asset inservible (formato raro, fallo de red): se borra lo extraído y
+       * se degrada al ZIP del repositorio en vez de dejar el port «Broken». */
+      purgeNewEntries(installDir, before);
       console.warn(
         `[install] el release de ${repo} no se pudo usar:`,
         error instanceof Error ? error.message : error
@@ -628,6 +792,9 @@ async function installPort(body) {
   }
 
   /* 3. `git clone` ------------------------------------------------------ */
+  /* Los intentos fallidos purgaron lo que escribieron, así que un destino con
+   * contenido aquí es una instalación previa real, no un residuo de extracción:
+   * `existing` vuelve a ser una respuesta fiable. */
   if (fs.readdirSync(installDir).length > 0) {
     return {
       installDir,

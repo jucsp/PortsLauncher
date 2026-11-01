@@ -1377,7 +1377,8 @@ export function renderGame(id: string): string {
       ? '<div class="list"><div class="row" style="cursor:default">' +
         '<div style="flex:1 1 260px;min-width:0"><b>Repositorio</b>' +
         `<div class="mono muted" style="font-size:12px;word-break:break-all">${esc(repo)}</div></div>` +
-        '<button class="btn sm" data-act="toast" data-m="Abriría el repositorio en una pestaña nueva (simulado)">Abrir en GitHub</button></div>' +
+        /* `openRepo` (main.ts) abre la URL real en el navegador del sistema. */
+        `<button class="btn sm" data-act="openRepo" data-repo="${esc(repo)}">Abrir en GitHub</button></div>` +
         `<div class="row" style="cursor:default"><b style="flex:1">Última versión</b><span class="mono">${esc(game.lv)}</span></div>` +
         `<div class="row" style="cursor:default"><b style="flex:1">Último cambio</b><span>${
           game.months > 0 ? `hace ${game.months} meses` : 'este mes'
@@ -1561,7 +1562,7 @@ export function renderGame(id: string): string {
     '<div class="box"><div style="font:700 17px var(--f-display)">Repositorio</div>' +
     (repo
       ? `<div class="mono muted" style="font-size:12px;word-break:break-all">${esc(repo)}</div>` +
-        '<button class="btn sm" data-act="toast" data-m="Abriría el repositorio en una pestaña nueva (simulado)">Abrir en GitHub</button>'
+        `<button class="btn sm" data-act="openRepo" data-repo="${esc(repo)}">Abrir en GitHub</button>`
       : '<div class="muted">Proyecto externo, sin repositorio público.</div>') +
     '<div class="muted" style="font-size:12px">La descarga sale siempre del repositorio original del proyecto.</div></div>' +
     '</aside></div>'

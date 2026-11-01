@@ -454,6 +454,78 @@ function methodLabel(method: string): string {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Enlaces externos al repositorio del port                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Abre `url` en el navegador predeterminado del sistema operativo.
+ *
+ * En Electron `window.open` NO crea una ventana nueva: `setWindowOpenHandler`
+ * (ver `electron/main.cjs:171`) intercepta la petición, delega en
+ * `shell.openExternal` y responde `{ action: 'deny' }`, de modo que el enlace
+ * termina en el navegador real del usuario, en una pestaña nueva. Las features
+ * `noopener,noreferrer` impiden que la página abierta reciba `window.opener` y
+ * la cabecera `Referer`.
+ *
+ * OJO: con `noopener` la especificación HTML obliga a devolver `null` aunque la
+ * pestaña se abra, así que el retorno NO sirve para detectar un bloqueo de
+ * popups. Por eso no se navega en la misma pestaña como alternativa: dentro de
+ * Electron ese `location.href` acabaría en `will-navigate` y abriría el enlace
+ * dos veces. Los botones son clics síncronos del usuario, nunca bloqueados.
+ */
+function openExternalUrl(url: string): void {
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/**
+ * Normaliza el `repository` declarado por un port a una URL absoluta.
+ *
+ * El catálogo lo guarda como `owner/repo`, pero `repoOf` (render.ts) ya lo pinta
+ * como `github.com/owner/repo` y nada impide que un port declare la URL
+ * completa. Se aceptan las tres formas; `null` si el port no publica uno.
+ */
+function repoUrl(value: string | null | undefined): string | null {
+  const repo = (value ?? '').trim();
+  if (!repo) return null;
+  if (/^https?:\/\//i.test(repo)) return repo;
+  if (/^(?:www\.)?github\.com\//i.test(repo)) return 'https://' + repo.replace(/^www\./i, '');
+  return 'https://github.com/' + repo.replace(/^\/+/, '');
+}
+
+/** Abre el repositorio de un port; avisa si el proyecto no publica ninguno. */
+function openGameRepo(game: Game | undefined): void {
+  const url = repoUrl(game?.repo);
+  if (!url) {
+    toast('Este proyecto no tiene repositorio público');
+    return;
+  }
+  openExternalUrl(url);
+}
+
+/** Resuelve el port implicado en una acción (`data-id` o la ficha abierta). */
+function gameFromData(d: Record<string, string | undefined>): Game | undefined {
+  if (d.id) return S.byId.get(d.id);
+  return R.id ? S.byId.get(R.id) : undefined;
+}
+
+/**
+ * Punto único de entrada de `data-act="openRepo"` y de la acción `ext`: usa el
+ * repositorio de `data-repo` cuando el botón lo trae y, si no, el del port.
+ */
+function openRepoLink(d: Record<string, string | undefined>): void {
+  if (d.repo) {
+    const url = repoUrl(d.repo);
+    if (!url) {
+      toast('No se pudo abrir el repositorio');
+      return;
+    }
+    openExternalUrl(url);
+    return;
+  }
+  openGameRepo(gameFromData(d));
+}
+
 function primaryAction(id: string): void {
   const game = S.byId.get(id);
   if (!game) return;
@@ -468,7 +540,8 @@ function primaryAction(id: string): void {
     go('game', id);
     toast('Compilar desde código: se mostraría la guía (simulado)');
   } else if (st.act === 'ext') {
-    toast('Abriría la página del proyecto en una pestaña nueva (simulado)');
+    /* Proyecto externo: el CTA lleva al repositorio real en el navegador. */
+    openGameRepo(game);
   }
 }
 
@@ -1493,7 +1566,10 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
     if (R.id) renderGame(R.id);
   },
   toast: (d) => d.m && toast(d.m),
-  ext: () => toast('Abriría la página del proyecto en una pestaña nueva (simulado)'),
+  /* «Abrir en GitHub»: `data-repo` trae el repositorio del port; el navegador
+   * real lo abre vía `shell.openExternal` (ver `openExternalUrl`). */
+  openRepo: (d) => openRepoLink(d),
+  ext: (d) => openRepoLink(d),
   media: (d) => {
     if (!d.k) return;
     if (S.settings.mediaMode === 'single') S.settings.media = true;
@@ -1519,11 +1595,15 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
     toast('Ajustes restablecidos');
   },
   updall: () => {
-    /* Cada port con actualización pendiente pasa por el mismo pipeline real
-     * que el botón individual; `installReal` ya serializa por `PROG[id]`. */
-    S.games
-      .filter((g) => statusOf(g).k === 'upd')
-      .forEach((g) => void installReal(g.id));
+    /* Secuencial a propósito: cada port recorre el pipeline real completo
+     * (descarga del release o del ZIP, extracción y `chmod`). Lanzarlos en
+     * paralelo saturaba la red y el disco y multiplicaba las descompresiones
+     * simultáneas, acercando el backend al OOM. `installReal` ya ignora una
+     * petición si ese port está en curso, así que el `for…of` no se solapa. */
+    void (async () => {
+      const pending = S.games.filter((g) => statusOf(g).k === 'upd');
+      for (const game of pending) await installReal(game.id);
+    })();
   },
   closeL: () => closeL(),
   rom: (d) => d.id && openRom(d.id, false),
