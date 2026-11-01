@@ -7,4 +7,4 @@
 | HU-03 | Botón para Abrir Repositorio en Navegador Real | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.3 |
 | HU-04 | Manejo de Errores, Reporte Técnico y Notificación | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.4 |
 | HU-05 | Sistema de Plugins Real y Sin Mockups | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.5 |
-| HU-06 | Saneamiento de Documentación README | En Progreso | DeepSeek (Dev) / Claude (QA) | v0.1.6 |
+| HU-06 | Saneamiento de Documentación README | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.6 |

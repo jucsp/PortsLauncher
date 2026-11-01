@@ -8,7 +8,7 @@
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  PORTSHUB · índice 1.0.0 · sha256:506dc84c…aea7d4                        │
-│  1.166 ports · 49 fusiones GW+Quiver · 196 tests · 0 deps Python         │
+│  1.166 ports · 49 fusiones consolidadas · 196 tests · 0 deps Python      │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -43,7 +43,7 @@ El proyecto ataca eso en dos mitades independientes y desacopladas:
 
 | Mitad | Qué hace | Tecnología |
 | --- | --- | --- |
-| **Indexador** (`catalog-builder/`) | Ingesta GameWave y Quiver, normaliza, deduplica, evalúa estado y emite un índice único con hash semántico | Python 3.10+ **stdlib puro** |
+| **Indexador** (`catalog-builder/`) | Ingesta catálogos comunitarios de origen, normaliza, deduplica, evalúa estado y emite un índice único con hash semántico | Python 3.10+ **stdlib puro** |
 | **Launcher** (`launcher/`) | Explora el índice con 5 vistas, gestiona la biblioteca local, instala y lanza ports | Vite + TypeScript, **DOM vanilla modular** |
 
 Ninguna de las dos mitades necesita la otra para funcionar: el indexador produce un JSON estático
@@ -71,20 +71,20 @@ que cualquiera puede consumir; el launcher puede apuntar a cualquier índice pub
 ```
                     ┌───────────────────────────────────────────────┐
                     │  fixtures/  (HAR extraídos → JSON estático)   │
-                    │  gamewave/catalog.json      1.173 fichas      │
-                    │  quiver/apps_unique.json      148 fichas      │
+                    │  catálogo primario         1.173 fichas      │
+                    │  catálogo complementario     148 fichas      │
                     └───────────────────┬───────────────────────────┘
                                         │
         ╔═══════════════════════════════▼═══════════════════════════════╗
         ║  CAPA 1 · INDEXADOR  (catalog-builder/ · Python stdlib puro)  ║
         ║                                                               ║
-        ║  adapters/gamewave.py ─┐                                      ║
-        ║  adapters/quiver.py ───┴─► models.UnifiedPort                 ║
+        ║  adapters/ · catálogo primario ──┐                            ║
+        ║  adapters/ · catálogo secundario ┴─► models.UnifiedPort       ║
         ║                              │  (vocabulario cerrado:          ║
         ║                              │   17 plataformas, 8 estrategias)║
         ║                              ▼                                ║
         ║                        dedup.py  ──► technical key + pid      ║
-        ║                              │      fusión GW+Quiver           ║
+        ║                              │      fusión consolidada         ║
         ║                              ▼                                ║
         ║                       status.py  ──► 6 reglas + confianza     ║
         ║                              │                                ║
@@ -122,9 +122,19 @@ que cualquiera puede consumir; el launcher puede apuntar a cualquier índice pub
 Todo el pipeline es **Python 3.10+ estándar puro**: `json`, `re`, `hashlib`, `dataclasses`,
 `enum`, `argparse`, `datetime`, `unicodedata`. Cero `pip install`.
 
-**`adapters/gamewave.py`** — Ingesta las 1.173 fichas del catálogo de GameWave:
+La materia prima son dos **catálogos comunitarios de origen**, ingeridos cada uno por su propio
+adaptador. Aquí se les llama por su papel en el pipeline —no por su marca— y el contrato público del
+proyecto es el índice resultante, no los ficheros crudos de terceros:
 
-- Limpieza del sufijo decorativo ` · GameWave Build` con regex (tolerante a `·`, `-`, `|`, `—`).
+| Adaptador | Papel | Fichas | Fuerte en |
+| --- | --- | --- | --- |
+| `adapters/` · **catálogo primario** | Fuente principal del catálogo | 1.173 | plataformas de origen, ficheros de usuario, recetas de instalación |
+| `adapters/` · **catálogo secundario** | Fuente complementaria | 148 | `setupFiles` con SHA-1, releases verificadas, feedback de comunidad |
+
+**Adaptador del catálogo primario** — Ingesta las 1.173 fichas del catálogo principal:
+
+- Limpieza del sufijo decorativo de build que añade el catálogo (` · <Build>`) con regex (tolerante
+  a `·`, `-`, `|`, `—`).
 - **Cuarentena de URLs/assets sospechosos**: cualquier campo listado en
   `quarantinedLinkFields` (`androidUrl`, `windowsUrl`, `downloadUrl`, `projectUrl`, …) se anula
   antes de salir del adaptador y se elimina también de `raw`, de modo que un enlace envenenado no
@@ -134,9 +144,10 @@ Todo el pipeline es **Python 3.10+ estándar puro**: `json`, `re`, `hashlib`, `d
 - Los campos que el modelo no conoce **no se descartan**: se preservan en `raw` para no perder
   información en futuras versiones del contrato.
 
-**`adapters/quiver.py`** — Ingesta las 148 fichas de Quiver:
+**Adaptador del catálogo secundario** — Ingesta las 148 fichas del catálogo complementario:
 
-- `catalogId` (o `slug`, o `id`) como `externalId`, que es la clave de emparejamiento con GameWave.
+- `catalogId` (o `slug`, o `id`) como `externalId`, que es la clave de emparejamiento con el
+  catálogo primario.
 - **Validación SHA-1** de `setupFiles`: sólo se aceptan hashes de 40 hex (`^[0-9a-f]{40}$`),
   normalizados a minúsculas; los inválidos se descartan y quedan registrados como aviso, sin
   romper la ingesta.
@@ -149,7 +160,7 @@ Todo el pipeline es **Python 3.10+ estándar puro**: `json`, `re`, `hashlib`, `d
   es el filtro de assets, la carpeta o el nombre), o `distribution::plataforma::carpeta|nombre`
   cuando es externo. Esto permite que un mismo repo con varias fichas (el caso real de
   `spacestate1/namco22-decompile` y sus 5 variantes) **no se colapse** en un único port.
-- **Emparejamiento cruzado GameWave ↔ Quiver** por 4 vías: repositorio idéntico, `folderName`
+- **Emparejamiento cruzado entre catálogos** por 4 vías: repositorio idéntico, `folderName`
   normalizado, `projectName` contra el nombre del repo, o nombre + plataforma exactos.
 - **`pid` determinista** y URL-friendly (`owner-repo-discriminador`, minúsculas, sin diacríticos).
 - Fusión con reglas de precedencia explícitas (ver §8).
@@ -192,7 +203,7 @@ El índice actual: `sha256:506dc84c563ae2bff924ab434a0c07e8e567447e687e2d6652e58
 
 - `data/ports.index.json` — `{ version, schemaVersion, generatedAt, semanticHash, stats, ports[] }`
 - `data/report.md` — informe legible: totales, desglose por plataforma, por `status.tag`, por
-  estrategia, por distribución, tabla de las 49 fusiones GW+Quiver y repositorios multi-ficha.
+  estrategia, por distribución, tabla de las 49 fusiones consolidadas y repositorios multi-ficha.
 
 ### 2.3 Launcher desktop/web — `launcher/`
 
@@ -241,8 +252,9 @@ un binario ligero y no arrastrar 300 KB de runtime para pintar tarjetas.
 - **`tools/test_fixtures.py`** — 9 validadores de integridad de las fixtures: totales, tipos de
   fuente, conteos por pestaña, metadatos de seguridad y presencia de `apps[]` en los ficheros de
   emuladores y webgames.
-- **`fixtures/`** — catálogos de GameWave (`catalog.json`, versiones fechadas, `emulators.json`,
-  `webgames.json`) y paginación completa de Quiver (`apps_all_pages.json` + `page_01..09.json`).
+- **`fixtures/`** — un directorio por catálogo de origen: el primario (`catalog.json`, versiones
+  fechadas, `emulators.json`, `webgames.json`) y el secundario con su paginación completa
+  (`apps_all_pages.json` + `page_01..09.json`).
 
 ### 2.5 Estructura de directorios
 
@@ -252,9 +264,9 @@ PortsLauncher/
 ├── catalog-builder/             # CAPA 1 · indexador (Python stdlib puro)
 │   ├── __init__.py              # __version__ = '1.0.0'
 │   ├── models.py                # UnifiedPort y vocabularios cerrados + normalizadores
-│   ├── adapters/
-│   │   ├── gamewave.py          # Anexo B  · 1.173 fichas
-│   │   └── quiver.py            # Anexo B2 · 148 fichas
+│   ├── adapters/                # un módulo por catálogo de origen
+│   │   ├── (primario)           # Anexo B  · 1.173 fichas
+│   │   └── (secundario)         # Anexo B2 · 148 fichas
 │   ├── dedup.py                 # clave técnica, emparejamiento, merge, pid
 │   ├── status.py                # 6 reglas + confianza
 │   ├── builder.py               # CLI, hash semántico, índice y reporte
@@ -263,17 +275,40 @@ PortsLauncher/
 │   ├── index.html               # #app · fuentes con fallbacks locales
 │   ├── vite.config.ts
 │   ├── tsconfig.json
+│   ├── electron/                # main.cjs (ventana) · api.cjs (backend local)
+│   ├── build/                   # icon.svg · icon.png de empaquetado
 │   ├── src/
 │   │   ├── main.ts
-│   │   ├── styles/              # tokens.css · media.css · layout.css
-│   │   ├── services/            # catalog · library · installer · types
-│   │   └── components/          # Sidebar · Toolbar · 5 vistas · modales · drawer
+│   │   ├── styles/              # tokens.css · media.css · layout.css · app.css
+│   │   ├── services/            # catalog · library · installer · update · types
+│   │   ├── components/          # Sidebar · Toolbar · 5 vistas · modales · drawer
+│   │   └── ui/                  # render · modelo · medios · estado
 │   ├── tests/                   # 81 tests (Vitest)
 │   └── public/data/             # ports.index.json servido en runtime
 ├── tools/                       # CAPA 3 · extractor + validadores
-├── fixtures/                    # HAR → JSON (gamewave/ · quiver/)
+├── fixtures/                    # HAR → JSON (un directorio por catálogo)
 └── data/                        # ports.index.json + report.md generados
 ```
+
+### 2.6 Backend local — `launcher/electron/`
+
+La app de escritorio (Electron) no simula nada: sirve la UI desde un proceso principal que además
+expone un **backend HTTP local** (`electron/api.cjs`), compartido literalmente con `vite` y
+`vite preview` para que el comportamiento no diverja entre desarrollo y binario empaquetado.
+
+| Ruta | Qué hace |
+| --- | --- |
+| `POST /api/install` | Descarga el release del port (o clona el repo), extrae el artefacto en disco y marca el ejecutable |
+| `POST /api/launch` | Lanza el port con `spawn` desacoplado y **confirma** el evento `spawn` antes de responder |
+| `POST /api/report-error` | Escribe un reporte técnico en `~/PortsLauncher/logs/*.log` |
+| `POST /api/open-path` | Abre un `.log` o la carpeta de plugins en el SO (lista blanca de rutas) |
+| `POST /api/launcher/self-update` | Guarda el instalador de una versión nueva en `~/Downloads` |
+| `GET /api/steamgrid/<api>` | Proxy de carátulas con la clave del usuario o del servidor |
+
+La ventana carga la UI con `contextIsolation: true`, `sandbox: true` y `nodeIntegration: false`; el
+renderer sólo habla HTTP contra `127.0.0.1`, en un puerto efímero que asigna el propio proceso
+principal. Los enlaces externos no navegan dentro de la app: `setWindowOpenHandler` los deriva a
+`shell.openExternal`, es decir, al **navegador predeterminado del sistema**.
 
 ---
 
@@ -418,13 +453,13 @@ plataforma de origen) o un `mediaMap` explícito plataforma → estilo.
 | Métrica | Valor |
 | --- | --- |
 | **Puertos unificados consolidados** | **1.166** |
-| Fichas GameWave de entrada | 1.173 |
-| Fichas Quiver de entrada | 148 |
+| Fichas catálogo primario de entrada | 1.173 |
+| Fichas catálogo secundario de entrada | 148 |
 | Adaptadas a `UnifiedPort` | 1.321 |
-| **Fusiones cruzadas completas (GW + Quiver)** | **49** |
+| **Fusiones cruzadas completas** | **49** |
 | **Colapsos por clave técnica idéntica** | **103** |
-| Sólo GameWave | 1.021 |
-| Sólo Quiver | 96 |
+| Sólo catálogo primario | 1.021 |
+| Sólo catálogo secundario | 96 |
 | Repositorios únicos | 952 |
 | Repositorios multi-ficha | 1 (5 fichas preservadas) |
 | Puertos con `setupFiles` y SHA-1 validado | 9 |
@@ -433,12 +468,12 @@ plataforma de origen) o un `mediaMap` explícito plataforma → estilo.
 | Fichas con `visible = false` | 160 |
 | `semanticHash` del índice | `sha256:506dc84c563ae2bff924ab434a0c07e8e567447e687e2d6652e58252d0aea7d4` |
 
-**De dónde sale 1.166.** 1.173 fichas GameWave + 148 de Quiver = **1.321 fichas adaptadas**. Tras
-la deduplicación quedan **1.166 ports** = 1.021 sólo GameWave + 96 sólo Quiver + 49 que existen en
-ambas fuentes y se consolidan en un único port con las dos procedencias en `sources[]`. En el
-camino se absorben 103 fichas por clave técnica idéntica (mismo repo y mismo discriminador) y 49
-por emparejamiento cruzado; `report.md` publica todos esos contadores, así que la cuenta se puede
-recomputar en lugar de creerse.
+**De dónde sale 1.166.** 1.173 fichas del catálogo primario + 148 del catálogo secundario = **1.321
+fichas adaptadas**. Tras la deduplicación quedan **1.166 ports** = 1.021 sólo del catálogo primario
++ 96 sólo del catálogo secundario + 49 que existen en ambas fuentes y se consolidan en un único port
+con las dos procedencias en `sources[]`. En el camino se absorben 103 fichas por clave técnica
+idéntica (mismo repo y mismo discriminador) y 49 por emparejamiento cruzado; `report.md` publica
+todos esos contadores, así que la cuenta se puede recomputar en lugar de creerse.
 
 **Distribución por estado** (reglas de §2.2): `experimental` 628 · `nodata` 376 · `playable` 148 ·
 `bugs` 8 · `abandoned` 6.
@@ -509,10 +544,10 @@ funcionar para todos. Un índice estático + hash semántico convierte el catál
 versionable**: se puede revisar en un diff, auditar y servir desde un CDN sin tocar el cliente.
 
 **Por qué el vocabulario cerrado de plataformas.**
-GameWave y Quiver nombran las plataformas de 71 maneras distintas. Normalizar a 17 valores
-(`n64`, `snes`, `nes`, `md`, `gba`, `gb`, `nds`, `n3ds`, `nsw`, `psp`, `ps1`, `ps2`, `gcn`, `xbox`,
-`x360`, `pc`, `other`) hace que filtros, contadores, colores y siluetas de medio sean **finitos y
-verificables**, en lugar de un `string` libre que hay que adivinar en cada vista.
+Las distintas fuentes de catálogo nombran las plataformas de 71 maneras distintas. Normalizar a 17
+valores (`n64`, `snes`, `nes`, `md`, `gba`, `gb`, `nds`, `n3ds`, `nsw`, `psp`, `ps1`, `ps2`, `gcn`,
+`xbox`, `x360`, `pc`, `other`) hace que filtros, contadores, colores y siluetas de medio sean
+**finitos y verificables**, en lugar de un `string` libre que hay que adivinar en cada vista.
 
 **Por qué la clave técnica no usa el nombre del juego.**
 Dos ports del mismo juego para la misma plataforma son legítimamente dos fichas distintas (distinta
@@ -520,13 +555,14 @@ recompilación, distinto repo, distinto mantenedor). La clave incluye repositori
 (filtro de assets / carpeta / nombre) para que la deduplicación fusione duplicados reales y no
 proyectos hermanos.
 
-**Precedencias de fusión (GameWave ↔ Quiver).**
-`sourcePlatform` y `requiresUserFiles` los decide GameWave (es más rico en datos de plataforma y de
-ficheros de usuario); `setupFiles` con SHA-1 y `playerFeedback` los decide Quiver (es la fuente que
-los publica verificados); `targetPlatforms`, `tags`, `searchAliases` y `gameNames` se **unen** sin
-duplicados; para portada se elige la de mayor resolución declarada; `romProfile` pasa a
-`binding = place` en cuanto hay hashes verificados; y entre dos estrategias de instalación gana la
-más específica (`release-appimage` > `release-archive` > … > `needsChoice` > `external`).
+**Precedencias de consolidación entre catálogos.**
+`sourcePlatform` y `requiresUserFiles` los decide la fuente primaria (es más rica en datos de
+plataforma y de ficheros de usuario); `setupFiles` con SHA-1 y `playerFeedback` los decide la fuente
+secundaria (es la que los publica verificados); `targetPlatforms`, `tags`, `searchAliases` y
+`gameNames` se **unen** sin duplicados; para portada se elige la de mayor resolución declarada;
+`romProfile` pasa a `binding = place` en cuanto hay hashes verificados; y entre dos estrategias de
+instalación gana la más específica (`release-appimage` > `release-archive` > … > `needsChoice` >
+`external`).
 
 **Por qué el estado es una función pura y ordenada.**
 Un port puede cumplir varias condiciones a la vez (experimental *y* con bugs). Un orden estricto y
@@ -576,7 +612,7 @@ avise en lugar de perder silenciosamente las instalaciones del usuario.
 
 ## 10. Créditos y atribución
 
-- **GameWave** y **Quiver**: origen de los datos de catálogo (fichas, metadatos, versiones y
+- **Catálogos comunitarios**: origen de los datos de catálogo (fichas, metadatos, versiones y
   feedback de comunidad). Este proyecto **no aloja binarios**: enlaza a los repositorios y
   releases originales de cada autor, y todos los ports pertenecen a sus respectivos creadores.
 - Las marcas, nombres de consola y logotipos referenciados pertenecen a sus titulares; los medios
