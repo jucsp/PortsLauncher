@@ -21,6 +21,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 
@@ -206,24 +207,43 @@ async function steamgridProxy(req, res) {
 /**
  * Puntúa un asset de release para el SO actual. Devuelve -1 si no es
  * utilizable (otro sistema operativo, firma, checksum, instalador…).
+ *
+ * Se aceptan tres formas de binario publicado:
+ *   · archivo comprimido (`.zip`, `.tar.gz`, `.tgz`, `.tar.xz`…),
+ *   · AppImage suelto (`.AppImage`),
+ *   · ejecutable suelto (`.run`, `.bin`, `.x86_64`, `.AppImage` o sin extensión).
  */
 function scoreAsset(asset) {
   const n = String(asset && asset.name ? asset.name : '').toLowerCase();
-  const archive = /\.(zip|tar\.gz|tgz|appimage)$/.test(n);
-  if (!archive) return -1;
-  if (/\.(sha\d*|sig|asc|txt|sbom)$/.test(n)) return -1;
+  if (!n) return -1;
+
+  /* Firma, checksum, notas de versión o manifiestos: nunca son el binario. */
+  if (/\.(sha\d*|sig|asc|txt|sbom|json|md5)$/.test(n)) return -1;
+  /* Paquetes de otros gestores: el launcher no los instala. */
+  if (/\.(deb|rpm|dmg|msi|pkg|snap|flatpak)$/.test(n)) return -1;
+
+  const isArchive = /\.(zip|tar\.gz|tgz|tar\.xz|txz|tar\.bz2|tbz2|tar|7z)$/.test(n);
+  const isAppImage = n.endsWith('.appimage');
+  const isBare = /\.(run|bin|x86_64|elf|exe)$/.test(n) || !n.includes('.');
+  if (!isArchive && !isAppImage && !isBare) return -1;
+
   const platform = process.platform;
-  const isWin = /win(dows|32|64)?\b|\.exe/.test(n);
+  const isWin = /win(dows|32|64)?\b|\.exe$/i.test(n);
   const isMac = /mac|darwin|osx/.test(n);
-  const isLinux = /linux|appimage|x86_64|amd64/.test(n);
+  const isLinux = /linux|appimage|x86_64|amd64|\.run$/.test(n);
   if (platform === 'linux' && (isWin || isMac)) return -1;
   if (platform === 'win32' && isLinux && !isWin) return -1;
   if (platform === 'darwin' && (isWin || /linux|appimage/.test(n))) return -1;
+
   let score = 1;
   if (platform === 'linux' && /linux/.test(n)) score += 4;
-  if (platform === 'linux' && n.endsWith('.appimage')) score += 3;
+  if (platform === 'linux' && isLinux) score += 2;
+  if (isAppImage) score += 3;
   if (/x86_64|amd64|x64/.test(n)) score += 2;
   if (/arm|aarch64/.test(n) && process.arch !== 'arm64') score -= 5;
+  /* Volcado del código fuente subido como asset: último recurso frente a un
+   * binario real, igual que el `zip` del repositorio. */
+  if (/source|src[-_.]|code/.test(n)) score -= 6;
   return score;
 }
 
@@ -243,7 +263,307 @@ function safeFolder(folder) {
   return value;
 }
 
-/** Instala el port: último release empaquetado o, si no hay, `git clone`. */
+/* -------------------------------------------------------------------------- */
+/* Descompresión                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Resuelve una entrada de archivo dentro de `base` sin permitir que escape
+ * (`../`, rutas absolutas). Devuelve `null` si la entrada es insegura.
+ */
+function safeEntry(base, entry) {
+  const clean = String(entry || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!clean) return null;
+  const target = path.resolve(base, clean);
+  const root = path.resolve(base);
+  if (target !== root && !target.startsWith(root + path.sep)) return null;
+  return target;
+}
+
+/** Desplazamiento del `End Of Central Directory` de un ZIP, o -1. */
+function findEOCD(buf) {
+  const first = Math.max(0, buf.length - 0xffff - 22);
+  for (let index = buf.length - 22; index >= first; index -= 1) {
+    if (buf.readUInt32LE(index) === 0x06054b50) return index;
+  }
+  return -1;
+}
+
+/**
+ * Extrae un ZIP sin depender del binario `unzip`.
+ *
+ * `unzip` no existe en Windows y no está garantizado en un Linux mínimo, así
+ * que se lee el directorio central y se infla cada entrada con `zlib`
+ * (métodos «store» 0 e «inflate» 8, los que usan los releases). Las entradas
+ * que escapan del destino (`../`, rutas absolutas) se descartan: protección
+ * contra *zip slip*.
+ */
+function extractZip(file, dest) {
+  const buf = fs.readFileSync(file);
+  const eocd = findEOCD(buf);
+  if (eocd < 0) throw new Error('ZIP no válido: falta el directorio central.');
+
+  const total = buf.readUInt16LE(eocd + 10);
+  let offset = buf.readUInt32LE(eocd + 16);
+  let written = 0;
+
+  for (let index = 0; index < total; index += 1) {
+    if (offset + 46 > buf.length || buf.readUInt32LE(offset) !== 0x02014b50) break;
+
+    const method = buf.readUInt16LE(offset + 10);
+    const compressedSize = buf.readUInt32LE(offset + 20);
+    const nameLength = buf.readUInt16LE(offset + 28);
+    const extraLength = buf.readUInt16LE(offset + 30);
+    const commentLength = buf.readUInt16LE(offset + 32);
+    const localOffset = buf.readUInt32LE(offset + 42);
+    const rawName = buf.toString('utf8', offset + 46, offset + 46 + nameLength);
+    offset += 46 + nameLength + extraLength + commentLength;
+
+    if (compressedSize === 0xffffffff) {
+      throw new Error('ZIP64 no soportado; usa el `.tar.gz` del release.');
+    }
+
+    const target = safeEntry(dest, rawName);
+    if (!target) continue;
+    if (rawName.endsWith('/')) {
+      fs.mkdirSync(target, { recursive: true });
+      continue;
+    }
+
+    /* Cabecera local: los tamaños del nombre y del extra pueden diferir. */
+    if (localOffset + 30 > buf.length || buf.readUInt32LE(localOffset) !== 0x04034b50) continue;
+    const start =
+      localOffset + 30 + buf.readUInt16LE(localOffset + 26) + buf.readUInt16LE(localOffset + 28);
+    const raw = buf.subarray(start, start + compressedSize);
+    let data;
+    if (method === 0) data = raw;
+    else if (method === 8) data = zlib.inflateRawSync(raw);
+    else throw new Error(`ZIP con compresión no soportada (método ${method}).`);
+
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, data);
+    written += 1;
+  }
+
+  if (written === 0) throw new Error('El ZIP no contenía ficheros utilizables.');
+}
+
+/**
+ * Sube un nivel el contenido cuando el archivo trae una única carpeta raíz.
+ *
+ * Los `archive/refs/heads/*.zip` de GitHub y la mayoría de releases envuelven
+ * todo en `<repo>-<rama>/` o `<port>-<versión>/`. Sin esto, el ejecutable
+ * quedaría un nivel por debajo de `installDir` y el perfil de lanzamiento
+ * (`./<folder>`) no lo encontraría.
+ */
+function flattenSingleRoot(dir) {
+  let items;
+  try {
+    items = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  if (items.length !== 1 || !items[0].isDirectory()) return;
+
+  const root = path.join(dir, items[0].name);
+  let inner;
+  try {
+    inner = fs.readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const entry of inner) {
+    fs.renameSync(path.join(root, entry), path.join(dir, entry));
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+/** Extensiones que siempre se marcan como ejecutables. */
+const EXEC_EXTENSIONS = new Set([
+  'appimage',
+  'sh',
+  'bin',
+  'run',
+  'elf',
+  'x86_64',
+  'x64',
+  'app',
+  'command',
+  'exe',
+]);
+
+/** ¿El fichero descomprimido es un ejecutable? (extensión, ELF, shebang…) */
+function looksExecutable(file) {
+  const base = path.basename(file);
+  const ext = path.extname(base).replace(/^\./, '').toLowerCase();
+  if (ext) return EXEC_EXTENSIONS.has(ext);
+
+  /* Sin extensión: sólo si la cabecera es un ejecutable real. */
+  try {
+    const fd = fs.openSync(file, 'r');
+    const head = Buffer.alloc(4);
+    const read = fs.readSync(fd, head, 0, 4, 0);
+    fs.closeSync(fd);
+    if (read < 4) return false;
+    if (head[0] === 0x7f && head.toString('ascii', 1, 4) === 'ELF') return true;
+    if (head[0] === 0x23 && head[1] === 0x21) return true; /* #! */
+    if (head[0] === 0xcf && head[1] === 0xfa && head[2] === 0xed && head[3] === 0xfe) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `chmod 0o755` recursivo sobre los ejecutables de `dir`.
+ *
+ * Un AppImage o un binario extraído sin permiso de ejecución no arranca: es el
+ * paso que hace que el port quede «listo para ejecutar». En Windows el permiso
+ * no existe y la función es un no-op. Devuelve las rutas afectadas.
+ */
+function chmodExecutables(dir) {
+  if (process.platform === 'win32') return [];
+  const changed = [];
+
+  const walk = (current) => {
+    let items;
+    try {
+      items = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const item of items) {
+      const full = path.join(current, item.name);
+      if (item.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!item.isFile() || !looksExecutable(full)) continue;
+      try {
+        fs.chmodSync(full, 0o755);
+        changed.push(full);
+      } catch {
+        /* Sistema de ficheros sin permisos POSIX: nada que hacer. */
+      }
+    }
+  };
+
+  walk(dir);
+  return changed;
+}
+
+/**
+ * Vuelca el archivo descargado en `dest` según su extensión.
+ *
+ * @returns `'zip' | 'tar' | '7z' | 'file'` o `null` si el formato no se
+ *          reconoce (el llamante cae al siguiente método de instalación).
+ */
+async function extractInto(name, file, dest) {
+  const n = String(name || '').toLowerCase();
+
+  if (n.endsWith('.zip')) {
+    extractZip(file, dest);
+    return 'zip';
+  }
+
+  if (/\.(tar\.gz|tgz|tar\.xz|txz|tar\.bz2|tbz2|tar)$/.test(n)) {
+    const flag = n.endsWith('.tar.gz') || n.endsWith('.tgz')
+      ? '-xzf'
+      : n.endsWith('.tar.xz') || n.endsWith('.txz')
+        ? '-xJf'
+        : n.endsWith('.tar.bz2') || n.endsWith('.tbz2')
+          ? '-xjf'
+          : '-xf';
+    await execFileAsync('tar', [flag, file, '-C', dest]);
+    return 'tar';
+  }
+
+  if (n.endsWith('.7z')) {
+    await execFileAsync('7z', ['x', '-y', file, `-o${dest}`]);
+    return '7z';
+  }
+
+  /* Binario suelto: AppImage, `.run`, `.x86_64` o ejecutable sin extensión. */
+  const target = path.join(dest, path.basename(name));
+  fs.copyFileSync(file, target);
+  return 'file';
+}
+
+/* -------------------------------------------------------------------------- */
+/* Orígenes de instalación                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** Consulta el último release del repo y elige el mejor asset para este SO. */
+async function latestRelease(repo) {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': USER_AGENT },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const ranked = (data.assets || [])
+      .map((asset) => ({ asset, score: scoreAsset(asset) }))
+      .filter((entry) => entry.score >= 0)
+      .sort((a, b) => b.score - a.score);
+    return {
+      version: typeof data.tag_name === 'string' ? data.tag_name : null,
+      asset: ranked.length ? ranked[0].asset : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Ramas probadas, en orden, cuando el release no trae binarios. */
+const REPO_BRANCHES = ['main', 'master'];
+
+/**
+ * Descarga y extrae el ZIP del propio repositorio (`refs/heads/main.zip`).
+ *
+ * @returns `{ branch, kind }` o `null` si ninguna rama se pudo descargar.
+ */
+async function downloadRepoZip(repo, dest) {
+  for (const branch of REPO_BRANCHES) {
+    const tmp = path.join(
+      os.tmpdir(),
+      `portslauncher-${process.pid}-${Date.now()}-${branch}.zip`
+    );
+    try {
+      await downloadTo(`https://github.com/${repo}/archive/refs/heads/${branch}.zip`, tmp);
+      const wasEmpty = fs.readdirSync(dest).length === 0;
+      extractZip(tmp, dest);
+      if (wasEmpty) flattenSingleRoot(dest);
+      return { branch, kind: 'zip' };
+    } catch (error) {
+      /* Rama inexistente (404) o ZIP ilegible: se prueba la siguiente. */
+      console.warn(
+        `[install] ${repo}@${branch} no se pudo bajar:`,
+        error instanceof Error ? error.message : error
+      );
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
+  }
+  return null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Instalación                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Instala un port en `LAUNCHER_HOME/ports/<folderName>` sin simulación.
+ *
+ * Cadena de métodos, en orden de preferencia:
+ *   1. `release`   → asset binario del último release (zip/tar/AppImage/binario).
+ *   2. `repo-zip`  → ZIP del repositorio (`refs/heads/main.zip`, luego `master`).
+ *   3. `clone`     → `git clone --depth 1` como último recurso.
+ *   4. `existing`  → la carpeta ya tenía contenido y ningún método pudo mejorarla.
+ *   5. `folder`    → el port no declara repositorio (sólo se crean las carpetas).
+ *
+ * Siempre se devuelve la ruta física final (`installDir`), el método usado y,
+ * cuando se conoce, la versión publicada del release.
+ */
 async function installPort(body) {
   const folder = safeFolder(body && body.folderName);
   const repo = body && body.repo ? String(body.repo) : null;
@@ -256,53 +576,73 @@ async function installPort(body) {
   const romsDir = path.join(LAUNCHER_HOME, 'roms', folder);
   fs.mkdirSync(installDir, { recursive: true });
   fs.mkdirSync(romsDir, { recursive: true });
-  if (!repo) return { installDir, method: 'folder' };
+  if (!repo) return { installDir, method: 'folder', version: null, executables: [] };
 
-  let asset = null;
-  try {
-    const rel = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-      headers: { Accept: 'application/vnd.github+json', 'User-Agent': USER_AGENT },
-    });
-    if (rel.ok) {
-      const data = await rel.json();
-      const ranked = (data.assets || [])
-        .map((a) => ({ a, score: scoreAsset(a) }))
-        .filter((x) => x.score >= 0)
-        .sort((x, y) => y.score - x.score);
-      asset = ranked.length ? ranked[0].a : null;
-    }
-  } catch {
-    asset = null;
-  }
-
-  if (asset) {
+  /* 1. Release con binarios precompilados ------------------------------- */
+  const release = await latestRelease(repo);
+  if (release && release.asset) {
+    const asset = release.asset;
     const tmp = path.join(
       os.tmpdir(),
-      `portslauncher-${process.pid}-${Date.now()}-${path.basename(asset.name)}`
+      `portslauncher-${process.pid}-${Date.now()}-${path.basename(String(asset.name))}`
     );
     try {
       await downloadTo(asset.browser_download_url, tmp);
-      const lower = String(asset.name).toLowerCase();
-      if (lower.endsWith('.zip')) {
-        await execFileAsync('unzip', ['-o', tmp, '-d', installDir]);
-      } else if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
-        await execFileAsync('tar', ['-xzf', tmp, '-C', installDir]);
-      } else {
-        const target = path.join(installDir, path.basename(asset.name));
-        fs.copyFileSync(tmp, target);
-        fs.chmodSync(target, 0o755);
+      const wasEmpty = fs.readdirSync(installDir).length === 0;
+      const kind = await extractInto(asset.name, tmp, installDir);
+      if (kind) {
+        if (wasEmpty) flattenSingleRoot(installDir);
+        const executables = chmodExecutables(installDir);
+        return {
+          installDir,
+          method: 'release',
+          version: release.version,
+          assetName: String(asset.name),
+          archive: kind,
+          executables,
+        };
       }
+    } catch (error) {
+      /* Asset inservible (formato raro, fallo de red): se degrada al ZIP del
+       * repositorio en vez de dejar el port «Broken». */
+      console.warn(
+        `[install] el release de ${repo} no se pudo usar:`,
+        error instanceof Error ? error.message : error
+      );
     } finally {
       fs.rmSync(tmp, { force: true });
     }
-    return { installDir, method: 'release' };
   }
 
-  /* Sin release empaquetado: clon superficial en la carpeta del port. */
-  const empty = fs.readdirSync(installDir).length === 0;
-  if (!empty) return { installDir, method: 'existing' };
+  /* 2. ZIP del repositorio ---------------------------------------------- */
+  const zip = await downloadRepoZip(repo, installDir);
+  if (zip) {
+    return {
+      installDir,
+      method: 'repo-zip',
+      version: release ? release.version : null,
+      branch: zip.branch,
+      archive: zip.kind,
+      executables: chmodExecutables(installDir),
+    };
+  }
+
+  /* 3. `git clone` ------------------------------------------------------ */
+  if (fs.readdirSync(installDir).length > 0) {
+    return {
+      installDir,
+      method: 'existing',
+      version: release ? release.version : null,
+      executables: chmodExecutables(installDir),
+    };
+  }
   await execFileAsync('git', ['clone', '--depth', '1', `https://github.com/${repo}.git`, installDir]);
-  return { installDir, method: 'clone' };
+  return {
+    installDir,
+    method: 'clone',
+    version: release ? release.version : null,
+    executables: chmodExecutables(installDir),
+  };
 }
 
 /** Atiende `POST /api/install`. */
@@ -471,10 +811,15 @@ function createApiMiddleware() {
 module.exports = {
   LAUNCHER_HOME,
   STEAMGRID_PREFIX,
+  chmodExecutables,
   createApiMiddleware,
+  extractZip,
   handleApiRequest,
   handleSelfUpdate,
   installPort,
+  looksExecutable,
+  safeEntry,
   safeFolder,
+  scoreAsset,
   sendJSON,
 };

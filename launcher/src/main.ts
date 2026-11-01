@@ -277,40 +277,10 @@ function closeL(): void {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Acciones: simulación, ejecución y persistencia                             */
+/* Acciones: instalación real, ejecución y persistencia                       */
 /* -------------------------------------------------------------------------- */
 
 const PROG: Record<string, number> = {};
-
-function simulate(id: string, kind: 'install' | 'update'): void {
-  const game = S.byId.get(id);
-  if (!game || PROG[id] != null) return;
-  PROG[id] = 0;
-  draw();
-  const iv = setInterval(() => {
-    PROG[id] = Math.min(100, (PROG[id] ?? 0) + 4 + Math.random() * 9);
-    document.querySelectorAll<HTMLElement>(`[data-prog="${id}"]`).forEach((e) => {
-      e.style.width = PROG[id] + '%';
-    });
-    const stg = PROG[id] < 60 ? 'Descargando…' : PROG[id] < 85 ? 'Verificando huella…' : 'Instalando…';
-    document.querySelectorAll<HTMLElement>(`[data-stage="${id}"]`).forEach((e) => {
-      e.textContent = stg;
-    });
-    if (PROG[id] >= 100) {
-      clearInterval(iv);
-      delete PROG[id];
-      game.inst = true;
-      game.v = game.lv;
-      saveState();
-      draw();
-      if (kind === 'install' && game.rom && !game.romOk) {
-        openRom(id, true);
-      } else {
-        toast(game.t + (kind === 'update' ? ' actualizado a ' + game.lv : ' instalado'));
-      }
-    }
-  }, 140);
-}
 
 function play(id: string): void {
   const game = S.byId.get(id);
@@ -331,12 +301,26 @@ function play(id: string): void {
   renderLayer();
 }
 
-/** Instalación real: descarga/clona el port vía `/api/install` (middleware de Vite). */
+/**
+ * Instala o actualiza un port con el pipeline real de `/api/install`.
+ *
+ * El servidor descarga el release, el ZIP del repositorio o clona el repo, y
+ * deja el port listo en `LAUNCHER_HOME/ports/<folder>`. Aquí sólo se pinta el
+ * progreso y se persiste el resultado: ruta física y versión instalada van a
+ * `libraryService` (fuente de verdad, sobrevive a recargas) y a la ficha en
+ * memoria que consume el renderizador.
+ *
+ * Sirve tanto para `install` como para `update`: el backend reescribe la
+ * carpeta del port, que es exactamente lo que hace una actualización.
+ */
 async function installReal(id: string): Promise<void> {
   const game = S.byId.get(id);
   if (!game || PROG[id] != null) return;
+
+  const wasInstalled = game.inst;
   PROG[id] = 0;
   draw();
+
   const setStage = (text: string, pct: number): void => {
     PROG[id] = pct;
     document.querySelectorAll<HTMLElement>(`[data-prog="${id}"]`).forEach((e) => {
@@ -346,12 +330,17 @@ async function installReal(id: string): Promise<void> {
       e.textContent = text;
     });
   };
-  setStage('Descargando…', 10);
+  setStage(wasInstalled ? 'Descargando actualización…' : 'Descargando…', 10);
+
   /* Avance lento mientras el servidor trabaja (sin superar el 90 %). */
   const iv = setInterval(() => {
     const cur = PROG[id] ?? 0;
-    setStage(cur < 60 ? 'Descargando…' : 'Instalando…', Math.min(90, cur + 2 + Math.random() * 4));
+    setStage(
+      cur < 60 ? 'Descargando…' : cur < 80 ? 'Extrayendo…' : 'Instalando…',
+      Math.min(90, cur + 2 + Math.random() * 4)
+    );
   }, 400);
+
   try {
     const folderName = folderOf(game.t);
     const res = await fetch('/api/install', {
@@ -368,24 +357,100 @@ async function installReal(id: string): Promise<void> {
     const data = (await res.json().catch(() => ({}))) as {
       ok?: boolean;
       installDir?: string;
+      method?: string;
+      version?: string | null;
+      assetName?: string;
+      executables?: string[];
       error?: string;
     };
     if (!res.ok || !data.ok) throw new Error(data.error || `Error ${res.status}`);
+    if (!data.installDir) throw new Error('El servidor no devolvió la ruta de instalación.');
+
     clearInterval(iv);
-    setStage('Instalando…', 100);
-    delete PROG[id];
+    setStage('Verificando…', 96);
+
+    const installDir = data.installDir;
+    /* La versión que compara la máquina de estados es la del índice
+     * (`game.lv`): se persiste esa para que el port quede «Listo» y no
+     * reaparezca como «Actualizar». El tag del release sólo se usa si el
+     * catálogo no declara versión. */
+    const catalogVersion = game.ver ?? (game.lv !== '—' ? game.lv : null);
+    const installedVersion =
+      catalogVersion ?? (data.version ? String(data.version) : null);
+    const needsRom = !!game.rom && !game.romOk;
+
+    /* Persistencia real: ruta física + versión en `libraryService`. */
+    libraryService.updateLibraryGame(game.id, {
+      state: needsRom ? 'NeedsRom' : 'Ready',
+      installDir,
+      installedVersion,
+      installedAt: new Date().toISOString(),
+      installStrategy: game.strategy,
+      progress: 100,
+      error: null,
+    });
+
+    /* Ficha en memoria: mismo snapshot que pinta la UI. */
     game.inst = true;
-    game.v = game.lv;
-    if (data.installDir) game.dir = data.installDir;
+    game.dir = installDir;
+    game.v = installedVersion;
+    game.romOk = !needsRom;
+    if (typeof data.method === 'string') game.st = methodLabel(data.method);
+
+    PROG[id] = 100;
+    setStage('Listo', 100);
+    delete PROG[id];
     saveState();
     draw();
-    if (game.rom && !game.romOk) openRom(id, true);
-    else toast(game.t + ' instalado');
+
+    if (needsRom) {
+      toast(game.t + ' descargado · falta la ROM');
+      openRom(id, true);
+      return;
+    }
+
+    if (wasInstalled) {
+      toast(`${game.t} actualizado${installedVersion ? ' a ' + installedVersion : ''}`);
+    } else {
+      toast(`${game.t} instalado en ${installDir}`);
+    }
   } catch (error) {
     clearInterval(iv);
     delete PROG[id];
+    /* El fallo también se persiste: la ficha queda en `Broken` con la causa y
+     * no se inventa un estado instalado. */
+    try {
+      libraryService.updateLibraryGame(game.id, {
+        state: 'Broken',
+        installedVersion: null,
+        progress: 0,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } catch {}
+    game.inst = false;
+    game.v = null;
+    game.romOk = false;
+    saveState();
     draw();
-    toast('No se pudo instalar ' + game.t + ': ' + (error instanceof Error ? error.message : String(error)));
+    toast(
+      'No se pudo instalar ' + game.t + ': ' + (error instanceof Error ? error.message : String(error))
+    );
+  }
+}
+
+/** Texto legible del método de instalación devuelto por el backend. */
+function methodLabel(method: string): string {
+  switch (method) {
+    case 'release':
+      return 'Release oficial';
+    case 'repo-zip':
+      return 'ZIP del repositorio';
+    case 'clone':
+      return 'Clonado de Git';
+    case 'existing':
+      return 'Carpeta existente';
+    default:
+      return 'Descarga directa';
   }
 }
 
@@ -393,8 +458,10 @@ function primaryAction(id: string): void {
   const game = S.byId.get(id);
   if (!game) return;
   const st = statusOf(game);
+  /* Instalar y actualizar son la misma operación real: el backend reescribe la
+   * carpeta del port con la última versión publicada. */
   if (st.act === 'install') void installReal(id);
-  else if (st.act === 'update') simulate(id, 'update');
+  else if (st.act === 'update') void installReal(id);
   else if (st.act === 'rom') openRom(id, false);
   else if (st.act === 'play') play(id);
   else if (st.act === 'detail') {
@@ -1452,9 +1519,11 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
     toast('Ajustes restablecidos');
   },
   updall: () => {
+    /* Cada port con actualización pendiente pasa por el mismo pipeline real
+     * que el botón individual; `installReal` ya serializa por `PROG[id]`. */
     S.games
       .filter((g) => statusOf(g).k === 'upd')
-      .forEach((g) => simulate(g.id, 'update'));
+      .forEach((g) => void installReal(g.id));
   },
   closeL: () => closeL(),
   rom: (d) => d.id && openRom(d.id, false),
