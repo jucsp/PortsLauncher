@@ -9,6 +9,7 @@
 import './styles/app.css';
 
 import type {
+  Addon,
   DestOS,
   MediaStyle,
   PortItem,
@@ -369,8 +370,18 @@ async function reportFailure(input: FailureInput): Promise<string | null> {
   return null;
 }
 
-/** Abre un archivo o carpeta de `~/PortsLauncher` con la app del sistema. */
-async function openPathInSystem(target: string): Promise<void> {
+/**
+ * Abre un reporte técnico o la carpeta de plugins con la app del sistema.
+ *
+ * El backend aplica lista blanca: sólo pueden abrirse los `*.log` de
+ * `~/PortsLauncher/logs` y la carpeta de plugins (o subcarpetas suyas);
+ * cualquier otra ruta se rechaza con error.
+ *
+ * @param target Ruta absoluta (o con `~`) a un `.log` o a la carpeta de plugins.
+ * @param what   Qué se está abriendo, para el aviso de error (`el reporte`,
+ *               `la carpeta de plugins`…).
+ */
+async function openPathInSystem(target: string, what = 'el reporte'): Promise<void> {
   try {
     const res = await fetch('/api/open-path', {
       method: 'POST',
@@ -381,7 +392,7 @@ async function openPathInSystem(target: string): Promise<void> {
     if (!res.ok || !data.ok) throw new Error(data.error || `Error ${res.status}`);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    toast('No se pudo abrir el reporte: ' + detail);
+    toast(`No se pudo abrir ${what}: ` + detail);
   }
 }
 
@@ -1401,6 +1412,118 @@ function closePluginsDoc(): void {
   pluginsDocOpen = false;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Plugins reales en disco                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** Forma cruda de un plugin tal y como lo entrega `GET /api/plugins`. */
+interface DiskPlugin {
+  id?: unknown;
+  name?: unknown;
+  version?: unknown;
+  description?: unknown;
+  author?: unknown;
+  type?: unknown;
+  icon?: unknown;
+  enabled?: unknown;
+  dir?: unknown;
+}
+
+/** Cadena recortada y no vacía, o `null`. */
+function pluginText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Ruta real de la carpeta de plugins (`~/PortsLauncher/plugins`).
+ *
+ * La resuelve el backend (`GET /api/plugins/dir`): el renderer no debe adivinar
+ * rutas del sistema. Se cachea porque no cambia durante la sesión.
+ */
+let pluginsDirPath: string | null = null;
+
+async function resolvePluginsDir(): Promise<string | null> {
+  if (pluginsDirPath) return pluginsDirPath;
+  try {
+    const res = await fetch('/api/plugins/dir', { headers: { Accept: 'application/json' } });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { ok?: boolean; path?: string } | null;
+    const dir = pluginText(data?.path);
+    if (data?.ok === false || !dir) return null;
+    pluginsDirPath = dir;
+    return dir;
+  } catch {
+    return null;
+  }
+}
+
+/** Abre en el explorador del sistema la carpeta real donde viven los plugins. */
+async function openPluginsFolder(): Promise<void> {
+  const dir = await resolvePluginsDir();
+  if (!dir) {
+    toast('No se pudo localizar la carpeta de plugins');
+    return;
+  }
+  await openPathInSystem(dir, 'la carpeta de plugins');
+}
+
+/**
+ * Sincroniza los plugins reales de disco con `libraryService`.
+ *
+ * Es la única vía por la que aparecen addons en la UI: lee `GET /api/plugins`
+ * (que escanea los `plugin.json` de `~/PortsLauncher/plugins`) y publica el
+ * resultado en la biblioteca local, conservando el `enabled` que el usuario
+ * conmutó. Si el backend no responde se mantiene la lista guardada: nunca se
+ * inventan plugins.
+ */
+async function syncPluginsFromDisk(): Promise<void> {
+  let payload: { ok?: boolean; path?: string; plugins?: DiskPlugin[] } | null = null;
+  try {
+    const res = await fetch('/api/plugins', { headers: { Accept: 'application/json' } });
+    if (!res.ok) return;
+    payload = (await res.json()) as { ok?: boolean; path?: string; plugins?: DiskPlugin[] } | null;
+  } catch {
+    /* Servidor local caído (o build sin backend): se respeta lo ya guardado. */
+    return;
+  }
+  if (!payload || payload.ok === false || !Array.isArray(payload.plugins)) return;
+
+  const reportedDir = pluginText(payload.path);
+  if (reportedDir) pluginsDirPath = reportedDir;
+
+  const installedAt = Date.now();
+  const plugins: Addon[] = [];
+  for (const raw of payload.plugins) {
+    const id = pluginText(raw?.id);
+    const name = pluginText(raw?.name);
+    if (!id || !name) continue;
+    const addon: Addon = {
+      id,
+      name,
+      version: pluginText(raw?.version) ?? '0.0.0',
+      description: pluginText(raw?.description) ?? '',
+      type: pluginText(raw?.type) ?? 'plugin',
+      enabled: raw?.enabled !== false,
+      installedAt,
+    };
+    const author = pluginText(raw?.author);
+    if (author) addon.author = author;
+    const icon = pluginText(raw?.icon);
+    if (icon) addon.icon = icon;
+    const dir = pluginText(raw?.dir);
+    if (dir) addon.dir = dir;
+    plugins.push(addon);
+  }
+
+  const before = JSON.stringify(S.addons ?? []);
+  const addons = libraryService.syncAddons(plugins);
+  S.addons = addons;
+  /* Sólo se repinta si la lista cambió: en un arranque estable no hay parpadeo. */
+  if (JSON.stringify(addons) !== before) draw();
+}
+
 /**
  * Sonda `/api/steamgrid/__status`: ¿tiene clave el servidor de desarrollo?
  *
@@ -1819,7 +1942,8 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   },
   closeL: () => closeL(),
   /* «Abrir reporte» del modal de error: abre el `.log` con el visor del sistema
-   * (Electron `shell.openPath`, o `xdg-open`/`open`/`start` fuera de Electron). */
+   * (Electron `shell.openPath`, o `xdg-open`/`open` fuera de él; en Windows el
+   * backend usa `notepad.exe`, nunca `cmd /c start`). */
   openReport: (d) => {
     if (!d.path) {
       toast('No hay ningún reporte que abrir');
@@ -2022,13 +2146,16 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
 
   /* -------------------- addons y extensiones ------------------------------ */
 
-  'open-addons-dir': () => {
-    toast('Carpeta: ~/.local/share/portslauncher/plugins/');
-  },
+  /* Las dos acciones abren la carpeta real de plugins en el explorador del
+   * sistema (no hay carpeta ficticia ni mensaje simulado): ahí se copian las
+   * carpetas con su `plugin.json` y el siguiente arranque las lista. */
+  'open-plugins-folder': () => void openPluginsFolder(),
+  'open-addons-dir': () => void openPluginsFolder(),
   'open-plugins-doc': () => openPluginsDoc(),
   'close-doc-modal': () => closePluginsDoc(),
   'install-addon': () => {
-    toast('Copia la carpeta de tu plugin en ~/.local/share/portslauncher/plugins/');
+    toast('Copia la carpeta del plugin en la carpeta que se acaba de abrir');
+    void openPluginsFolder();
   },
   'toggle-addon': (d) => {
     const addon = S.addons.find((a) => a.id === d.id);
@@ -2044,7 +2171,9 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
       libraryService.removeAddon(d.id);
       S.addons = S.addons.filter((a) => a.id !== d.id);
       draw();
-      toast('Addon eliminado');
+      /* El disco manda: el plugin sigue en su carpeta y volverá a listarse al
+       * reiniciar. Para desinstalarlo hay que borrar esa carpeta. */
+      toast('Plugin quitado de la lista · su carpeta sigue en disco');
     }
   },
 };
@@ -2384,6 +2513,11 @@ async function init(): Promise<void> {
 
   /* Comprobación silenciosa de actualizaciones del launcher. */
   void checkLauncherUpdates(true);
+
+  /* Plugins reales: se leen los `plugin.json` de disco y se sincronizan con la
+   * biblioteca. No bloquea el arranque y, si no hay ninguno, la lista queda
+   * vacía (no hay addons de fábrica). */
+  void syncPluginsFromDisk();
 
   /* Sonda del proxy de SteamGridDB: no bloquea el arranque. Cuando termina, se
    * arranca la sincronización automática si el usuario la dejó activa (la sonda

@@ -8,9 +8,9 @@
  *
  * Rutas servidas:
  *   POST /api/install                    → descarga el release del port o clona el repo.
- *   POST /api/launch                     → ejecuta el port instalado (spawn desacoplado).
+ *   POST /api/launch                     → ejecuta el port instalado (spawn desacoplado y confirmado).
  *   POST /api/report-error               → escribe un reporte técnico en `~/PortsLauncher/logs`.
- *   POST /api/open-path                  → abre un archivo/carpeta de `~/PortsLauncher` en el SO.
+ *   POST /api/open-path                  → abre un reporte `.log` o la carpeta de plugins en el SO.
  *   POST /api/launcher/self-update       → guarda el instalador de una versión nueva en ~/Downloads.
  *   GET  /api/steamgrid/<api>            → proxy con la clave del usuario o del servidor.
  *
@@ -1084,7 +1084,33 @@ function electronShell() {
   return null;
 }
 
-/** Abre `target` con el gestor de archivos / visor predeterminado del SO. */
+/**
+ * Ejecuta un comando del sistema tolerando sus códigos de salida.
+ *
+ * `explorer.exe` termina con `1` incluso cuando abre la ventana correctamente,
+ * así que un exit code distinto de 0 no es prueba de fallo. Sólo se propaga el
+ * error cuando el binario no existe o no se pudo lanzar: en ese caso
+ * `error.code` es una cadena (`ENOENT`, `EACCES`…). Un número es el código de
+ * salida del proceso y se ignora.
+ */
+async function execTolerant(command, args) {
+  try {
+    await execFileAsync(command, args, { timeout: 15_000 });
+  } catch (error) {
+    if (error && typeof error.code === 'string') throw error;
+  }
+}
+
+/**
+ * Abre `target` con el gestor de archivos / visor predeterminado del SO.
+ *
+ * En Windows no se usa `cmd.exe /c start`: `cmd` interpretaría metacaracteres
+ * del path (`&`, `|`, `^`, `%`, paréntesis) y `start` ejecutaría cualquier
+ * binario o script que se le pase. Se invocan directamente `notepad.exe` para
+ * los reportes `.log` y `explorer.exe` para carpetas (y para cualquier otro
+ * fichero, que `explorer` delega en su aplicación asociada). Ambos reciben la
+ * ruta como argumento literal, sin shell intermedio.
+ */
 async function openInSystem(target) {
   const shell = electronShell();
   if (shell) {
@@ -1095,8 +1121,13 @@ async function openInSystem(target) {
     return 'electron';
   }
   if (process.platform === 'win32') {
-    await execFileAsync('cmd', ['/c', 'start', '', target], { timeout: 15_000 });
-    return 'start';
+    const isDir = fs.statSync(target).isDirectory();
+    if (!isDir && path.extname(target).toLowerCase() === '.log') {
+      await execTolerant('notepad.exe', [target]);
+      return 'notepad';
+    }
+    await execTolerant('explorer.exe', [target]);
+    return 'explorer';
   }
   const command = process.platform === 'darwin' ? 'open' : 'xdg-open';
   await execFileAsync(command, [target], { timeout: 15_000 });
@@ -1104,11 +1135,42 @@ async function openInSystem(target) {
 }
 
 /**
+ * Ruta canónica para comparar contra la lista blanca.
+ *
+ * Resuelve los enlaces simbólicos del tramo que ya existe y recompone el resto:
+ * así un directorio aún no creado sigue siendo comparable (realpath falla sobre
+ * rutas inexistentes) y un `~` que el sistema resuelve de otra forma —macOS
+ * `/var` → `/private/var`— no provoca falsos rechazos. Sin esto, un symlink
+ * colocado en `logs/` apuntando fuera del árbol pasaría la comprobación de
+ * prefijo.
+ */
+function canonicalPath(target) {
+  let current = target;
+  const tail = [];
+  for (let depth = 0; depth < 64; depth += 1) {
+    try {
+      const real = fs.realpathSync(current);
+      return tail.length ? path.join(real, ...tail) : real;
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return target;
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+  return target;
+}
+
+/**
  * `POST /api/open-path` → abre un archivo o carpeta con la app del sistema.
  *
- * Sólo se admiten rutas dentro de `~/PortsLauncher`: el endpoint lo invoca el
- * renderer y, sin esta cota, cualquier inyección en la UI podría abrir
- * documentos arbitrarios del usuario con su visor predeterminado. Las URLs
+ * Lista blanca estricta, porque el endpoint lo invoca el renderer y sin cota
+ * cualquier inyección en la UI podría abrir —o ejecutar, vía `start`— documentos
+ * arbitrarios del usuario:
+ *   · ficheros `*.log` de `~/PortsLauncher/logs`;
+ *   · la carpeta de plugins, o cualquier carpeta contenida en ella.
+ * Todo lo demás se rechaza, incluido el resto de `~/PortsLauncher` (los ports
+ * descargados viven ahí y contienen binarios y scripts no confiables). Las URLs
  * externas siguen su propio camino (`window.open` → `shell.openExternal`).
  */
 async function handleOpenPath(req, res) {
@@ -1122,10 +1184,33 @@ async function handleOpenPath(req, res) {
     if (!raw) throw new Error('Falta la ruta a abrir.');
 
     const expanded = raw.replace(/^~(?=$|[\\/])/, os.homedir());
-    const target = path.resolve(expanded);
-    const root = path.resolve(LAUNCHER_HOME);
-    if (target !== root && !target.startsWith(root + path.sep)) {
-      throw new Error(`Sólo se pueden abrir rutas dentro de ${root}.`);
+    const target = canonicalPath(path.resolve(expanded));
+
+    /* `PLUGINS_DIR` y `LEGACY_PLUGINS_DIR` se declaran más abajo en el módulo:
+     * aquí ya están inicializadas porque esta función sólo se ejecuta en
+     * runtime, cuando la evaluación del módulo ha terminado. */
+    const logsRoot = canonicalPath(path.resolve(LOGS_DIR));
+    const pluginRoots = [
+      canonicalPath(path.resolve(PLUGINS_DIR)),
+      canonicalPath(path.resolve(LEGACY_PLUGINS_DIR)),
+    ].filter((root, index, all) => all.indexOf(root) === index);
+
+    const inLogs = target !== logsRoot && target.startsWith(logsRoot + path.sep);
+    const inPlugins = pluginRoots.some(
+      (root) => target === root || target.startsWith(root + path.sep)
+    );
+
+    if (inLogs) {
+      /* Un `.log` renombrado a `.exe`/`.sh` dentro de logs sería un binario
+       * abrible: se exige la extensión exacta y no se delega en el visor
+       * predeterminado para cualquier otra cosa. */
+      if (path.extname(target).toLowerCase() !== '.log') {
+        throw new Error('Sólo se pueden abrir reportes técnicos (.log) de la carpeta de logs.');
+      }
+    } else if (!inPlugins) {
+      throw new Error(
+        `Sólo se pueden abrir reportes de ${logsRoot} o la carpeta de plugins ${pluginRoots[0]}.`
+      );
     }
     if (!fs.existsSync(target)) throw new Error(`La ruta no existe: ${target}`);
 
@@ -1318,10 +1403,31 @@ async function handleLaunch(req, res) {
       detached: true,
       stdio: 'ignore',
     });
-    /* `spawn` devuelve el error (ENOENT/EACCES) por evento, no lanzando: sin
-     * este manejador el fallo sería un `uncaughtException` del proceso. */
+
+    /* `spawn` no lanza: el fallo de arranque (ENOENT, EACCES, ELF de otra
+     * arquitectura, shebang sin intérprete) llega por el evento `error`. Si se
+     * respondiera 200 de inmediato, el usuario vería el port como «en
+     * ejecución» y el fallo quedaría sólo en la consola, sin reporte.
+     * Se espera al primer `spawn` o `error` antes de contestar. */
+    try {
+      await new Promise((resolve, reject) => {
+        child.once('spawn', resolve);
+        child.once('error', reject);
+      });
+    } catch (error) {
+      child.removeAllListeners();
+      fail(error instanceof Error ? error : new Error(String(error)), {
+        reason: 'spawn-error',
+        installDir,
+        exe: found.file,
+      });
+      return;
+    }
+
+    /* Ya en marcha: un `error` posterior no debe convertirse en
+     * `uncaughtException` del proceso principal. */
     child.on('error', (error) => {
-      console.warn('[launch] el port falló al arrancar:', error.message);
+      console.warn('[launch] el port falló tras arrancar:', error.message);
     });
     child.unref();
 
@@ -1336,6 +1442,147 @@ async function handleLaunch(req, res) {
     const detail = error instanceof Error ? error.message : String(error);
     fail(error instanceof Error ? error : new Error(detail), { reason: 'launch-exception' });
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Plugins (addons) del usuario                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Carpeta de plugins del launcher: `~/PortsLauncher/plugins`.
+ *
+ * Cada plugin es una carpeta con un `plugin.json` en su raíz. El launcher no
+ * inventa plugins: si la carpeta está vacía, la lista llega vacía a la UI.
+ */
+const PLUGINS_DIR = path.join(LAUNCHER_HOME, 'plugins');
+
+/**
+ * Carpeta heredada que también se escanea.
+ *
+ * Es la ruta que documentaba la sección de Addons (`~/.local/share/portslauncher/
+ * plugins`) antes de unificar los datos en `~/PortsLauncher`. Se lee en modo
+ * compatibilidad para no perder los plugins ya instalados allí.
+ */
+const LEGACY_PLUGINS_DIR = path.join(os.homedir(), '.local', 'share', 'portslauncher', 'plugins');
+
+/** Tope de carpetas de plugin leídas por escaneo (evita bloquear el servidor). */
+const MAX_PLUGINS = 200;
+
+/** Crea la carpeta de plugins al arrancar; un fallo aquí no debe tumbar la API. */
+function ensurePluginsDir() {
+  try {
+    return ensureDir(PLUGINS_DIR);
+  } catch (error) {
+    console.warn('[plugins] no se pudo crear la carpeta de plugins:', error);
+    return PLUGINS_DIR;
+  }
+}
+
+ensurePluginsDir();
+
+/** Cadena recortada y no vacía, o `null`. */
+function textOrNull(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Lee el `plugin.json` de `dir` y lo normaliza.
+ *
+ * @returns El manifiesto listo para la UI, o `null` si no hay manifiesto válido.
+ */
+function readPluginManifest(dir) {
+  const manifestPath = path.join(dir, 'plugin.json');
+  let raw;
+  try {
+    raw = fs.readFileSync(manifestPath, 'utf8');
+  } catch {
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    console.warn(`[plugins] plugin.json ilegible en ${dir}:`, error);
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+
+  /* El `id` es obligatorio en la práctica: sin él no hay forma estable de
+   * activar/desactivar el plugin, así que se cae al nombre de la carpeta. */
+  const id = textOrNull(parsed.id) ?? textOrNull(parsed.slug) ?? path.basename(dir);
+  const name = textOrNull(parsed.name) ?? textOrNull(parsed.title) ?? id;
+  if (!id || !name) return null;
+
+  return {
+    id,
+    name,
+    version: textOrNull(parsed.version) ?? '0.0.0',
+    description: textOrNull(parsed.description) ?? '',
+    author: textOrNull(parsed.author) ?? null,
+    type: textOrNull(parsed.type) ?? 'plugin',
+    icon: textOrNull(parsed.icon) ?? null,
+    enabled: parsed.enabled !== false,
+    dir,
+  };
+}
+
+/**
+ * Añade a `out` los plugins de `dir` que aún no estén en `seen`.
+ *
+ * `seen` es el conjunto de `id` ya entregados: la carpeta principal gana frente
+ * a la heredada cuando ambas declaran el mismo plugin.
+ */
+function scanPluginsDir(dir, out, seen) {
+  let items;
+  try {
+    items = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    /* La carpeta no existe (o no es legible): no hay plugins que aportar. */
+    return;
+  }
+  for (const item of items) {
+    if (out.length >= MAX_PLUGINS) return;
+    if (!item.isDirectory() || item.name.startsWith('.')) continue;
+    const manifest = readPluginManifest(path.join(dir, item.name));
+    if (!manifest || seen.has(manifest.id)) continue;
+    seen.add(manifest.id);
+    out.push(manifest);
+  }
+}
+
+/** Plugins reales encontrados en disco (carpeta principal primero). */
+function listPlugins() {
+  ensurePluginsDir();
+  const found = [];
+  const seen = new Set();
+  scanPluginsDir(PLUGINS_DIR, found, seen);
+  if (LEGACY_PLUGINS_DIR !== PLUGINS_DIR) scanPluginsDir(LEGACY_PLUGINS_DIR, found, seen);
+  return found;
+}
+
+/** `GET /api/plugins` → plugins reales leídos de `plugin.json` en disco. */
+async function handlePlugins(req, res) {
+  if (req.method !== 'GET') {
+    sendJSON(res, 405, { ok: false, error: 'Usa GET.' });
+    return;
+  }
+  try {
+    sendJSON(res, 200, { ok: true, path: PLUGINS_DIR, plugins: listPlugins() });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    sendJSON(res, 500, { ok: false, error: detail });
+  }
+}
+
+/** `GET /api/plugins/dir` → ruta real de la carpeta de plugins. */
+async function handlePluginsDir(req, res) {
+  if (req.method !== 'GET') {
+    sendJSON(res, 405, { ok: false, error: 'Usa GET.' });
+    return;
+  }
+  sendJSON(res, 200, { ok: true, path: ensurePluginsDir() });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1370,6 +1617,14 @@ async function handleApiRequest(req, res) {
     await handleLaunch(req, res);
     return true;
   }
+  if (url === '/api/plugins') {
+    await handlePlugins(req, res);
+    return true;
+  }
+  if (url === '/api/plugins/dir') {
+    await handlePluginsDir(req, res);
+    return true;
+  }
   if (url.startsWith(STEAMGRID_PREFIX)) {
     await steamgridProxy(req, res);
     return true;
@@ -1396,6 +1651,8 @@ function createApiMiddleware() {
       url === '/api/report-error' ||
       url === '/api/open-path' ||
       url === '/api/launch' ||
+      url === '/api/plugins' ||
+      url === '/api/plugins/dir' ||
       url === '/api/health' ||
       url.startsWith(STEAMGRID_PREFIX);
     if (!isApi) {
@@ -1415,7 +1672,9 @@ function createApiMiddleware() {
 
 module.exports = {
   LAUNCHER_HOME,
+  LEGACY_PLUGINS_DIR,
   LOGS_DIR,
+  PLUGINS_DIR,
   PORTS_DIR,
   STEAMGRID_PREFIX,
   chmodExecutables,
@@ -1425,11 +1684,15 @@ module.exports = {
   handleApiRequest,
   handleLaunch,
   handleOpenPath,
+  handlePlugins,
+  handlePluginsDir,
   handleReportError,
   handleSelfUpdate,
   installPort,
+  listPlugins,
   looksExecutable,
   openInSystem,
+  readPluginManifest,
   safeEntry,
   safeFolder,
   scoreAsset,

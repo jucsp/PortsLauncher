@@ -223,6 +223,9 @@ export function sanitizeAddon(raw: unknown): Addon | null {
   if (typeof raw['icon'] === 'string' && raw['icon'].trim()) {
     addon.icon = raw['icon'].trim();
   }
+  if (typeof raw['dir'] === 'string' && raw['dir'].trim()) {
+    addon.dir = raw['dir'].trim();
+  }
 
   return addon;
 }
@@ -406,15 +409,17 @@ export class LibraryService {
           if (art) customArt[pid] = art;
         }
       }
-      /* Addons: si la biblioteca guardada es anterior a la sección de plugins
-       * (no hay clave `addons`), se siembra el addon de ejemplo; un array vacío
-       * guardado por el usuario (los desinstaló todos) se respeta. */
+      /* Addons: se respeta lo guardado y, si la biblioteca es anterior a la
+       * sección de plugins (no hay clave `addons`), se arranca sin ninguno. El
+       * disco es la única fuente de verdad: `syncAddons()` rellena la lista con
+       * los `plugin.json` reales al iniciar. Nunca se siembran plugins de
+       * ejemplo. */
       const rawAddons = parsed['addons'];
       const addons: Addon[] = Array.isArray(rawAddons)
         ? rawAddons
             .map((entry) => sanitizeAddon(entry))
             .filter((entry): entry is Addon => entry !== null)
-        : defaultAddons();
+        : [];
       return {
         version: typeof parsed['version'] === 'number' ? parsed['version'] : LIBRARY_SCHEMA_VERSION,
         updatedAt: typeof parsed['updatedAt'] === 'string' ? parsed['updatedAt'] : nowIso(),
@@ -713,6 +718,48 @@ export class LibraryService {
    */
   setAddon(addon: Addon): Addon[] {
     return this.installAddon(addon);
+  }
+
+  /**
+   * Sincroniza la lista de addons con los plugins reales de disco.
+   *
+   * El disco manda: se descarta cualquier entrada que ya no tenga carpeta (o
+   * que nunca existió) y se añaden las nuevas. De cada plugin que ya estaba se
+   * conservan `enabled` e `installedAt`, porque ese estado lo decide el usuario
+   * en la UI y no viene del `plugin.json`.
+   *
+   * Es una sola escritura por sincronización (frente a N `installAddon` +
+   * `removeAddon`), para no encadenar eventos `addons` mientras la vista pinta.
+   *
+   * @param addons Plugins leídos de `GET /api/plugins`.
+   * @returns La lista resultante (copia defensiva).
+   */
+  syncAddons(addons: Addon[]): Addon[] {
+    const previous = new Map((this.file.addons ?? []).map((entry) => [entry.id, entry]));
+    const next: Addon[] = [];
+    const seen = new Set<string>();
+    for (const raw of Array.isArray(addons) ? addons : []) {
+      const clean = sanitizeAddon(raw);
+      if (!clean || seen.has(clean.id)) continue;
+      seen.add(clean.id);
+      const before = previous.get(clean.id);
+      if (before) {
+        clean.enabled = before.enabled;
+        clean.installedAt = before.installedAt;
+      } else {
+        clean.enabled = true;
+      }
+      next.push(clean);
+    }
+
+    /* Sin cambios reales (mismos ids, mismos datos) no se escribe: evita
+     * eventos y `updatedAt` innecesarios en cada arranque. */
+    const signature = (list: Addon[]): string =>
+      JSON.stringify(list.map((entry) => [entry.id, entry.name, entry.version, entry.enabled, entry.dir ?? '']));
+    const unchanged = signature(this.file.addons ?? []) === signature(next);
+    this.file.addons = next;
+    if (!unchanged) this.write('addons');
+    return this.getAddons();
   }
 
   /* ------------------------------- ajustes ------------------------------- */

@@ -749,13 +749,15 @@ export interface LibraryFile {
  *
  * Los addons son extensiones de la comunidad (proveedores de assets,
  * escáneres de backups, herramientas de compilación…) que se cargan desde el
- * sistema de ficheros del usuario, nunca desde la red.
+ * sistema de ficheros del usuario, nunca desde la red. Cada plugin es una
+ * carpeta con un `plugin.json` en su raíz; el backend
+ * (`GET /api/plugins`) es quien lo lee realmente.
  */
-export const ADDONS_DIR = '~/.local/share/portslauncher/plugins/';
+export const ADDONS_DIR = '~/PortsLauncher/plugins/';
 
 /** Addon instalado en el launcher. */
 export interface Addon {
-  /** Identificador estable (`local-backup-scanner`). */
+  /** Identificador estable, tomado del `plugin.json` (`asset-provider-x`). */
   id: string;
   /** Nombre visible del plugin. */
   name: string;
@@ -773,28 +775,20 @@ export interface Addon {
   enabled: boolean;
   /** Marca de tiempo (ms) de la instalación. */
   installedAt: number;
+  /** Carpeta real del plugin en disco (la rellena `GET /api/plugins`). */
+  dir?: string;
 }
 
 /**
- * Addons con los que arranca el launcher de fábrica.
+ * Addons con los que arranca el launcher de fábrica: **ninguno**.
  *
- * `Local Backups Scanner` es el ejemplo de la comunidad: se entrega activo para
- * que la sección de Addons nunca aparezca vacía en un arranque limpio.
+ * No hay plugins inventados. La lista se llena con lo que
+ * `libraryService.syncAddons()` recibe de `GET /api/plugins`, es decir, con los
+ * `plugin.json` que existan realmente en `~/PortsLauncher/plugins`. Un arranque
+ * sin plugins en disco deja la sección vacía, que es un estado válido.
  */
 export function defaultAddons(): Addon[] {
-  return [
-    {
-      id: 'local-backup-scanner',
-      name: 'Local Backups Scanner',
-      version: '1.0.0',
-      description:
-        'Detecta y vincula automáticamente volcados personales en tu carpeta de backups.',
-      author: 'Comunidad',
-      type: 'asset-provider',
-      enabled: true,
-      installedAt: Date.now(),
-    },
-  ];
+  return [];
 }
 
 /* -------------------------------------------------------------------------- */
