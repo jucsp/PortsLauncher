@@ -1960,52 +1960,6 @@ function saveState(): void {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Biblioteca de arranque                                                     */
-/* -------------------------------------------------------------------------- */
-
-/** Ports emblemáticos que se dan por instalados en un arranque limpio. */
-const SEED_KEYWORDS = ['sm64', 'mario', 'sonic', 'zelda', 'doom'];
-
-/**
- * Da vida a Inicio y Biblioteca en el primer arranque.
- *
- * Con la biblioteca local vacía, el héroe «Continuar jugando» y la estantería
- * de RECIENTES no tienen nada que pintar y la app parece rota aunque el
- * catálogo tenga 1000+ ports. Marcamos como instalados hasta cinco ports —
- * preferentemente emblemáticos (`sm64`, `mario`, `sonic`, `zelda`, `doom`) y,
- * si el índice no los trae, los primeros del catálogo— para que el usuario vea
- * su estantería funcionando de inmediato.
- */
-function seedLibrary(games: Game[]): void {
-  if (games.length === 0) return;
-  if (games.some((game) => game.inst)) return;
-
-  const seed: Game[] = [];
-  const take = (game: Game | undefined): void => {
-    if (!game || seed.length >= 5 || seed.includes(game)) return;
-    seed.push(game);
-  };
-
-  for (const keyword of SEED_KEYWORDS) {
-    if (seed.length >= 5) break;
-    take(games.find((game) => `${game.id} ${game.t}`.toLowerCase().includes(keyword)));
-  }
-  for (const game of games) {
-    if (seed.length >= 5) break;
-    take(game);
-  }
-
-  seed.forEach((game, index) => {
-    game.inst = true;
-    game.v = game.lv;
-    /* Jugables desde el primer momento: sin ROM validada saldrían «Falta ROM». */
-    game.romOk = true;
-    /* `played` ordena RECIENTES y elige el héroe de «Continuar jugando». */
-    game.played = Date.now() - index * 60_000;
-  });
-}
-
-/* -------------------------------------------------------------------------- */
 /* Inicialización de la aplicación                                            */
 /* -------------------------------------------------------------------------- */
 
@@ -2034,12 +1988,12 @@ async function init(): Promise<void> {
 
   const games: Game[] = catalog.ports.map((port: PortItem) => toGame(port, library.games, settings));
 
-  // Biblioteca vacía → sembrar ports emblemáticos (héroe + RECIENTES con vida).
-  seedLibrary(games);
-
-  if (!last && games.length > 0) {
+  /* Sin siembra ni estado simulado: el estado instalado proviene únicamente de
+   * `libraryService` (ver `toGame`). Un arranque limpio deja la biblioteca
+   * vacía y el héroe «Continuar jugando» sin pintar. */
+  if (!last) {
     const firstInstalled = games.find((g) => g.inst);
-    last = firstInstalled ? firstInstalled.id : games[0].id;
+    last = firstInstalled ? firstInstalled.id : null;
   }
 
   /* Los addons viven en la biblioteca local: la sección de Addons pinta los del
