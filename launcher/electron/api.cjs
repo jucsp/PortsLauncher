@@ -8,6 +8,9 @@
  *
  * Rutas servidas:
  *   POST /api/install                    → descarga el release del port o clona el repo.
+ *   POST /api/launch                     → ejecuta el port instalado (spawn desacoplado).
+ *   POST /api/report-error               → escribe un reporte técnico en `~/PortsLauncher/logs`.
+ *   POST /api/open-path                  → abre un archivo/carpeta de `~/PortsLauncher` en el SO.
  *   POST /api/launcher/self-update       → guarda el instalador de una versión nueva en ~/Downloads.
  *   GET  /api/steamgrid/<api>            → proxy con la clave del usuario o del servidor.
  *
@@ -22,7 +25,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { promisify } = require('node:util');
@@ -916,6 +919,426 @@ async function handleSelfUpdate(req, res) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Diagnóstico: reportes técnicos y apertura de rutas                         */
+/* -------------------------------------------------------------------------- */
+
+/** Carpeta de reportes técnicos: `~/PortsLauncher/logs`. */
+const LOGS_DIR = path.join(LAUNCHER_HOME, 'logs');
+
+/** Raíz de ports instalados: `~/PortsLauncher/ports`. */
+const PORTS_DIR = path.join(LAUNCHER_HOME, 'ports');
+
+/** Crea `dir` (recursivo e idempotente) y lo devuelve. */
+function ensureDir(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** Versión del launcher (la del `package.json` del paquete, cacheada). */
+let launcherVersionCache = null;
+
+function launcherVersion() {
+  if (launcherVersionCache !== null) return launcherVersionCache;
+  launcherVersionCache = 'desconocida';
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    if (pkg && typeof pkg.version === 'string') launcherVersionCache = pkg.version;
+  } catch {
+    /* Build sin `package.json` legible: la versión queda como desconocida. */
+  }
+  return launcherVersionCache;
+}
+
+/** Trozo de nombre de archivo seguro (`Mario 64` → `Mario-64`). */
+function safeSegment(value, fallback) {
+  const clean = String(value ?? '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '');
+  return clean || fallback;
+}
+
+/** Marca temporal apta para nombre de archivo (`2024-05-01T12-30-00-000Z`). */
+function fileStamp(date) {
+  return date.toISOString().replace(/[:.]/g, '-');
+}
+
+/** Serializa los detalles del reporte sin lanzar si hay referencias circulares. */
+function describeDetails(details) {
+  if (details === null || details === undefined) return '(sin detalles)';
+  if (typeof details === 'string') return details;
+  try {
+    return JSON.stringify(details, null, 2);
+  } catch {
+    return '(los detalles no se pudieron serializar)';
+  }
+}
+
+/**
+ * Escribe un reporte técnico en `~/PortsLauncher/logs/error-<pid>-<fecha>.log`.
+ *
+ * El log es texto plano a propósito: el usuario tiene que poder abrirlo con
+ * cualquier editor (y el botón «Abrir reporte» lo hace con el visor del sistema)
+ * y enviarlo tal cual. Se incluye el entorno completo porque la mayoría de
+ * fallos de instalación dependen del SO, la arquitectura o la versión de Node.
+ *
+ * @param {{ pid?: string, name?: string, action?: string,
+ *           error?: unknown, stack?: string | null, details?: unknown }} input
+ * @returns {string} ruta absoluta del reporte escrito.
+ */
+function writeErrorReport(input) {
+  const data = input && typeof input === 'object' ? input : {};
+  const pid = data.pid === null || data.pid === undefined ? '' : String(data.pid);
+  const name = data.name === null || data.name === undefined ? '' : String(data.name);
+  const action = String(data.action || 'desconocida');
+  const error = data.error;
+  let message;
+  if (error instanceof Error) message = error.message;
+  else if (typeof error === 'string' && error) message = error;
+  else if (error === null || error === undefined) message = 'Error desconocido';
+  else message = String(error);
+  const stack =
+    (typeof data.stack === 'string' && data.stack) ||
+    (error instanceof Error && typeof error.stack === 'string' ? error.stack : '') ||
+    '(no disponible)';
+
+  ensureDir(LOGS_DIR);
+
+  /* Dos fallos en el mismo milisegundo no deben sobrescribirse. */
+  const stamp = fileStamp(new Date());
+  const head = `error-${safeSegment(pid, 'sin-id')}-${stamp}`;
+  let file = path.join(LOGS_DIR, `${head}.log`);
+  for (let n = 2; fs.existsSync(file) && n < 1000; n += 1) {
+    file = path.join(LOGS_DIR, `${head}-${n}.log`);
+  }
+
+  const lines = [
+    'PortsLauncher · Reporte técnico',
+    '='.repeat(64),
+    '',
+    `Fecha:          ${new Date().toISOString()}`,
+    `Acción:         ${action}`,
+    `Port:           ${name || '(sin nombre)'}`,
+    `ID del port:    ${pid || '(sin id)'}`,
+    '',
+    '-- Entorno ----------------------------------------------------',
+    `Sistema:        ${process.platform} (${os.type()} ${os.release()})`,
+    `Distribución:   ${(() => { try { return os.version(); } catch { return '(desconocida)'; } })()}`,
+    `Arquitectura:   ${process.arch}`,
+    `Equipo:         ${os.hostname()}`,
+    `Node:           ${process.versions.node}`,
+    `Electron:       ${process.versions.electron || 'no (servidor de desarrollo)'}`,
+    `Launcher:       v${launcherVersion()}`,
+    `Directorio:     ${LAUNCHER_HOME}`,
+    '',
+    '-- Causa ------------------------------------------------------',
+    String(message),
+    '',
+    '-- Pila de ejecución ------------------------------------------',
+    String(stack),
+    '',
+    '-- Detalles ---------------------------------------------------',
+    describeDetails(data.details),
+    '',
+  ];
+
+  fs.writeFileSync(file, lines.join('\n'), 'utf8');
+  return file;
+}
+
+/** `POST /api/report-error` → guarda el reporte y devuelve su ruta. */
+async function handleReportError(req, res) {
+  if (req.method !== 'POST') {
+    sendJSON(res, 405, { ok: false, error: 'Usa POST.' });
+    return;
+  }
+  try {
+    const body = await readJSON(req);
+    /* Se acepta el reporte plano o envuelto en `report` para no atar el
+     * contrato del frontend a una única forma. */
+    const payload = body && typeof body.report === 'object' && body.report ? body.report : body || {};
+    const logPath = writeErrorReport(payload);
+    sendJSON(res, 200, { ok: true, logPath });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error('[report-error] no se pudo escribir el reporte:', detail);
+    sendJSON(res, 500, { ok: false, error: detail });
+  }
+}
+
+/**
+ * Módulo `shell` de Electron, o `null` fuera de Electron.
+ *
+ * `electron/api.cjs` también se carga desde `vite dev` (Node puro), donde
+ * `require('electron')` devuelve la ruta del binario y no el objeto de la API:
+ * se comprueba `shell.openPath` antes de usarlo.
+ */
+function electronShell() {
+  try {
+    const electron = require('electron');
+    if (electron && electron.shell && typeof electron.shell.openPath === 'function') {
+      return electron.shell;
+    }
+  } catch {
+    /* Fuera de Electron o sin el paquete instalado. */
+  }
+  return null;
+}
+
+/** Abre `target` con el gestor de archivos / visor predeterminado del SO. */
+async function openInSystem(target) {
+  const shell = electronShell();
+  if (shell) {
+    /* `shell.openPath` resuelve con '' cuando todo va bien y con el mensaje de
+     * error en caso contrario: no rechaza la promesa. */
+    const problem = await shell.openPath(target);
+    if (problem) throw new Error(problem);
+    return 'electron';
+  }
+  if (process.platform === 'win32') {
+    await execFileAsync('cmd', ['/c', 'start', '', target], { timeout: 15_000 });
+    return 'start';
+  }
+  const command = process.platform === 'darwin' ? 'open' : 'xdg-open';
+  await execFileAsync(command, [target], { timeout: 15_000 });
+  return command;
+}
+
+/**
+ * `POST /api/open-path` → abre un archivo o carpeta con la app del sistema.
+ *
+ * Sólo se admiten rutas dentro de `~/PortsLauncher`: el endpoint lo invoca el
+ * renderer y, sin esta cota, cualquier inyección en la UI podría abrir
+ * documentos arbitrarios del usuario con su visor predeterminado. Las URLs
+ * externas siguen su propio camino (`window.open` → `shell.openExternal`).
+ */
+async function handleOpenPath(req, res) {
+  if (req.method !== 'POST') {
+    sendJSON(res, 405, { ok: false, error: 'Usa POST.' });
+    return;
+  }
+  try {
+    const body = await readJSON(req);
+    const raw = String((body && body.path) || '').trim();
+    if (!raw) throw new Error('Falta la ruta a abrir.');
+
+    const expanded = raw.replace(/^~(?=$|[\\/])/, os.homedir());
+    const target = path.resolve(expanded);
+    const root = path.resolve(LAUNCHER_HOME);
+    if (target !== root && !target.startsWith(root + path.sep)) {
+      throw new Error(`Sólo se pueden abrir rutas dentro de ${root}.`);
+    }
+    if (!fs.existsSync(target)) throw new Error(`La ruta no existe: ${target}`);
+
+    const via = await openInSystem(target);
+    sendJSON(res, 200, { ok: true, path: target, via });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    sendJSON(res, 500, { ok: false, error: detail });
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Lanzamiento de ports instalados                                            */
+/* -------------------------------------------------------------------------- */
+
+/** Extensiones que se consideran ejecutables de un port, por plataforma. */
+const LAUNCH_EXTS =
+  process.platform === 'win32'
+    ? new Set(['.exe', '.bat', '.cmd'])
+    : new Set(['.appimage', '.sh', '.run', '.bin', '.x86_64', '.command']);
+
+/** Ficheros que acompañan al port pero nunca son el ejecutable. */
+const NOT_EXECUTABLE = /^(readme|license|licence|copying|changelog|contributing|makefile|cmakelists|dockerfile|\.)/i;
+
+/**
+ * Reúne los ficheros de `dir` (hasta `remaining` niveles) en `out`.
+ *
+ * Se ignoran los ocultos (`.git`, `.github`…) y se acota el total para que un
+ * árbol enorme no bloquee el servidor local.
+ */
+function collectFiles(dir, remaining, out) {
+  if (remaining < 0 || out.length >= 4000) return;
+  let items;
+  try {
+    items = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const item of items) {
+    if (out.length >= 4000) return;
+    if (item.name.startsWith('.')) continue;
+    const full = path.join(dir, item.name);
+    if (item.isDirectory()) {
+      collectFiles(full, remaining - 1, out);
+      continue;
+    }
+    if (item.isFile()) out.push(full);
+  }
+}
+
+/**
+ * Puntúa un fichero como candidato a ejecutable principal del port.
+ *
+ * Gana el que el usuario declaró en el engranaje (`hint`), después el binario
+ * nativo de la plataforma (AppImage/`.exe`), después el que se llama como la
+ * carpeta del port y, por último, cualquier ELF o script con shebang. Se penaliza
+ * la profundidad: el ejecutable suele estar en la raíz del port.
+ */
+function launchScore(file, base, hint) {
+  const baseName = path.basename(file).toLowerCase();
+  const ext = path.extname(baseName);
+  const folderName = path.basename(base).toLowerCase();
+  const relative = path.relative(base, file);
+  const depth = relative.split(path.sep).length - 1;
+
+  const launchable = LAUNCH_EXTS.has(ext) || looksExecutable(file);
+  if (!launchable) return -1;
+  if (NOT_EXECUTABLE.test(baseName)) return -1;
+
+  let score = 0;
+  if (hint) {
+    const wanted = path.basename(String(hint).replace(/\\/g, '/')).toLowerCase();
+    if (wanted && wanted === baseName) score += 100;
+  }
+  if (LAUNCH_EXTS.has(ext)) score += 40;
+  if (process.platform === 'linux' && ext === '.appimage') score += 30;
+  if (process.platform === 'win32' && ext === '.exe') score += 30;
+  if (process.platform !== 'win32' && ext === '.exe') score -= 20;
+  if (baseName.replace(/\.[^.]+$/, '') === folderName) score += 12;
+  score -= depth * 4;
+  return score;
+}
+
+/**
+ * Localiza el ejecutable principal del port dentro de `dir`.
+ *
+ * @returns {{ file: string, relative: string } | null}
+ */
+function findMainExecutable(dir, hint) {
+  const files = [];
+  collectFiles(dir, 2, files);
+
+  let best = null;
+  for (const file of files) {
+    const score = launchScore(file, dir, hint);
+    if (score < 0) continue;
+    if (!best || score > best.score) best = { file, score };
+  }
+  if (!best) return null;
+  return { file: best.file, relative: path.relative(dir, best.file) };
+}
+
+/** Atiende `POST /api/launch` y, si algo falla, deja el reporte escrito. */
+async function handleLaunch(req, res) {
+  if (req.method !== 'POST') {
+    sendJSON(res, 405, { ok: false, error: 'Usa POST.' });
+    return;
+  }
+
+  let body = {};
+  try {
+    body = await readJSON(req);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    sendJSON(res, 400, { ok: false, error: detail });
+    return;
+  }
+
+  const pid = body && body.pid ? String(body.pid) : '';
+  const name = body && body.name ? String(body.name) : '';
+
+  /** Responde con el error y su reporte: el frontend abre el modal con la ruta. */
+  const fail = (error, extra) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    let logPath = null;
+    try {
+      logPath = writeErrorReport({
+        pid,
+        name,
+        action: 'launch',
+        error,
+        details: Object.assign({ folderName: body && body.folderName }, extra || {}),
+      });
+    } catch (writeError) {
+      console.error(
+        '[launch] no se pudo escribir el reporte:',
+        writeError instanceof Error ? writeError.message : writeError
+      );
+    }
+    sendJSON(res, 500, { ok: false, error: detail, logPath });
+  };
+
+  try {
+    const folder = safeFolder(body && body.folderName);
+    const installDir = path.join(PORTS_DIR, folder);
+
+    if (!fs.existsSync(installDir) || !fs.statSync(installDir).isDirectory()) {
+      fail(
+        new Error(`El port no está instalado en ${installDir}. Instálalo de nuevo desde el catálogo.`),
+        { installDir, reason: 'missing-install' }
+      );
+      return;
+    }
+
+    const hint = body && body.exe ? String(body.exe) : '';
+    const found = findMainExecutable(installDir, hint);
+    if (!found) {
+      let listing = [];
+      try {
+        listing = fs.readdirSync(installDir).slice(0, 12);
+      } catch {}
+      fail(
+        new Error(
+          `No se encontró un ejecutable en ${installDir}. ` +
+            `Contenido: ${listing.length ? listing.join(', ') : '(carpeta vacía)'}.`
+        ),
+        { installDir, reason: 'no-executable', listing }
+      );
+      return;
+    }
+
+    /* En Linux un binario sin permiso de ejecución no arranca; el pipeline de
+     * instalación ya hace `chmod`, pero un port copiado a mano puede no tenerlo. */
+    if (process.platform !== 'win32') {
+      try {
+        fs.chmodSync(found.file, 0o755);
+      } catch {
+        /* Sistema de ficheros sin permisos POSIX. */
+      }
+    }
+
+    const args = String((body && body.args) || '')
+      .split(/\s+/)
+      .filter(Boolean);
+
+    /* Desacoplado: el port sobrevive al cierre del launcher y no comparte
+     * consola con él (`stdio: 'ignore'`). */
+    const child = spawn(found.file, args, {
+      cwd: installDir,
+      detached: true,
+      stdio: 'ignore',
+    });
+    /* `spawn` devuelve el error (ENOENT/EACCES) por evento, no lanzando: sin
+     * este manejador el fallo sería un `uncaughtException` del proceso. */
+    child.on('error', (error) => {
+      console.warn('[launch] el port falló al arrancar:', error.message);
+    });
+    child.unref();
+
+    sendJSON(res, 200, {
+      ok: true,
+      path: found.file,
+      relative: found.relative,
+      installDir,
+      pid: child.pid ?? null,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    fail(error instanceof Error ? error : new Error(detail), { reason: 'launch-exception' });
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Enrutador                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -933,6 +1356,18 @@ async function handleApiRequest(req, res) {
   }
   if (url === '/api/launcher/self-update') {
     await handleSelfUpdate(req, res);
+    return true;
+  }
+  if (url === '/api/report-error') {
+    await handleReportError(req, res);
+    return true;
+  }
+  if (url === '/api/open-path') {
+    await handleOpenPath(req, res);
+    return true;
+  }
+  if (url === '/api/launch') {
+    await handleLaunch(req, res);
     return true;
   }
   if (url.startsWith(STEAMGRID_PREFIX)) {
@@ -958,6 +1393,9 @@ function createApiMiddleware() {
     const isApi =
       url === '/api/install' ||
       url === '/api/launcher/self-update' ||
+      url === '/api/report-error' ||
+      url === '/api/open-path' ||
+      url === '/api/launch' ||
       url === '/api/health' ||
       url.startsWith(STEAMGRID_PREFIX);
     if (!isApi) {
@@ -977,16 +1415,24 @@ function createApiMiddleware() {
 
 module.exports = {
   LAUNCHER_HOME,
+  LOGS_DIR,
+  PORTS_DIR,
   STEAMGRID_PREFIX,
   chmodExecutables,
   createApiMiddleware,
   extractZip,
+  findMainExecutable,
   handleApiRequest,
+  handleLaunch,
+  handleOpenPath,
+  handleReportError,
   handleSelfUpdate,
   installPort,
   looksExecutable,
+  openInSystem,
   safeEntry,
   safeFolder,
   scoreAsset,
   sendJSON,
+  writeErrorReport,
 };

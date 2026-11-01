@@ -96,7 +96,21 @@ interface LayerLaunch {
   timer?: ReturnType<typeof setTimeout>;
 }
 
-type LayerState = LayerRom | LayerGear | LayerUnins | LayerLaunch | null;
+/**
+ * Modal de error con el reporte técnico del fallo.
+ *
+ * No lleva `id` a propósito: un fallo puede ocurrir antes de saber a qué port
+ * pertenece (o con el port ya desinstalado), y el modal debe abrirse igual. Por
+ * eso `renderLayer` lo resuelve antes de buscar el juego en el snapshot.
+ */
+interface LayerError {
+  type: 'error';
+  title: string;
+  message: string;
+  logPath: string;
+}
+
+type LayerState = LayerRom | LayerGear | LayerUnins | LayerLaunch | LayerError | null;
 
 let L: LayerState = null;
 
@@ -187,6 +201,25 @@ function romDest(game: Game): string {
     : `${S.settings.romDir}/${game.t.replace(/[^A-Za-z0-9]+/g, '')}/${f}`;
 }
 
+/** Icono de alerta del modal de error (triángulo con exclamación). */
+const ALERT_ICON =
+  '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v5"/><path d="M12 17.5v.01"/><path d="M10.3 3.9 2.6 17.1A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.9L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>';
+
+/**
+ * HTML del modal de error con la ruta del reporte técnico.
+ *
+ * El botón «Abrir reporte» lleva la ruta en `data-path` y la abre con el visor
+ * del sistema a través de `data-act="openReport"`. «Cerrar» usa la acción
+ * genérica `closeL`, que ya limpia la capa y restaura el scroll.
+ */
+function errorLayerHTML(layer: LayerError): string {
+  return `<div class="scrim" data-act="closeL"></div><div class="modal" style="width:min(620px,calc(100vw - 24px))" role="alertdialog" aria-modal="true" aria-labelledby="err-title">
+    <div class="mhead"><div style="width:44px;height:44px;flex:0 0 auto;border-radius:50%;background:var(--warn);color:#2A1A02;display:grid;place-items:center">${ALERT_ICON}</div><div style="min-width:0"><h2 id="err-title" style="font-size:21px">${esc(layer.title)}</h2><div class="muted">${esc(layer.message)}</div></div></div>
+    <div class="mbody"><div><div class="lbl" style="padding:0;margin-bottom:8px">REPORTE TÉCNICO</div><div class="in-txt mono" style="font-size:12px;overflow-wrap:anywhere">${esc(layer.logPath)}</div></div>
+    <div class="muted" style="font-size:13px">Envía este archivo si necesitas ayuda: incluye el sistema operativo, la arquitectura, la versión del launcher y la pila del error.</div></div>
+    <div class="mfoot"><button class="btn" data-act="closeL">Cerrar</button><button class="btn pri" data-act="openReport" data-path="${esc(layer.logPath)}">Abrir reporte</button></div></div>`;
+}
+
 function renderLayer(): void {
   const el = $('#layer');
   if (!el) return;
@@ -196,6 +229,15 @@ function renderLayer(): void {
     return;
   }
   document.body.style.overflow = 'hidden';
+  /* El modal de error no depende de un port concreto: se pinta antes de
+   * resolver el juego del snapshot, porque el fallo puede ocurrir con una ficha
+   * que no llegó a crearse o que el usuario acaba de desinstalar. */
+  if (L.type === 'error') {
+    el.innerHTML = errorLayerHTML(L);
+    const btn = el.querySelector<HTMLButtonElement>('.modal button');
+    if (btn) btn.focus({ preventScroll: true });
+    return;
+  }
   const game = S.byId.get(L.id);
   if (!game) {
     closeL();
@@ -228,7 +270,7 @@ function renderLayer(): void {
     <section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">AVANZADO</div><label class="muted">Ejecutable<input class="in-txt" data-g="exe" value="${esc(game.exe || './' + game.t.replace(/[^A-Za-z0-9]+/g, '') + '.exe')}"></label><label class="muted">Argumentos<input class="in-txt" data-g="args" value="${esc(game.args)}"></label><label class="muted">Ejecutar con<br><select class="sel" data-g="runner" style="margin-top:6px"><option ${game.runner === 'Nativo' ? 'selected' : ''}>Nativo</option><option ${game.runner === 'Proton' ? 'selected' : ''}>Proton</option></select></label></section>
     <div style="margin-top:auto;display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between"><button class="btn dng" data-act="unins">Desinstalar (conservar partidas)</button><button class="btn pri" data-act="closeL">Listo</button></div></aside>`;
   } else if (L.type === 'launch') {
-    h = `<div class="launch"><div class="spin"></div><h2 style="font-size:30px">Iniciando ${esc(game.t)}…</h2><div class="muted">${esc(game.pr)} · ${game.runner} · simulación</div><button class="btn" data-act="closeL">Cancelar</button></div>`;
+    h = `<div class="launch"><div class="spin"></div><h2 style="font-size:30px">Iniciando ${esc(game.t)}…</h2><div class="muted">${esc(game.pr)} · ${game.runner} · buscando el ejecutable</div><button class="btn" data-act="closeL">Cancelar</button></div>`;
   }
 
   el.innerHTML = h;
@@ -277,28 +319,184 @@ function closeL(): void {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Errores: reporte técnico y modal interactivo                               */
+/* -------------------------------------------------------------------------- */
+
+/** Datos mínimos que el backend necesita para escribir un reporte útil. */
+interface FailureInput {
+  /** Título del modal (`No se pudo instalar Mario 64`). */
+  title: string;
+  /** Mensaje comprensible para el usuario. */
+  message: string;
+  /** Acción que falló: `install`, `update`, `launch`… */
+  action: string;
+  /** Error original: se envían al backend su mensaje y su pila. */
+  error: unknown;
+  pid?: string;
+  name?: string;
+  details?: Record<string, unknown>;
+  /** Ruta ya generada por el backend (por ejemplo, `/api/launch` la devuelve). */
+  logPath?: string | null;
+}
+
+/**
+ * Pide al backend que escriba el reporte técnico y devuelve su ruta.
+ *
+ * Devuelve `null` si el servidor no responde o no pudo escribir el archivo: el
+ * modal se abre igualmente indicándolo, porque ocultar el fallo sería peor que
+ * quedarse sin log.
+ */
+async function reportFailure(input: FailureInput): Promise<string | null> {
+  const error = input.error;
+  try {
+    const res = await fetch('/api/report-error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pid: input.pid ?? null,
+        name: input.name ?? null,
+        action: input.action,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? (error.stack ?? null) : null,
+        details: input.details ?? null,
+      }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; logPath?: string };
+    if (res.ok && data.ok && typeof data.logPath === 'string') return data.logPath;
+  } catch {
+    /* Servidor caído o `fetch` bloqueado: el modal sigue siendo útil. */
+  }
+  return null;
+}
+
+/** Abre un archivo o carpeta de `~/PortsLauncher` con la app del sistema. */
+async function openPathInSystem(target: string): Promise<void> {
+  try {
+    const res = await fetch('/api/open-path', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: target }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    if (!res.ok || !data.ok) throw new Error(data.error || `Error ${res.status}`);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    toast('No se pudo abrir el reporte: ' + detail);
+  }
+}
+
+/**
+ * Escribe el reporte y abre el modal con su ruta.
+ *
+ * Es el único camino de error visible para el usuario: cualquier fallo de
+ * instalación o de ejecución acaba aquí, así que siempre queda un log en
+ * `~/PortsLauncher/logs` y una ventana que dice dónde encontrarlo.
+ */
+async function failWithReport(input: FailureInput): Promise<void> {
+  const logPath = input.logPath ?? (await reportFailure(input));
+  L = {
+    type: 'error',
+    title: input.title,
+    message: input.message,
+    logPath: logPath ?? '(no se pudo escribir el reporte en disco)',
+  };
+  renderLayer();
+}
+
+/* -------------------------------------------------------------------------- */
 /* Acciones: instalación real, ejecución y persistencia                       */
 /* -------------------------------------------------------------------------- */
 
 const PROG: Record<string, number> = {};
 
+/**
+ * Ejecuta el port instalado con `POST /api/launch`.
+ *
+ * Antes de llamar al backend se comprueba la ROM: un port que la necesita y no
+ * la tiene no debe llegar al lanzamiento. Cualquier fallo (falta la ROM, la
+ * carpeta no existe, no hay ejecutable) termina en el modal de error con su
+ * reporte técnico.
+ */
 function play(id: string): void {
+  void launchReal(id);
+}
+
+async function launchReal(id: string): Promise<void> {
   const game = S.byId.get(id);
   if (!game) return;
-  S.last = id;
-  game.played = Date.now();
-  saveState();
-  L = {
-    type: 'launch',
-    id,
-    timer: setTimeout(() => {
-      L = null;
-      renderLayer();
-      toast('Sesión de ' + game.t + ' terminada (simulada)');
-      draw();
-    }, 2200),
-  };
+
+  if (game.rom && !game.romOk) {
+    await failWithReport({
+      title: 'No se pudo ejecutar ' + game.t,
+      message: 'Falta la ROM del juego: añádela desde el engranaje ⚙ para poder jugar.',
+      action: 'launch',
+      pid: game.id,
+      name: game.t,
+      error: new Error('Falta la ROM del port.'),
+      details: { reason: 'missing-rom', rom: game.rom.n ?? null, installDir: game.dir },
+    });
+    return;
+  }
+
+  /* Capa de progreso: el lanzamiento real tarda lo que tarde el `spawn` y la
+   * localización del ejecutable, así que se cierra cuando responde el backend. */
+  L = { type: 'launch', id };
   renderLayer();
+
+  try {
+    const res = await fetch('/api/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pid: game.id,
+        name: game.t,
+        folderName: folderOf(game.t),
+        exe: game.exe,
+        args: game.args,
+        installDir: game.dir,
+      }),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      path?: string;
+      logPath?: string | null;
+    };
+
+    if (!res.ok || !data.ok) {
+      await failWithReport({
+        title: 'No se pudo ejecutar ' + game.t,
+        message: data.error || `El servidor devolvió un error ${res.status}.`,
+        action: 'launch',
+        pid: game.id,
+        name: game.t,
+        error: new Error(data.error || `Error ${res.status}`),
+        details: { folderName: folderOf(game.t), installDir: game.dir },
+        logPath: data.logPath ?? null,
+      });
+      return;
+    }
+
+    /* Sólo una ejecución real cuenta como «última partida». */
+    S.last = id;
+    game.played = Date.now();
+    saveState();
+
+    L = null;
+    renderLayer();
+    toast(game.t + ' en ejecución');
+    draw();
+  } catch (error) {
+    await failWithReport({
+      title: 'No se pudo ejecutar ' + game.t,
+      message: error instanceof Error ? error.message : String(error),
+      action: 'launch',
+      pid: game.id,
+      name: game.t,
+      error,
+      details: { folderName: folderOf(game.t), installDir: game.dir },
+    });
+  }
 }
 
 /**
@@ -417,6 +615,7 @@ async function installReal(id: string): Promise<void> {
   } catch (error) {
     clearInterval(iv);
     delete PROG[id];
+    const reason = error instanceof Error ? error.message : String(error);
     /* El fallo también se persiste: la ficha queda en `Broken` con la causa y
      * no se inventa un estado instalado. */
     try {
@@ -424,7 +623,7 @@ async function installReal(id: string): Promise<void> {
         state: 'Broken',
         installedVersion: null,
         progress: 0,
-        error: error instanceof Error ? error.message : String(error),
+        error: reason,
       });
     } catch {}
     game.inst = false;
@@ -432,9 +631,22 @@ async function installReal(id: string): Promise<void> {
     game.romOk = false;
     saveState();
     draw();
-    toast(
-      'No se pudo instalar ' + game.t + ': ' + (error instanceof Error ? error.message : String(error))
-    );
+    /* Reporte técnico en disco + modal con la ruta: el toast se queda corto
+     * para un fallo del que el usuario probablemente quiera pedir ayuda. */
+    await failWithReport({
+      title: (wasInstalled ? 'No se pudo actualizar ' : 'No se pudo instalar ') + game.t,
+      message: reason,
+      action: wasInstalled ? 'update' : 'install',
+      pid: game.id,
+      name: game.t,
+      error,
+      details: {
+        repo: game.repo,
+        folderName: folderOf(game.t),
+        installDir: game.dir,
+        wasInstalled,
+      },
+    });
   }
 }
 
@@ -1606,6 +1818,15 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
     })();
   },
   closeL: () => closeL(),
+  /* «Abrir reporte» del modal de error: abre el `.log` con el visor del sistema
+   * (Electron `shell.openPath`, o `xdg-open`/`open`/`start` fuera de Electron). */
+  openReport: (d) => {
+    if (!d.path) {
+      toast('No hay ningún reporte que abrir');
+      return;
+    }
+    void openPathInSystem(d.path);
+  },
   rom: (d) => d.id && openRom(d.id, false),
   pick: () => $('#fpick')?.click(),
   sample: () => {
@@ -1668,7 +1889,7 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
     renderLayer();
   },
   unins: () => {
-    if (!L) return;
+    if (!L || !('id' in L)) return;
     L = { type: 'unins', id: L.id };
     renderLayer();
   },
