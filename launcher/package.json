@@ -1,6 +1,6 @@
 {
   "name": "portslauncher",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "type": "module",
   "description": "PortsLauncher — lanzador unificado de ports de juegos a PC, Linux y Android.",
@@ -33,12 +33,19 @@
       "electron/**/*"
     ],
     "linux": {
-      "target": ["AppImage", "deb", "rpm"],
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
       "category": "Game",
       "maintainer": "Juan Carlos Saavedra <juancarlosf.saavedrap@gmail.com>"
     },
     "win": {
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     }
   },
   "devDependencies": {

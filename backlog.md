@@ -95,7 +95,7 @@
 
 
 ## HU-12: Versión Dinámica e Inyectada en Build y Diagnóstico Resiliente de Actualizaciones
-- **Estado:** Completado (Tag v0.1.8) — Responsable: DeepSeek (Dev) / Claude (QA)
+- **Estado:** Completado (Tag v0.1.9) — Responsable: DeepSeek (Dev) / Claude (QA)
 - **Objetivo:** Inyectar la versión de la aplicación en tiempo de build (sin valores hardcodeados) y hacer resiliente el diagnóstico de actualizaciones ante fallos de red o respuestas inválidas.
 - **Criterios de Aceptación:**
   1. La versión mostrada en la UI proviene de la inyección en build.
