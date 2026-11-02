@@ -112,9 +112,21 @@
   4. Parsear cadenas de proyectos serializadas como diccionarios de Python (`{'key': '...', 'name': '...'}`) en `projectOf()`.
 - **Capa:** Frontend (`launcher/src/ui/model.ts`, `launcher/src/main.ts`) y Backend (`launcher/electron/api.cjs`).
 - **Criterios de Aceptación:**
-  1. Todos los ports muestran la sección de ROM en ajustes y asistente; ninguno muestra "Este port no necesita ROM".
-  2. Búsqueda en Vimm's Vault con 2 Ship 2 Harkinian encuentra las ROMs de Majora's Mask automáticamente.
-  3. Al pulsar "Jugar", `{rom}` se sustituye adecuadamente y el binario se ejecuta correctamente con su ROM vinculada.
-  4. Los proyectos con formato dict de Python muestran su nombre limpio (ej. "Harbour Masters").
+## HU-14: Instalación y Actualización Real del Launcher con Soporte de Elevación (pkexec/UAC) y Reinicio Limpio
+- **Contexto de Negocio:**
+  Al pulsar actualizar en la aplicación, el launcher descargaba el binario en ~/Downloads y notificaba "Lanzando actualización", pero no reemplazaba la instalación existente ni cerraba la instancia previa. Si el launcher está instalado en una ruta de sistema (ej. /opt/PortsLauncher) o en espacio de usuario (~/.local/share/PortsLauncher o AppImage), la actualización debe sustituir físicamente la versión instalada, solicitar autorización mediante elevación nativa (pkexec en Linux / UAC en Windows) si la ruta requiere permisos administrativos, y reiniciar automáticamente la aplicación en la nueva versión.
+- **Objetivo:**
+  1. Detectar el destino de instalación real: `process.env.APPIMAGE` si se ejecuta como AppImage, o `path.dirname(process.execPath)` si se ejecuta instalado.
+  2. Comprobar permisos de escritura en la ruta de destino. Si es de usuario (ej. ~/.local/share/PortsLauncher), aplicar reemplazo directo sin elevar. Si requiere permisos de root (ej. /opt/PortsLauncher), solicitar autenticación gráfica con `pkexec` (Linux) o `Start-Process -Verb RunAs` (Windows).
+  3. En Linux con AppImage: extraer el contenido actualizado (`--appimage-extract`) para actualizar carpetas instaladas, o reemplazar el fichero AppImage si corre en modo portable. Actualizar también el acceso directo `.desktop` del usuario si existe.
+  4. Script de transición desacoplado: esperar que el PID actual cierre, reemplazar archivos atómicamente, arrancar la nueva versión y cerrar la instancia anterior mediante `app.quit()`.
+  5. UI reactiva: mostrar estados claros (Descargando → Instalando / Solicitando autorización → Reiniciando).
+- **Capa:** Backend (`launcher/electron/api.cjs`, `launcher/electron/main.cjs`) y Frontend (`launcher/src/main.ts`, `launcher/src/ui/render.ts`).
+- **Criterios de Aceptación:**
+  1. Al pulsar actualizar, la instalación existente se actualiza efectivamente en disco.
+  2. Si la ruta requiere root, se solicita autenticación gráfica (`pkexec`) al usuario de forma transparente.
+  3. Si la ruta es de usuario, se actualiza silenciosamente sin pedir sudo innecesario.
+  4. La aplicación se reinicia en la versión descargada (0.1.10).
   5. Suite de pruebas pasando al 100%.
+
 

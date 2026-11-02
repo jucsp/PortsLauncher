@@ -22,7 +22,19 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, shell } = require('electron');
 
-const { createApiMiddleware } = require('./api.cjs');
+const { createApiMiddleware, setQuitHandler } = require('./api.cjs');
+
+/**
+ * Cierre limpio pedido por el actualizador (`handleSelfUpdate`).
+ *
+ * `api.cjs` no puede hacer `require('electron')` (se comparte con `vite dev`),
+ * así que la auto-actualización pide el cierre a través de este handler: el
+ * script desacoplado espera a que muera este proceso, aplica el reemplazo y
+ * relanza la app ya actualizada.
+ */
+setQuitHandler(() => {
+  app.quit();
+});
 
 /** URL del servidor de Vite en desarrollo (`VITE_DEV_SERVER_URL`). */
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || '';

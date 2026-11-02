@@ -11,7 +11,7 @@
  *   POST /api/launch                     → ejecuta el port instalado (spawn desacoplado y confirmado).
  *   POST /api/report-error               → escribe un reporte técnico en `~/PortsLauncher/logs`.
  *   POST /api/open-path                  → abre un reporte `.log` o la carpeta de plugins en el SO.
- *   POST /api/launcher/self-update       → guarda el instalador de una versión nueva en ~/Downloads.
+ *   POST /api/launcher/self-update       → descarga el instalador, lo aplica y reinicia el launcher.
  *   GET  /api/library                    → lee la biblioteca de `~/PortsLauncher/ports.json`.
  *   POST /api/library                    → guarda la biblioteca en `~/PortsLauncher/ports.json`.
  *   GET  /api/plugins                    → plugins `asset-provider` instalados en disco.
@@ -954,6 +954,684 @@ async function handleInstall(req, res) {
 /* Auto-actualización del launcher                                            */
 /* -------------------------------------------------------------------------- */
 
+/** Carpeta de trabajo del actualizador: `~/.cache/portslauncher/update-staging`. */
+const UPDATE_STAGING_DIR = path.join(
+  String(process.env.XDG_CACHE_HOME || '').trim() || path.join(os.homedir(), '.cache'),
+  'portslauncher',
+  'update-staging'
+);
+
+/** `.desktop` del launcher en el menú de aplicaciones del usuario (si existe). */
+const USER_DESKTOP_FILE = path.join(
+  os.homedir(),
+  '.local',
+  'share',
+  'applications',
+  'portslauncher.desktop'
+);
+
+/** Log del actualizador: `~/PortsLauncher/logs/self-update.log`. */
+const SELF_UPDATE_LOG = path.join(LAUNCHER_HOME, 'logs', 'self-update.log');
+
+/**
+ * Callback de cierre registrado por `electron/main.cjs` (`app.quit`).
+ *
+ * `api.cjs` se comparte con `vite dev`, donde no existe Electron, así que el
+ * cierre no se hace con `require('electron')`: el proceso principal registra
+ * aquí su handler y este módulo sólo lo invoca.
+ */
+let quitHandler = null;
+
+/** Registra (o limpia, con `null`) el handler de cierre de la app. */
+function setQuitHandler(handler) {
+  quitHandler = typeof handler === 'function' ? handler : null;
+}
+
+/**
+ * Pide el cierre limpio de la app pasados `delayMs`.
+ *
+ * El retardo existe para que la respuesta HTTP llegue al renderer antes de que
+ * el proceso muera. Devuelve `false` si no hay Electron (nada que cerrar).
+ */
+function requestAppQuit(delayMs = 500) {
+  if (!quitHandler) return false;
+  const wait = Math.max(0, Number(delayMs) || 0);
+  const timer = setTimeout(() => {
+    try {
+      quitHandler();
+    } catch (error) {
+      console.warn('[self-update] el cierre de la app falló:', error);
+    }
+  }, wait);
+  /* `unref` para que el temporizador no retrase el cierre si el proceso queda
+   * inactivo antes de dispararse. */
+  if (timer && typeof timer.unref === 'function') timer.unref();
+  return true;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Actualización del launcher: detección de la instalación                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Envuelve `value` en comillas simples para un script POSIX.
+ *
+ * Las comillas simples son el único entrecomillado sin interpolación en `sh`,
+ * así que una ruta con espacios, `$`, `"` o `\` viaja literal. La comilla
+ * simple se escapa cerrando, escapando y reabriendo (`'\''`).
+ */
+function shellQuote(value) {
+  const text = String(value === null || value === undefined ? '' : value);
+  return "'" + text.replace(/'/g, "'\\''") + "'";
+}
+
+/** Envuelve `value` en comillas simples para PowerShell (se duplica la `'`). */
+function psQuote(value) {
+  const text = String(value === null || value === undefined ? '' : value);
+  return "'" + text.replace(/'/g, "''") + "'";
+}
+
+/**
+ * Extrae el comando de la línea `Exec=` de un `.desktop`.
+ *
+ * Se descartan los códigos de campo (`%U`, `%F`, `%i`…) y se respetan las
+ * comillas, porque un `Exec="…/portslauncher" %U` es lo habitual.
+ *
+ * @returns `{ command, args }` o `null` si no hay una entrada utilizable.
+ */
+function parseDesktopExec(text) {
+  const lines = String(text === null || text === undefined ? '' : text).split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^\s*Exec\s*=\s*(.*)$/);
+    if (!match) continue;
+    /* `%k` o `%i` pueden aparecer dentro de una ruta, pero en la práctica los
+     * `.desktop` los usan como campos separados: se recortan tras tokenizar. */
+    const tokens = splitDesktopArgs(match[1])
+      .map((token) => token.replace(/%[fFuUikKcCdnNvmM]/g, '').trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return null;
+    return { command: tokens[0], args: tokens.slice(1) };
+  }
+  return null;
+}
+
+/** Tokeniza la línea `Exec=` respetando comillas simples y dobles. */
+function splitDesktopArgs(raw) {
+  const tokens = [];
+  let current = '';
+  let quote = null;
+  let started = false;
+  for (const char of String(raw === null || raw === undefined ? '' : raw)) {
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (started) {
+        tokens.push(current);
+        current = '';
+        started = false;
+      }
+      continue;
+    }
+    current += char;
+    started = true;
+  }
+  if (started) tokens.push(current);
+  return tokens;
+}
+
+/**
+ * Identifica cómo está instalado el launcher y cuál es el objetivo a sustituir.
+ *
+ * Prioridad: `APPIMAGE` (portable) → `Exec=` del `.desktop` del usuario
+ * (`~/.local/share/PortsLauncher/portslauncher`) → carpeta de `process.execPath`.
+ *
+ * @param input `{ appImage?, execPath?, desktopExec? }`.
+ * @returns `{ kind, source, target, installDir, execPath }`.
+ */
+function resolveInstallTarget(input) {
+  const options = input || {};
+  const appImage = String(options.appImage || '').trim();
+  if (appImage) {
+    return {
+      kind: 'appimage',
+      source: 'APPIMAGE',
+      target: appImage,
+      installDir: path.dirname(appImage),
+      execPath: appImage,
+    };
+  }
+  const desktop = String(options.desktopExec || '').trim();
+  const execPath = desktop || String(options.execPath || '').trim();
+  const installDir = execPath ? path.dirname(execPath) : '';
+  return {
+    kind: 'folder',
+    source: desktop ? 'desktop' : 'execPath',
+    target: installDir,
+    installDir,
+    execPath,
+  };
+}
+
+/**
+ * Determina en qué runtime corre el backend.
+ *
+ * `vite dev`/`vite preview` cargan este módulo en Node puro (sin Electron):
+ * aplicar una actualización ahí sobrescribiría el runtime de desarrollo, así
+ * que se degrada a «descarga manual».
+ *
+ * @returns `'electron' | 'electron-dev' | 'node'`.
+ */
+function selfUpdateRuntime(env, versions, defaultApp) {
+  const v = versions || {};
+  if (!v.electron) return 'node';
+  if (defaultApp) return 'electron-dev';
+  if (env && String(env.VITE_DEV_SERVER_URL || '').trim()) return 'electron-dev';
+  return 'electron';
+}
+
+/** `true` si el usuario actual puede escribir en `target` (`W_OK`). */
+function isWritable(target) {
+  if (!target) return false;
+  try {
+    fs.accessSync(target, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reescribe el `.desktop` para que el comentario refleje la versión nueva.
+ *
+ * Se conserva el resto del fichero tal cual y se añade (o actualiza) además una
+ * clave `X-PortsLauncher-Version`, que es la que permite auditar después qué
+ * versión se instaló sin abrir la app.
+ */
+function withDesktopVersion(text, version) {
+  const value = String(version === null || version === undefined ? '' : version).trim();
+  const comment = value ? 'Comment=PortsLauncher ' + value : 'Comment=PortsLauncher';
+  const lines = String(text === null || text === undefined ? '' : text).split(/\r?\n/);
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  let sawComment = false;
+  let sawVersion = false;
+  const out = lines.map((line) => {
+    if (/^\s*Comment\s*=/.test(line)) {
+      sawComment = true;
+      return comment;
+    }
+    if (/^\s*X-PortsLauncher-Version\s*=/.test(line)) {
+      sawVersion = true;
+      return 'X-PortsLauncher-Version=' + value;
+    }
+    return line;
+  });
+  if (!sawComment) out.push(comment);
+  if (!sawVersion) out.push('X-PortsLauncher-Version=' + value);
+  return out.join('\n') + '\n';
+}
+
+/**
+ * Construye el script POSIX desacoplado que aplica la actualización.
+ *
+ * Espera a que el PID actual desaparezca (no se puede sobrescribir el binario
+ * en ejecución: en Linux da `ETXTBSY`), aplica el reemplazo o la copia y
+ * relanza la app. Toda la salida va al log porque el proceso ya no tiene
+ * terminal ni ventana.
+ */
+function buildPosixWaitScript(plan) {
+  const q = shellQuote;
+  const lines = [
+    '#!/bin/sh',
+    '# PortsLauncher · actualización desacoplada (generado automáticamente).',
+    '# Espera al cierre de la app, aplica la actualización y la relanza.',
+    'set -u',
+    '',
+    'PID=' + String(plan.pid),
+    'LOG=' + q(plan.logPath),
+    'STAGING=' + q(plan.stagingDir),
+    'RELAUNCH=' + q(plan.execPath),
+    '',
+    "log() { printf '%s %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \"$1\" >>\"$LOG\" 2>/dev/null; }",
+    '',
+    'log "update: esperando a que termine el proceso $PID"',
+    'n=0',
+    'while kill -0 "$PID" 2>/dev/null; do',
+    '  n=$((n + 1))',
+    '  if [ "$n" -ge 300 ]; then',
+    '    log "update: el proceso $PID sigue vivo tras 30 s; se aplica igualmente"',
+    '    break',
+    '  fi',
+    '  sleep 0.1',
+    'done',
+    'sleep 0.4',
+    '',
+  ];
+
+  if (plan.mode === 'appimage') {
+    if (plan.needsElevation) {
+      lines.push('log "update: reemplazando el AppImage con elevación (pkexec)"');
+      lines.push(
+        'pkexec /bin/sh ' +
+          q(plan.elevatedScriptPath) +
+          ' || log "update: la elevación falló o se canceló"'
+      );
+    } else {
+      lines.push('log "update: reemplazando ' + String(plan.target) + '"');
+      lines.push(
+        'if cp -f ' +
+          q(plan.downloadPath) +
+          ' ' +
+          q(plan.target) +
+          ' && chmod 755 ' +
+          q(plan.target) +
+          '; then log "update: AppImage reemplazado";' +
+          ' else log "update: no se pudo reemplazar el AppImage"; fi'
+      );
+    }
+  } else if (plan.mode === 'folder') {
+    if (plan.needsElevation) {
+      lines.push('log "update: copiando squashfs-root con elevación (pkexec)"');
+      lines.push(
+        'pkexec /bin/sh ' +
+          q(plan.elevatedScriptPath) +
+          ' || log "update: la elevación falló o se canceló"'
+      );
+    } else {
+      lines.push('log "update: copiando squashfs-root sobre ' + String(plan.installDir) + '"');
+      lines.push(
+        'if cp -a ' +
+          q(plan.stageRoot + '/.') +
+          ' ' +
+          q(plan.installDir + path.sep) +
+          '; then log "update: contenido copiado";' +
+          ' else log "update: no se pudo copiar el contenido"; fi'
+      );
+    }
+  }
+
+  lines.push('');
+  lines.push('log "update: relanzando la aplicación"');
+  lines.push('if [ ! -x "$RELAUNCH" ]; then chmod 755 "$RELAUNCH" 2>/dev/null || true; fi');
+  lines.push('nohup "$RELAUNCH" >/dev/null 2>&1 &');
+  lines.push('log "update: fin"');
+  lines.push('rm -rf -- "$STAGING" 2>/dev/null || true');
+  lines.push('');
+  return lines.join('\n');
+}
+
+/** Script que `pkexec` ejecuta con privilegios (sólo la copia, nada más). */
+function buildPosixElevatedScript(plan) {
+  const q = shellQuote;
+  const lines = [
+    '#!/bin/sh',
+    '# PortsLauncher · aplicación de la actualización con privilegios (pkexec).',
+    'set -eu',
+    '',
+  ];
+  if (plan.mode === 'appimage') {
+    lines.push('cp -f ' + q(plan.downloadPath) + ' ' + q(plan.target));
+    lines.push('chmod 755 ' + q(plan.target));
+  } else if (plan.mode === 'folder') {
+    lines.push('mkdir -p ' + q(plan.installDir));
+    lines.push('cp -a ' + q(plan.stageRoot + '/.') + ' ' + q(plan.installDir + path.sep));
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+/**
+ * Script PowerShell desacoplado (Windows).
+ *
+ * `Wait-Process` sustituye al bucle `kill -0`; la elevación se pide con
+ * `Start-Process -Verb RunAs`, que dispara el UAC nativo.
+ */
+function buildWindowsScript(plan) {
+  const q = psQuote;
+  const lines = [
+    '# PortsLauncher · actualización desacoplada (PowerShell, generado automáticamente).',
+    "$ErrorActionPreference = 'Stop'",
+    '$targetPid = ' + String(plan.pid),
+    '$logPath = ' + q(plan.logPath),
+    'function Log([string]$m) {',
+    '  try { Add-Content -LiteralPath $logPath -Value ((Get-Date).ToUniversalTime().ToString("o") + " " + $m) } catch {}',
+    '}',
+    'Log "update: esperando al proceso $targetPid"',
+    'try { Wait-Process -Id $targetPid -Timeout 30 -ErrorAction SilentlyContinue } catch {}',
+    'Start-Sleep -Milliseconds 500',
+    '',
+  ];
+
+  if (plan.mode === 'installer') {
+    lines.push('Log "update: ejecutando el instalador"');
+    if (plan.needsElevation) {
+      lines.push('Start-Process -FilePath ' + q(plan.downloadPath) + ' -Verb RunAs -Wait');
+    } else {
+      lines.push('Start-Process -FilePath ' + q(plan.downloadPath) + ' -Wait');
+    }
+  } else if (plan.mode === 'folder') {
+    lines.push('Log "update: expandiendo el ZIP sobre la instalación"');
+    if (plan.needsElevation) {
+      const inner =
+        'Expand-Archive -LiteralPath \\"' +
+        String(plan.downloadPath) +
+        '\\" -DestinationPath \\"' +
+        String(plan.installDir) +
+        '\\" -Force';
+      lines.push(
+        "Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait " +
+          "-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command'," +
+          q(inner)
+      );
+    } else {
+      lines.push(
+        'Expand-Archive -LiteralPath ' +
+          q(plan.downloadPath) +
+          ' -DestinationPath ' +
+          q(plan.installDir) +
+          ' -Force'
+      );
+    }
+  }
+
+  lines.push('');
+  lines.push('Log "update: relanzando la aplicación"');
+  lines.push('Start-Process -FilePath ' + q(plan.execPath));
+  lines.push('Log "update: fin"');
+  lines.push('Remove-Item -Recurse -Force ' + q(plan.stagingDir) + ' -ErrorAction SilentlyContinue');
+  return lines.join('\r\n');
+}
+
+/**
+ * Decide cómo se aplica la actualización y genera los scripts (función pura).
+ *
+ * No toca el disco: recibe ya resuelto si hace falta elevación, de modo que se
+ * puede probar sin FS ni Electron.
+ */
+function buildSelfUpdatePlan(input) {
+  const options = input || {};
+  const platform = String(options.platform || process.platform);
+  const runtime = String(options.runtime || 'node');
+  const version = String(options.version || '').trim();
+  const downloadPath = String(options.downloadPath || '');
+  const assetName = String(options.assetName || '') || path.basename(downloadPath);
+  const stagingDir = String(options.stagingDir || UPDATE_STAGING_DIR);
+  const pid = Number(options.pid) || process.pid;
+  const needsElevation = Boolean(options.needsElevation);
+  const install = resolveInstallTarget(options);
+
+  const base = {
+    platform,
+    runtime,
+    pid,
+    version,
+    downloadPath,
+    assetName,
+    stagingDir,
+    needsElevation,
+    logPath: SELF_UPDATE_LOG,
+    stageRoot: path.join(stagingDir, 'squashfs-root'),
+    waitScriptPath: path.join(
+      stagingDir,
+      platform === 'win32' ? 'apply-update.ps1' : 'apply-update.sh'
+    ),
+    elevatedScriptPath: path.join(stagingDir, 'apply-elevated.sh'),
+    waitScript: '',
+    elevatedScript: null,
+    kind: install.kind,
+    source: install.source,
+    target: install.target,
+    installDir: install.installDir,
+    execPath: install.execPath,
+  };
+
+  if (runtime !== 'electron') {
+    return Object.assign(base, { mode: 'manual', reason: 'dev-runtime' });
+  }
+
+  const isAppImageAsset = /\.appimage$/i.test(assetName);
+  const isInstallerAsset = /\.(exe|msi)$/i.test(assetName);
+  const isArchiveAsset = /\.zip$/i.test(assetName);
+
+  let mode = 'manual';
+  let reason = '';
+  if (install.kind === 'appimage') {
+    if (platform === 'win32') {
+      mode = 'manual';
+      reason = 'appimage-on-windows';
+    } else {
+      mode = 'appimage';
+    }
+  } else if (platform === 'win32') {
+    if (isInstallerAsset) mode = 'installer';
+    else if (isArchiveAsset) mode = 'folder';
+    else {
+      mode = 'manual';
+      reason = 'unsupported-asset';
+    }
+  } else if (isAppImageAsset) {
+    mode = 'folder';
+  } else {
+    mode = 'manual';
+    reason = 'unsupported-asset';
+  }
+
+  const plan = Object.assign(base, { mode, reason });
+
+  /* Ejecutar el propio fichero que se acaba de descargar no actualiza nada. */
+  if (
+    mode === 'appimage' &&
+    downloadPath &&
+    plan.target &&
+    path.resolve(downloadPath) === path.resolve(plan.target)
+  ) {
+    plan.mode = 'manual';
+    plan.reason = 'same-file';
+    return plan;
+  }
+
+  if (mode === 'manual') return plan;
+
+  if (platform === 'win32') {
+    plan.waitScript = buildWindowsScript(plan);
+  } else {
+    plan.waitScript = buildPosixWaitScript(plan);
+    if (needsElevation) plan.elevatedScript = buildPosixElevatedScript(plan);
+  }
+  return plan;
+}
+
+/** Lanza `scriptPath` desacoplado del proceso actual (`spawn` + `unref`). */
+function spawnDetached(scriptPath, platform) {
+  try {
+    const child =
+      platform === 'win32'
+        ? spawn(
+            'powershell.exe',
+            ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+            { detached: true, stdio: 'ignore', windowsHide: true }
+          )
+        : spawn('/bin/sh', [scriptPath], { detached: true, stdio: 'ignore', env: process.env });
+    child.unref();
+    return child;
+  } catch (error) {
+    console.warn('[self-update] no se pudo lanzar el script desacoplado:', error);
+    return null;
+  }
+}
+
+/** Lee el `.desktop` del usuario (texto y comando), o `null` si no existe. */
+function readDesktopEntry(file) {
+  const target = file || USER_DESKTOP_FILE;
+  try {
+    const text = fs.readFileSync(target, 'utf8');
+    const parsed = parseDesktopExec(text);
+    return {
+      path: target,
+      text,
+      command: parsed ? parsed.command : '',
+      args: parsed ? parsed.args : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extrae el AppImage a `stagingDir/squashfs-root` con `--appimage-extract`.
+ *
+ * El runtime de AppImage implementa `--appimage-extract` sin FUSE, así que
+ * funciona aunque el sistema no tenga `libfuse` montado.
+ *
+ * @returns La ruta de `squashfs-root`.
+ */
+async function extractAppImage(appImagePath, stagingDir) {
+  const root = path.join(stagingDir, 'squashfs-root');
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(stagingDir, { recursive: true });
+  await execFileAsync(appImagePath, ['--appimage-extract'], {
+    cwd: stagingDir,
+    timeout: 180000,
+    maxBuffer: 8 * 1024 * 1024,
+    env: Object.assign({}, process.env, { APPIMAGE_EXTRACT_AND_RUN: '1' }),
+  });
+  return root;
+}
+
+/**
+ * Aplica la actualización ya descargada: prepara el script desacoplado.
+ *
+ * Nunca sobrescribe nada mientras la app corre: deja un script que espera al
+ * cierre de este PID y hace el reemplazo/copia. Devuelve el cuerpo que se
+ * enviará al renderer.
+ *
+ * @param options `{ targetPath, fileName, version }`.
+ */
+async function applySelfUpdate(options) {
+  const targetPath = String((options && options.targetPath) || '');
+  const fileName = String((options && options.fileName) || '') || path.basename(targetPath);
+  const version = String((options && options.version) || '').trim();
+
+  const runtime = selfUpdateRuntime(process.env, process.versions, Boolean(process.defaultApp));
+  const desktop = readDesktopEntry();
+  const appImage = String(process.env.APPIMAGE || '').trim();
+  const install = resolveInstallTarget({
+    appImage,
+    execPath: process.execPath,
+    desktopExec: desktop ? desktop.command : '',
+  });
+
+  /* Se comprueba ANTES de generar el script: la UI necesita saber si va a
+   * aparecer un diálogo de administrador. */
+  const writableTarget = install.kind === 'appimage' ? install.target : install.installDir;
+  const needsElevation = !isWritable(writableTarget);
+
+  const stamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+  const stagingDir = path.join(
+    UPDATE_STAGING_DIR,
+    (version.replace(/[^A-Za-z0-9._-]/g, '') || 'update') + '-' + stamp
+  );
+
+  const plan = buildSelfUpdatePlan({
+    runtime,
+    platform: process.platform,
+    pid: process.pid,
+    appImage,
+    execPath: process.execPath,
+    desktopExec: desktop ? desktop.command : '',
+    version,
+    downloadPath: targetPath,
+    assetName: fileName,
+    stagingDir,
+    needsElevation,
+  });
+
+  if (plan.mode === 'manual') {
+    return {
+      mode: 'manual',
+      reason: plan.reason || 'unsupported',
+      path: targetPath,
+      installTarget: plan.target || null,
+      scheduled: false,
+      installed: false,
+      requiresElevation: needsElevation,
+      willRestart: false,
+      version,
+      message:
+        plan.reason === 'same-file'
+          ? 'El fichero descargado ya es el que está en ejecución.'
+          : 'Actualización descargada en ' + targetPath + '. Aplícala manualmente.',
+    };
+  }
+
+  fs.mkdirSync(stagingDir, { recursive: true });
+  fs.mkdirSync(path.dirname(SELF_UPDATE_LOG), { recursive: true });
+
+  /* Caso carpeta instalada: el AppImage se extrae a `squashfs-root` y se copia
+   * encima de `installDir`. En Windows el asset es un ZIP y se expande dentro
+   * del propio script, así que no se toca aquí. */
+  if (plan.mode === 'folder' && process.platform !== 'win32') {
+    fs.chmodSync(targetPath, 0o755);
+    await extractAppImage(targetPath, stagingDir);
+    if (!fs.existsSync(plan.stageRoot)) {
+      throw new Error('El AppImage descargado no contiene squashfs-root.');
+    }
+  }
+
+  fs.writeFileSync(plan.waitScriptPath, plan.waitScript, 'utf8');
+  try {
+    fs.chmodSync(plan.waitScriptPath, 0o755);
+  } catch {
+    /* Windows o FS sin permisos POSIX: PowerShell no lo necesita. */
+  }
+  if (plan.elevatedScript) {
+    fs.writeFileSync(plan.elevatedScriptPath, plan.elevatedScript, 'utf8');
+    try {
+      fs.chmodSync(plan.elevatedScriptPath, 0o755);
+    } catch {
+      /* Idem. */
+    }
+  }
+
+  /* `.desktop` del menú: refleja la versión nueva en el comentario. */
+  if (desktop && desktop.text) {
+    try {
+      fs.writeFileSync(desktop.path, withDesktopVersion(desktop.text, version), 'utf8');
+    } catch (error) {
+      console.warn('[self-update] no se pudo actualizar el .desktop:', error);
+    }
+  }
+
+  const child = spawnDetached(plan.waitScriptPath, process.platform);
+  const scheduled = Boolean(child);
+
+  return {
+    mode: plan.mode,
+    path: targetPath,
+    installTarget: plan.target,
+    stagingDir,
+    scriptPath: plan.waitScriptPath,
+    logPath: plan.logPath,
+    scheduled,
+    installed: false,
+    requiresElevation: plan.needsElevation,
+    willRestart: scheduled,
+    version,
+    message: scheduled
+      ? needsElevation
+        ? 'Actualización preparada: confirma la autorización de administrador cuando se cierre la app.'
+        : 'Actualización preparada: se aplicará al cerrar la aplicación.'
+      : 'No se pudo lanzar el script de actualización.',
+  };
+}
+
 /**
  * Descarga el instalador de una versión nueva del launcher en `~/Downloads`.
  *
@@ -965,10 +1643,15 @@ async function handleInstall(req, res) {
  * El nombre del fichero pasa por `path.basename`: aunque el cuerpo venga del
  * frontend, no puede escapar de `~/Downloads` con `../`.
  *
- * Cuerpo aceptado: `{ downloadUrl, assetName?, version?, execute? }`. Con
- * `execute: true` el instalador descargado se lanza en segundo plano de forma
- * desacoplada (`spawn` + `unref`), de modo que puede reemplazar la app en marcha;
- * la respuesta añade `executed: true` para que la UI lo confirme al usuario.
+ * Cuerpo aceptado: `{ downloadUrl, assetName?, version?, apply?, execute? }`.
+ *
+ * Con `apply` (o el heredado `execute`) el instalador no se queda en
+ * `~/Downloads`: se identifica cómo está instalado el launcher (AppImage
+ * portable o carpeta instalada), se comprueba si hace falta elevación
+ * (`pkexec`/UAC) y se genera un script desacoplado que espera al cierre de este
+ * proceso, aplica el reemplazo y relanza la app actualizada. La respuesta
+ * añade `scheduled`, `requiresElevation` y `willRestart` para que la UI diga la
+ * verdad al usuario.
  */
 async function handleSelfUpdate(req, res) {
   if (req.method !== 'POST') {
@@ -996,8 +1679,13 @@ async function handleSelfUpdate(req, res) {
     const fileName = requested && requested !== '.' && requested !== '..' ? requested : fallback;
     const targetPath = path.join(downloadsDir, fileName);
 
-    /* El renderer puede pedir que, tras descargar, se lance el instalador. */
-    const execute = Boolean(body && body.execute);
+    /* `apply` (o el heredado `execute`) pide aplicar la actualización de verdad.
+     * Por defecto se aplica: pulsar «Descargar vX» en la UI debe instalar, no
+     * dejar el fichero en `~/Downloads` sin avisar de nada. */
+    const apply =
+      body && typeof body.apply === 'boolean'
+        ? body.apply
+        : !(body && body.execute === false);
 
     await downloadTo(downloadUrl, targetPath);
 
@@ -1006,31 +1694,27 @@ async function handleSelfUpdate(req, res) {
       fs.chmodSync(targetPath, 0o755);
     }
 
-    if (execute) {
-      /* Lanzamiento desacoplado: el hijo sobrevive al proceso del launcher y el
-       * instalador puede reemplazar la app en marcha sin bloquear la respuesta. */
-      const { spawn } = require('node:child_process');
-      try {
-        const sub = spawn(targetPath, [], { detached: true, stdio: 'ignore' });
-        sub.unref();
-      } catch (e) {
-        console.warn('No se pudo auto-lanzar:', e);
-      }
+    if (!apply) {
       sendJSON(res, 200, {
         ok: true,
+        mode: 'download-only',
         path: targetPath,
-        executed: true,
-        message: 'Actualización iniciada: ' + targetPath,
+        fileName,
+        scheduled: false,
+        installed: false,
+        requiresElevation: false,
+        willRestart: false,
+        message: 'Actualización descargada en ' + targetPath,
       });
       return;
     }
 
-    sendJSON(res, 200, {
-      ok: true,
-      path: targetPath,
-      fileName,
-      message: 'Actualización descargada en ' + targetPath,
-    });
+    const result = await applySelfUpdate({ targetPath, fileName, version });
+    sendJSON(res, 200, Object.assign({ ok: true }, result));
+    /* Cierre limpio DESPUÉS de responder: el script desacoplado espera a que
+     * muera este PID, así que la app sólo se cierra cuando la UI ya sabe qué
+     * está pasando. */
+    if (result.willRestart) requestAppQuit();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     sendJSON(res, 500, { ok: false, error: detail });
@@ -2864,7 +3548,15 @@ module.exports = {
   LOGS_DIR,
   PLUGINS_DIR,
   PORTS_DIR,
+  SELF_UPDATE_LOG,
   STEAMGRID_PREFIX,
+  UPDATE_STAGING_DIR,
+  USER_DESKTOP_FILE,
+  applySelfUpdate,
+  buildPosixElevatedScript,
+  buildPosixWaitScript,
+  buildSelfUpdatePlan,
+  buildWindowsScript,
   chmodExecutables,
   createApiMiddleware,
   extractZip,
@@ -2885,13 +3577,23 @@ module.exports = {
   handleSelfUpdate,
   handleSteamgridSaveKey,
   installPort,
+  isWritable,
   listPlugins,
   looksExecutable,
   openInSystem,
+  parseDesktopExec,
+  psQuote,
   readPluginManifest,
+  requestAppQuit,
+  resolveInstallTarget,
   safeEntry,
   safeFolder,
   scoreAsset,
+  selfUpdateRuntime,
   sendJSON,
+  setQuitHandler,
+  shellQuote,
+  splitDesktopArgs,
+  withDesktopVersion,
   writeErrorReport,
 };

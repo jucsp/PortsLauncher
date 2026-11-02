@@ -1111,17 +1111,17 @@ async function checkLauncherUpdates(silent = false): Promise<void> {
 }
 
 /**
- * Descarga el instalador del release y, si el backend local está disponible, lo
- * guarda en `~/Downloads` con `/api/launcher/self-update`.
+ * Descarga el instalador del release y lo aplica con `/api/launcher/self-update`.
  *
- * La ruta existe tanto en Electron (servidor propio) como en `vite`/`preview`
- * (`electron/api.cjs` vía middleware), así que el camino feliz no abre el
- * navegador: el fichero queda descargado y, en Linux, ejecutable. Se pide al
- * backend `execute: true` para que además lance el instalador desacoplado; si
- * no lo hace, el toast informa de la ruta donde quedó guardado. Si no hay
- * backend (build servida desde otro origen) o la petición falla, se recurre a la
- * descarga directa del release: `window.open` pasa por `setWindowOpenHandler` en
- * Electron, que delega en `shell.openExternal`.
+ * El backend (HU-14) identifica cómo está instalado el launcher y prepara un
+ * script desacoplado que espera al cierre de la app, reemplaza los binarios y
+ * relanza la versión nueva. La UI refleja el estado REAL que devuelve el
+ * servidor: si hay que elevar privilegios lo dice antes de que aparezca el
+ * diálogo del sistema, y nunca anuncia «instalado» cuando sólo se descargó.
+ *
+ * Si no hay backend (build servida desde otro origen) o la petición falla, se
+ * recurre a la descarga directa del release: `window.open` pasa por
+ * `setWindowOpenHandler` en Electron, que delega en `shell.openExternal`.
  */
 async function openUpdateDownload(): Promise<void> {
   const state = getLauncherUpdate();
@@ -1130,7 +1130,8 @@ async function openUpdateDownload(): Promise<void> {
     return;
   }
   const url = state.result.downloadUrl;
-  toast('Descargando actualización v' + state.result.latestVersion + '…');
+  const version = state.result.latestVersion;
+  toast('Descargando actualización v' + version + '…');
 
   try {
     const res = await fetch('/api/launcher/self-update', {
@@ -1139,29 +1140,52 @@ async function openUpdateDownload(): Promise<void> {
       body: JSON.stringify({
         downloadUrl: url,
         assetName: state.result.assetName,
-        version: state.result.latestVersion,
-        /* El backend lanza el instalador desacoplado tras descargarlo. */
-        execute: true,
+        version,
+        /* El backend descarga, aplica y reinicia (si está empaquetado). */
+        apply: true,
       }),
     });
-    if (res.ok) {
-      const data = (await res.json()) as {
-        ok?: boolean;
-        path?: string;
-        executed?: boolean;
-        message?: string;
-      };
-      if (data.ok && data.executed) {
-        toast('✓ Lanzando actualización...');
-        return;
-      }
-      if (data.ok && data.path) {
-        toast('✓ Actualización guardada en: ' + data.path);
-        return;
-      }
+    const data = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      mode?: string;
+      path?: string;
+      scheduled?: boolean;
+      requiresElevation?: boolean;
+      willRestart?: boolean;
+      error?: string;
+      message?: string;
+    };
+
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || `El servidor devolvió un error ${res.status}.`);
     }
-  } catch {
-    /* Sin backend local o sin red: se intenta la descarga directa. */
+
+    if (data.scheduled && data.willRestart) {
+      /* Con elevación, el diálogo nativo aparece tras el cierre: se avisa antes
+       * para que el usuario sepa qué hacer con la ventana de contraseña. */
+      toast(
+        data.requiresElevation
+          ? 'Confirma la autorización de administrador en el sistema para instalar la actualización…'
+          : 'Instalando actualización y reiniciando…'
+      );
+      return;
+    }
+
+    if (data.path) {
+      toast('✓ Actualización guardada en: ' + data.path);
+      return;
+    }
+
+    toast(data.message || 'La actualización no se pudo aplicar automáticamente');
+    return;
+  } catch (error) {
+    /* Error del servidor (HTTP != 2xx): se avisa. Un fallo de red se deja pasar
+     * en silencio y se cae a la descarga directa, que es el comportamiento
+     * anterior y sigue funcionando sin backend. */
+    const detail = error instanceof Error ? error.message : String(error);
+    if (/^El servidor devolvió|^No se pudo|downloadUrl/.test(detail)) {
+      toast('No se pudo aplicar la actualización: ' + detail);
+    }
   }
 
   const opened = window.open(url, '_blank', 'noopener,noreferrer');
