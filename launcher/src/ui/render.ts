@@ -1656,7 +1656,7 @@ function sampleFor(style: MediaStyle): Game {
     coverScale: COVER_SCALE_DEFAULT,
     coverY: 0,
     coverX: 0,
-    rom: null,
+    rom: { n: '', x: [], sha: 'requerido' },
     ai: 'none',
     exp: false,
     dev: { k: 'nodata', t: DEVT.nodata.t, c: DEVT.nodata.c, g: DEVT.nodata.g, why: '', conf: 'baja' },

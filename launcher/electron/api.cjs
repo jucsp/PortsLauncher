@@ -1587,6 +1587,253 @@ function findMainExecutable(dir, hint) {
   return { file: best.file, relative: path.relative(dir, best.file) };
 }
 
+/** Marcador que los perfiles de lanzamiento usan para la ruta de la ROM. */
+const ROM_PLACEHOLDER = '{rom}';
+
+/** Extensiones que el launcher reconoce como ROM (para avisar, no para bloquear). */
+const ROM_FILE_EXTS = new Set([
+  '.z64',
+  '.n64',
+  '.v64',
+  '.sfc',
+  '.smc',
+  '.nes',
+  '.gba',
+  '.gb',
+  '.gbc',
+  '.nds',
+  '.bin',
+  '.cue',
+  '.iso',
+  '.chd',
+  '.7z',
+  '.zip',
+]);
+
+/**
+ * Ventana de gracia tras el `spawn` para detectar un cierre inmediato.
+ *
+ * Sin ella, un binario que muere a los 50 ms (ROM incompatible, librería
+ * ausente, argumento inválido) devolvía 200 y la UI decía «en ejecución» sin
+ * que se abriera ninguna ventana. Se espera de forma acotada para no retrasar
+ * un lanzamiento correcto más de lo razonable.
+ */
+const EARLY_EXIT_WINDOW_MS = 1200;
+
+/**
+ * Normaliza los argumentos de lanzamiento.
+ *
+ * Acepta el array ya resuelto por el frontend (`resolveLaunchArgs`) y, por
+ * compatibilidad con clientes antiguos, la cadena separada por espacios.
+ *
+ * @returns {string[]}
+ */
+function buildLaunchArgs(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((value) => String(value)).filter((value) => value !== '');
+  }
+  return String(raw || '')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/** Últimas `max` letras de un log, o `''` si no se puede leer. */
+function readLogTail(file, max) {
+  if (!file) return '';
+  try {
+    const text = fs.readFileSync(file, 'utf8');
+    return text.length > max ? text.slice(-max) : text;
+  } catch {
+    return '';
+  }
+}
+
+/** Primera línea útil (preferentemente un error) del stderr de un port. */
+function firstUsefulLine(text) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return '';
+  const hit =
+    lines.find((line) => /error|failed|denied|no such|cannot|abort|not found/i.test(line)) ?? lines[0];
+  return hit.slice(0, 300);
+}
+
+/**
+ * Enlaza la ROM del usuario dentro de la carpeta del port (HU-13).
+ *
+ * Los ports de descompilación (`2ship.appimage`) buscan la ROM en su propio
+ * `cwd`: si el usuario la tiene en `~/Descargas`, el binario arranca y se cierra
+ * sin mensaje. Se crea un enlace simbólico dentro de `installDir` (mismo nombre
+ * de archivo) y, si el sistema no permite enlaces, se copia.
+ *
+ * Se acepta cualquier fichero regular existente: la validación de extensión es
+ * cosa del `romProfile`, y bloquear aquí impediría formatos que el índice aún
+ * no declara.
+ *
+ * @returns {string | null} ruta que debe recibir `{rom}`, o `null` si no hay.
+ */
+function linkRomForLaunch(rawRomPath, installDir) {
+  const value = String(rawRomPath || '').trim();
+  if (!value) return null;
+
+  let source = '';
+  try {
+    source = path.resolve(value);
+  } catch {
+    return null;
+  }
+
+  let isFile = false;
+  try {
+    const stat = fs.statSync(source);
+    isFile = stat.isFile() && stat.size > 0;
+  } catch (error) {
+    console.warn(
+      '[launch] romPath ignorado (no existe):',
+      source,
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+  if (!isFile) {
+    console.warn('[launch] romPath ignorado (no es un archivo con contenido):', source);
+    return null;
+  }
+
+  const base = path.basename(source);
+  if (!base || base === '.' || base === '..') return null;
+  if (path.extname(base) && !ROM_FILE_EXTS.has(path.extname(base).toLowerCase())) {
+    /* No se bloquea: hay ports con formatos propios, pero deja rastro. */
+    console.warn('[launch] la ROM declarada tiene una extensión no habitual:', base);
+  }
+
+  /* Ya está en la carpeta del port: no hay nada que enlazar. */
+  if (path.resolve(path.dirname(source)) === path.resolve(installDir)) return source;
+
+  const target = path.join(installDir, base);
+
+  /**
+   * ¿El enlace de `linkPath` apunta ya a `expected`?
+   *
+   * `readlinkSync` puede devolver una ruta relativa, y `source` no viene
+   * canonicalizado, así que se comparan las rutas resueltas y, si no coinciden,
+   * el `realpath` de ambas (el usuario puede haber elegido la ROM a través de
+   * otro enlace). Cualquier fallo se trata como «no coincide».
+   */
+  const sameTarget = (linkPath, expected) => {
+    let current = '';
+    try {
+      current = path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath));
+    } catch {
+      return false;
+    }
+    if (current === expected) return true;
+    try {
+      return fs.realpathSync(current) === fs.realpathSync(expected);
+    } catch {
+      return false;
+    }
+  };
+
+  let existing = null;
+  try {
+    existing = fs.lstatSync(target);
+  } catch {
+    /* No existe: se crea abajo. */
+  }
+
+  if (existing) {
+    if (existing.isSymbolicLink()) {
+      /* Enlace vigente y correcto: se reutiliza tal cual. */
+      if (sameTarget(target, source)) return target;
+      /* Enlace huérfano (destino borrado) o que apunta a otra ROM con el mismo
+       * nombre de archivo: se elimina para no lanzar el juego equivocado y se
+       * recrea más abajo con el nuevo destino. */
+      try {
+        fs.unlinkSync(target);
+        console.warn('[launch] enlace previo de la ROM reemplazado:', target, '→', source);
+      } catch (error) {
+        console.warn(
+          '[launch] no se pudo reemplazar el enlace previo de la ROM; se usará la ruta original:',
+          error instanceof Error ? error.message : error
+        );
+        return source;
+      }
+    } else if (existing.isFile()) {
+      /* Copia anterior (sistemas de ficheros sin enlaces): se reutiliza. */
+      return target;
+    } else {
+      console.warn('[launch] ya existe una entrada no-archivo con el nombre de la ROM:', target);
+      return source;
+    }
+  }
+
+  try {
+    fs.symlinkSync(source, target);
+    return target;
+  } catch (error) {
+    console.warn(
+      '[launch] no se pudo crear el enlace simbólico, se copia la ROM:',
+      error instanceof Error ? error.message : error
+    );
+  }
+
+  try {
+    fs.copyFileSync(source, target);
+    return target;
+  } catch (error) {
+    console.warn(
+      '[launch] no se pudo copiar la ROM; se usará la ruta original:',
+      error instanceof Error ? error.message : error
+    );
+    return source;
+  }
+}
+
+/**
+ * Espera `ms` a que el hijo termine.
+ *
+ * @returns {Promise<{code: number | null, signal: string | null} | null>} `null`
+ *   si sigue vivo al agotarse la ventana.
+ */
+function waitForEarlyExit(child, ms) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    /* Declaraciones de función (hoisted) para que `finish` pueda referirse a
+     * `onExit` y a `timer` sin depender del orden de inicialización. */
+    function finish(value) {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      child.removeListener('exit', onExit);
+      resolve(value);
+    }
+    function onExit(code, signal) {
+      finish({ code, signal });
+    }
+    timer = setTimeout(() => finish(null), ms);
+    child.once('exit', onExit);
+  });
+}
+
+/** Abre un fichero de log para el stderr del port. */
+function openLaunchLog(name) {
+  try {
+    ensureDir(LOGS_DIR);
+    const file = path.join(LOGS_DIR, `launch-${safeSegment(name, 'port')}-${fileStamp(new Date())}.log`);
+    return { file, fd: fs.openSync(file, 'w') };
+  } catch (error) {
+    console.warn(
+      '[launch] no se pudo abrir el log de salida del port:',
+      error instanceof Error ? error.message : error
+    );
+    return { file: null, fd: null };
+  }
+}
+
 /** Atiende `POST /api/launch` y, si algo falla, deja el reporte escrito. */
 async function handleLaunch(req, res) {
   if (req.method !== 'POST') {
@@ -1666,17 +1913,46 @@ async function handleLaunch(req, res) {
       }
     }
 
-    const args = String((body && body.args) || '')
-      .split(/\s+/)
-      .filter(Boolean);
+    /* --- ROM del port (HU-13) ------------------------------------------- */
+    /* La ROM se enlaza dentro de `installDir` para que los binarios que la
+     * buscan en su `cwd` la encuentren, y `{rom}` se sustituye tanto si el
+     * frontend ya lo hizo (array resuelto) como si llega en crudo. */
+    const linkedRom = linkRomForLaunch(body && body.romPath, installDir);
+    const rawArgs = buildLaunchArgs(body && body.args);
+    /* Un perfil con `{rom}` que llega sin ROM válida no debe ejecutarse: el
+     * binario recibiría el literal `{rom}` y moriría sin mensaje útil (o, peor,
+     * abriría el port sin juego). Se corta con 400 antes del `spawn`. */
+    if (!linkedRom && rawArgs.some((token) => token.includes(ROM_PLACEHOLDER))) {
+      sendJSON(res, 400, {
+        ok: false,
+        error: 'El port requiere una ROM pero no se ha configurado ninguna válida.',
+        reason: 'missing-rom',
+        romPath: body && body.romPath ? String(body.romPath) : null,
+        installDir,
+      });
+      return;
+    }
+    const args = rawArgs
+      .map((token) => (linkedRom ? token.split(ROM_PLACEHOLDER).join(linkedRom) : token))
+      .filter((token) => token !== '');
 
-    /* Desacoplado: el port sobrevive al cierre del launcher y no comparte
-     * consola con él (`stdio: 'ignore'`). */
+    /* Desacoplado: el port sobrevive al cierre del launcher. El stderr va a un
+     * archivo (no a un pipe) para no dejar handles vivos en el proceso
+     * principal y poder leerlo si el binario muere nada más arrancar. */
+    const launchLog = openLaunchLog(body && body.name ? body.name : found.relative);
     const child = spawn(found.file, args, {
       cwd: installDir,
       detached: true,
-      stdio: 'ignore',
+      stdio: ['ignore', 'ignore', launchLog.fd === null ? 'ignore' : launchLog.fd],
     });
+    if (launchLog.fd !== null) {
+      /* El hijo ya tiene su propia copia del descriptor. */
+      try {
+        fs.closeSync(launchLog.fd);
+      } catch {
+        /* Sin consecuencias: el fd se cierra al salir el proceso. */
+      }
+    }
 
     /* `spawn` no lanza: el fallo de arranque (ENOENT, EACCES, ELF de otra
      * arquitectura, shebang sin intérprete) llega por el evento `error`. Si se
@@ -1694,7 +1970,41 @@ async function handleLaunch(req, res) {
         reason: 'spawn-error',
         installDir,
         exe: found.file,
+        args,
+        rom: linkedRom,
+        stderr: readLogTail(launchLog.file, 2000),
+        stderrFile: launchLog.file,
       });
+      return;
+    }
+
+    /* Cierre inmediato: el binario arrancó pero murió antes de abrir ventana
+     * (ROM incompatible, librería ausente, argumento inválido). Se reporta el
+     * código y el stderr en vez de decir «en ejecución». */
+    const early = await waitForEarlyExit(child, EARLY_EXIT_WINDOW_MS);
+    const stderrTail = readLogTail(launchLog.file, 2000);
+    if (early && (early.signal !== null || (early.code !== null && early.code !== 0))) {
+      child.removeAllListeners();
+      const code = early.code === null || early.code === undefined ? 'desconocido' : early.code;
+      const signal = early.signal ? `, señal ${early.signal}` : '';
+      const detail = firstUsefulLine(stderrTail);
+      fail(
+        new Error(
+          `El port se cerró inmediatamente tras arrancar (código ${code}${signal}).` +
+            (detail ? ` Salida del binario: ${detail}` : ' El binario no dejó ningún mensaje.')
+        ),
+        {
+          reason: 'early-exit',
+          code: early.code,
+          signal: early.signal,
+          installDir,
+          exe: found.file,
+          args,
+          rom: linkedRom,
+          stderr: stderrTail,
+          stderrFile: launchLog.file,
+        }
+      );
       return;
     }
 
@@ -1711,6 +2021,11 @@ async function handleLaunch(req, res) {
       relative: found.relative,
       installDir,
       pid: child.pid ?? null,
+      rom: linkedRom,
+      args,
+      /* El binario terminó por su cuenta dentro de la ventana de gracia. */
+      exitedEarly: !!early,
+      stderrFile: launchLog.file,
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -2554,6 +2869,10 @@ module.exports = {
   createApiMiddleware,
   extractZip,
   findMainExecutable,
+  firstUsefulLine,
+  buildLaunchArgs,
+  linkRomForLaunch,
+  waitForEarlyExit,
   handleApiRequest,
   handleLaunch,
   handleLibrary,

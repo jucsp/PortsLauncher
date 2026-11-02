@@ -101,3 +101,20 @@
   1. La versión mostrada en la UI proviene de la inyección en build.
   2. El diagnóstico de actualizaciones maneja errores sin interrumpir la aplicación.
   3. Suite de pruebas pasando al 100%.
+
+## HU-13: Soporte Universal de ROMs, Búsqueda Limpia de Addons y Ejecución Fiable de Ports
+- **Contexto de Negocio:**
+  El usuario detectó que ports comunitarios como 2 Ship 2 Harkinian muestran "Este port no necesita ROM", cuando todos los ports necesitan su ROM para extraer o vincular assets. Además, el addon de búsqueda de ROMs fallaba porque se buscaba el nombre del port en lugar del nombre del juego, y el botón Jugar no abría el port debido a argumentos con `{rom}` no sustituidos y falta de enlace de ROM en el directorio del port.
+- **Objetivo:**
+  1. Universalizar el requerimiento de ROM: en `ui/model.ts` y en la UI, todos los ports solicitan y gestionan ROM sin excepciones. Inferir extensiones por plataforma si no vienen explícitas.
+  2. Extraer el nombre limpio del juego para búsquedas de addons (ej. tomar lo que está entre paréntesis o remover nombres de port de descompilación).
+  3. Sustituir `{rom}` por la ruta real en `launchReal` / `handleLaunch`, crear enlace simbólico de la ROM en la carpeta del port si se requiere para su ejecución, y detectar fallos tempranos de proceso.
+  4. Parsear cadenas de proyectos serializadas como diccionarios de Python (`{'key': '...', 'name': '...'}`) en `projectOf()`.
+- **Capa:** Frontend (`launcher/src/ui/model.ts`, `launcher/src/main.ts`) y Backend (`launcher/electron/api.cjs`).
+- **Criterios de Aceptación:**
+  1. Todos los ports muestran la sección de ROM en ajustes y asistente; ninguno muestra "Este port no necesita ROM".
+  2. Búsqueda en Vimm's Vault con 2 Ship 2 Harkinian encuentra las ROMs de Majora's Mask automáticamente.
+  3. Al pulsar "Jugar", `{rom}` se sustituye adecuadamente y el binario se ejecuta correctamente con su ROM vinculada.
+  4. Los proyectos con formato dict de Python muestran su nombre limpio (ej. "Harbour Masters").
+  5. Suite de pruebas pasando al 100%.
+

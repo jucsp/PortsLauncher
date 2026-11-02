@@ -30,7 +30,7 @@ import {
 } from './services/addonProvider';
 import type { ProviderPhase, ProviderResult } from './services/addonProvider';
 import type { Game } from './ui/model';
-import { toGame, statusOf, esc, styleFor, folderOf } from './ui/model';
+import { toGame, statusOf, esc, styleFor, folderOf, providerQuery, resolveLaunchArgs } from './ui/model';
 import { mediaHTML } from './ui/media';
 import { MEDIA, PLAT } from './ui/platforms';
 import { B, D, NAVMEM, R, S, setSnapshot, updateCount } from './ui/state';
@@ -190,7 +190,10 @@ function resetProviderFlow(game: Game): void {
     ? {
         addonId: addon.id,
         addonName: addon.name || addon.id,
-        query: game.t,
+        /* Título con el que se busca en el addon: `2 Ship 2 Harkinian (Zelda:
+         * Majora's Mask)` se convierte en `Majora's Mask`, que es como está
+         * catalogada la ROM (HU-13). */
+        query: providerQuery(game.t),
         phase: 'idle',
         message: '',
         results: [],
@@ -311,7 +314,9 @@ async function triggerProviderSearch(game: Game): Promise<void> {
   renderLayer();
 
   const outcome = await searchProviderAssets({
-    query: flow.query || game.t,
+    /* `flow.query` ya viene normalizado por `providerQuery()`; el respaldo
+     * cubre un flujo restaurado sin query. */
+    query: flow.query || providerQuery(game.t),
     platform: game.platform,
     pluginId: flow.addonId,
   });
@@ -526,13 +531,13 @@ function renderLayer(): void {
   } else if (L.type === 'unins') {
     h = `<div class="scrim" data-act="closeL"></div><div class="modal" style="width:min(460px,calc(100vw - 24px))" role="alertdialog" aria-modal="true"><div class="mbody"><h2 style="font-size:22px">¿Desinstalar ${esc(game.t)}?</h2><div class="muted">Se borra la carpeta del port. Tu ROM original no se toca.</div><label style="display:flex;gap:10px;align-items:center"><input type="checkbox" id="keep" checked> Conservar mis partidas guardadas</label></div><div class="mfoot"><button class="btn" data-act="closeL">Cancelar</button><button class="btn dng" data-act="doUnins">Desinstalar</button></div></div>`;
   } else if (L.type === 'gear') {
-    const hasRom = !!game.rom;
     h = `<div class="scrim" data-act="closeL"></div><aside class="drawer" role="dialog" aria-modal="true" aria-label="Configuración de ${esc(game.t)}">
     <div style="display:flex;align-items:center;gap:14px"><div class="thumb" style="width:56px;height:56px;background:${bgOf(game)}"></div><div style="flex:1;min-width:0"><h2 style="font-size:22px">${esc(game.t)}</h2><div class="muted">${esc(game.pr)} · v${game.v ?? game.lv} · Configuración</div></div><button class="btn ico" data-act="closeL" aria-label="Cerrar">✕</button></div>
     <section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">DIRECTORIO DE INSTALACIÓN</div><input class="in-txt" data-g="dir" value="${esc(game.dir)}" aria-label="Directorio de instalación"><div style="display:flex;gap:8px"><button class="btn sm" data-act="toast" data-m="Abriendo carpeta… (simulado)">Abrir carpeta</button><button class="btn sm" data-act="toast" data-m="Port movido a ${esc(game.dir)} (simulado)">Mover aquí</button></div></section>
-    ${hasRom ? `<section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">ROM</div><div style="display:flex;gap:8px"><div class="in-txt" style="display:flex;align-items:center;overflow:hidden;white-space:nowrap">${game.romOk ? esc(game.romPath) : 'Sin ROM'}</div><button class="btn" data-act="rom" data-id="${L.id}">Cambiar…</button></div>
+    <section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">ROM</div><div style="display:flex;gap:8px"><div class="in-txt" style="display:flex;align-items:center;overflow:hidden;white-space:nowrap">${game.romOk && game.romPath ? esc(game.romPath) : 'Sin ROM'}</div><button class="btn" data-act="rom" data-id="${L.id}">Cambiar…</button></div>
+     <div class="muted" style="font-size:12px">Se espera ${esc(game.rom.n)} · ${esc(game.rom.x.join(' '))}</div>
      <div class="seg" role="group" aria-label="Modo de ROM"><button style="flex:1;width:auto;font-weight:600" aria-pressed="${game.romMode === 'link'}" data-act="gmode" data-k="link">Usar donde está</button><button style="flex:1;width:auto;font-weight:600" aria-pressed="${game.romMode === 'copy'}" data-act="gmode" data-k="copy">Copiar a carpeta del port</button></div>
-     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><span style="color:${game.romOk ? 'var(--accent2)' : 'var(--warn)'};font-weight:600">${game.romOk ? '● Validada · SHA-1 coincide' : '● Falta la ROM'}</span><button class="btn sm" data-act="reval">Revalidar</button></div></section>` : '<section class="box"><b>Este port no necesita ROM.</b></section>'}
+     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><span style="color:${game.romOk ? 'var(--accent2)' : 'var(--warn)'};font-weight:600">${game.romOk ? '● Validada · SHA-1 coincide' : '● Falta la ROM'}</span><button class="btn sm" data-act="reval">Revalidar</button></div></section>
     ${providerSectionHTML(game, 'Buscar ROM con Addon')}
     <section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">ACTUALIZACIONES</div>
      <div class="chk" style="justify-content:space-between"><span>Actualizar automáticamente</span><button class="tog" role="switch" aria-checked="${game.auto}" data-act="gtog" data-k="auto" aria-label="Actualizar automáticamente"><i></i></button></div>
@@ -723,6 +728,12 @@ async function launchReal(id: string): Promise<void> {
   L = { type: 'launch', id };
   renderLayer();
 
+  /* Sustitución de `{rom}` en el frontend (HU-13): el backend recibe los
+   * argumentos ya resueltos como array, de modo que una ruta con espacios
+   * (`/home/yo/Mis ROMs/zelda.z64`) sigue siendo un único argumento. */
+  const romPath = (game.romPath ?? '').trim();
+  const args = resolveLaunchArgs(game.args, romPath);
+
   try {
     const res = await fetch('/api/launch', {
       method: 'POST',
@@ -732,7 +743,10 @@ async function launchReal(id: string): Promise<void> {
         name: game.t,
         folderName: folderOf(game.t),
         exe: game.exe,
-        args: game.args,
+        args,
+        /* El backend enlaza la ROM dentro de la carpeta del port para que los
+         * binarios que la buscan en su `cwd` (2ship.appimage) la encuentren. */
+        romPath: romPath || undefined,
         installDir: game.dir,
       }),
     });

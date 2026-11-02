@@ -157,8 +157,15 @@ export interface Game {
   coverY: number;
   /** Desplazamiento horizontal de la carátula dentro del soporte (-50…50 %). */
   coverX: number;
-  /** Archivos que debe aportar el usuario (ROM), o `null`. */
-  rom: RomReq | null;
+  /**
+   * Archivos que debe aportar el usuario (ROM). Nunca es `null`: **todos** los
+   * ports se consideran dependientes de una ROM (HU-13). Los ports de
+   * descompilación (2 Ship 2 Harkinian, Ship of Harkinian, recompilaciones
+   * estáticas) también la necesitan para extraer los assets originales, así que
+   * inferir «no necesita ROM» a partir de un `romProfile` vacío era un falso
+   * negativo que dejaba al usuario sin la sección de ROM en el engranaje.
+   */
+  rom: RomReq;
   /** Nivel de asistencia por IA declarado. */
   ai: string;
   /** El proyecto se declara experimental. */
@@ -253,6 +260,133 @@ export function coverTitle(name: string): string {
 /** Nombre de carpeta del port (`GoldenEye 007` → `GoldenEye007`). */
 export function folderOf(name: string): string {
   return name.replace(/[^A-Za-z0-9]+/g, '');
+}
+
+/* -------------------------------------------------------------------------- */
+/* Búsqueda de ROM en addons (HU-13)                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Sufijos entre paréntesis que son metadatos y no parte del título. */
+const PAREN_METADATA =
+  /^(?:usa?|europe|eu|japan|jp|world|australia|korea|china|brazil|canada|germany|france|spain|italy|netherlands|sweden|asia|en|fr|de|es|it|ja|ko|zh|nl|pt|ru|multi\d*|beta|proto|demo|sample|kiosk|rev\s*\w+|v?\d+(?:\.\d+)*)$/i;
+
+/** ¿El contenido del paréntesis es sólo metadatos (`USA`, `Rev 1`, `En,Fr,De`)? */
+function isMetadataParen(inner: string): boolean {
+  const text = inner.trim();
+  if (!text) return true;
+  const parts = text
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.length > 0 && parts.every((part) => PAREN_METADATA.test(part));
+}
+
+/**
+ * Título con el que buscar la ROM de un port en un addon.
+ *
+ * Los ports de descompilación se llaman como el *motor*, no como el juego:
+ * `2 Ship 2 Harkinian (Zelda: Majora's Mask)`. Buscar ese título completo en
+ * Vimm's Vault devolvía cero resultados porque la ROM se llama `Majora's Mask`
+ * (HU-13). Reglas:
+ *
+ * 1. Se descartan los paréntesis de metadatos (`USA`, `Rev 1`, `En,Fr,De`…).
+ * 2. Si queda un paréntesis final, se usa su contenido como título real.
+ * 3. Dentro de ese contenido, si hay `Serie: Juego`, gana la parte tras los dos
+ *    puntos (`Zelda: Majora's Mask` → `Majora's Mask`), que es como están
+ *    catalogadas las ROMs.
+ *
+ * Es una función pura para poder probarla sin montar la aplicación.
+ *
+ * @example
+ * providerQuery("2 Ship 2 Harkinian (Zelda: Majora's Mask)") // "Majora's Mask"
+ * providerQuery('Super Mario 64 (USA)')                      // "Super Mario 64"
+ */
+export function providerQuery(title: string): string {
+  const base = String(title ?? '')
+    .replace(/[™®©]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!base) return '';
+
+  let working = base;
+  /* 1. Metadatos finales, potencialmente encadenados: `(USA) (Rev 1)`. */
+  for (;;) {
+    const meta = /\(([^()]*)\)$/.exec(working);
+    if (!meta || !isMetadataParen(meta[1])) break;
+    working = working.slice(0, meta.index).trim();
+    if (!working) return base;
+  }
+
+  /* 2. Paréntesis final con el título real del juego. */
+  const tail = /\(([^()]*)\)$/.exec(working);
+  if (tail) {
+    const inner = tail[1].trim();
+    const before = working.slice(0, tail.index).trim();
+    const colon = inner.lastIndexOf(':');
+    const candidate = colon >= 0 ? inner.slice(colon + 1).trim() : inner;
+    if (candidate.length >= 2) return candidate;
+    if (inner.length >= 2) return inner;
+    if (before) return before;
+  }
+  return working || base;
+}
+
+/**
+ * Divide una línea de argumentos respetando comillas simples y dobles.
+ *
+ * El prototipo guarda los argumentos como texto (`--rom {rom} --fullscreen`).
+ * Partirlos por espacios rompía las rutas con espacios (`/home/yo/Mis ROMs/…`),
+ * así que la tokenización se hace aquí y el backend recibe un array ya resuelto.
+ */
+export function splitArgs(raw: string): string[] {
+  const text = String(raw ?? '');
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let started = false;
+
+  for (const char of text) {
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (started) {
+        tokens.push(current);
+        current = '';
+        started = false;
+      }
+      continue;
+    }
+    current += char;
+    started = true;
+  }
+  if (started) tokens.push(current);
+  return tokens;
+}
+
+/** Marcador que los perfiles de lanzamiento usan para la ruta de la ROM. */
+export const ROM_PLACEHOLDER = '{rom}';
+
+/**
+ * Argumentos de lanzamiento con `{rom}` sustituido por la ruta real.
+ *
+ * Sin ROM conocida se devuelven los tokens tal cual: el backend vuelve a
+ * intentar la sustitución y, si tampoco puede, el error lo reporta él.
+ */
+export function resolveLaunchArgs(raw: string, romPath: string): string[] {
+  const tokens = splitArgs(raw);
+  const rom = String(romPath ?? '').trim();
+  if (!rom) return tokens;
+  return tokens
+    .map((token) => token.split(ROM_PLACEHOLDER).join(rom))
+    .filter((token) => token !== '');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -560,26 +694,82 @@ function devOf(port: PortItem): DevState {
   return { k: key, t: meta.t, c: meta.c, g: meta.g, why: info.why, conf: info.conf };
 }
 
-/** Archivos que debe aportar el usuario, si el índice los declara. */
-function romOf(port: PortItem): RomReq | null {
+/**
+ * Extensiones de ROM por plataforma de origen (HU-13).
+ *
+ * El índice no siempre declara `romProfile.extensions` (los ports de
+ * descompilación suelen declararlo vacío porque la ROM se consume en tiempo de
+ * ejecución, no en el instalador). Sin inferencia, `romOf` devolvía `null` y la
+ * UI concluía «Este port no necesita ROM». La tabla es deliberadamente amplia:
+ * aceptar extensiones de más es inocuo (la validación final es del usuario),
+ * mientras que aceptar de menos bloquea el flujo.
+ */
+export const ROM_EXTENSIONS_BY_PLATFORM: Record<SourcePlatform, readonly string[]> = {
+  n64: ['.z64', '.n64', '.v64', '.rom'],
+  snes: ['.sfc', '.smc', '.fig', '.swc'],
+  nes: ['.nes', '.unf', '.fds'],
+  md: ['.md', '.gen', '.smd', '.bin'],
+  gba: ['.gba', '.agb'],
+  gb: ['.gb', '.gbc'],
+  nds: ['.nds', '.srl'],
+  n3ds: ['.3ds', '.cia', '.cci'],
+  nsw: ['.nsp', '.xci'],
+  psp: ['.iso', '.cso', '.pbp'],
+  ps1: ['.bin', '.cue', '.iso', '.chd', '.img'],
+  ps2: ['.iso', '.chd', '.bin'],
+  gcn: ['.iso', '.gcm', '.rvz'],
+  wii: ['.iso', '.wbfs', '.rvz'],
+  xbox: ['.iso', '.xiso'],
+  x360: ['.iso', '.god'],
+  ps3: ['.iso', '.pkg'],
+  ps4: ['.pkg'],
+  wiiu: ['.wud', '.wux', '.rpx'],
+  dc: ['.gdi', '.cdi', '.chd', '.bin'],
+  vita: ['.vpk', '.mai'],
+  xbone: ['.iso'],
+  pc: ['.iso', '.bin'],
+  other: [] /* sin tabla útil: activa ROM_EXTENSIONS_FALLBACK */,
+};
+
+/**
+ * Reserva generosa cuando la plataforma no aporta nada mejor que `other`.
+ *
+ * Incluye las extensiones del ticket de HU-13 (`.rom`, `.wbfs`) y las de los
+ * formatos más habituales de descompilación (`.z64`, `.iso`, `.bin`).
+ */
+export const ROM_EXTENSIONS_FALLBACK: readonly string[] = ['.iso', '.bin', '.rom', '.z64', '.wbfs'];
+
+/**
+ * Extensiones aceptadas para una plataforma.
+ *
+ * @param platform Plataforma de origen del port; admite `null`/basura porque
+ *   el índice puede traer fichas antiguas sin el campo.
+ */
+export function inferRomExtensions(platform: SourcePlatform | null | undefined): string[] {
+  const table = platform ? ROM_EXTENSIONS_BY_PLATFORM[platform] : undefined;
+  return table && table.length > 0 ? [...table] : [...ROM_EXTENSIONS_FALLBACK];
+}
+
+/**
+ * Archivos que debe aportar el usuario. **Nunca devuelve `null`** (HU-13).
+ *
+ * Prioridad de las extensiones: las declaradas por el índice → inferidas de la
+ * plataforma de origen → reserva genérica. El `sha` se abrevia para la ficha,
+ * como antes; si el índice no publica hashes queda `requerido`.
+ */
+export function romOf(port: PortItem): RomReq {
   const profile = port.romProfile;
-  const extensions = Array.isArray(profile?.extensions) ? profile.extensions.slice() : [];
-  const text =
-    (port.requiresUserFiles?.['es'] as string | null | undefined) ??
-    (port.requiresUserFiles?.['en'] as string | null | undefined) ??
-    null;
-  const setupRom = (port.setupFiles ?? []).some(
-    (file) => file.required === true && /rom/i.test(String(file.kind ?? file.name ?? ''))
-  );
-  const needs = text !== null ? text.trim() !== '' : extensions.length > 0 && profile.binding !== 'in-app';
-  if (!needs && !setupRom) return null;
+  const declared = Array.isArray(profile?.extensions)
+    ? profile.extensions.filter((ext): ext is string => typeof ext === 'string' && ext.trim() !== '')
+    : [];
+  const extensions = declared.length > 0 ? declared.slice() : inferRomExtensions(port.sourcePlatform);
 
   const accepted = Array.isArray(profile?.accepted) ? profile.accepted : [];
   const firstHash = accepted.find((entry) => typeof entry?.sha1 === 'string');
   const sha = firstHash?.sha1 ? `${String(firstHash.sha1).slice(0, 9)}…` : 'requerido';
   return {
     n: `${port.name} ROM`,
-    x: extensions.length > 0 ? extensions : ['.iso', '.bin', '.rom', '.z64'],
+    x: extensions,
     sha,
   };
 }
@@ -644,7 +834,13 @@ export function toGame(
     months: monthsSince(lastSeenOf(port)),
     targets: (port.targetPlatforms ?? []).map((target) => TARGET_ES[target] ?? String(target)),
     inst: installed,
-    romOk: installed && !!(saved?.romValidatedAt || state === 'Ready'),
+    /* Una ROM ya registrada en `ports.json` se refleja en la ficha al arrancar
+     * (HU-13): antes se exigía `romValidatedAt`, así que una biblioteca con
+     * `romPath` pero sin marca de validación seguía mostrando «Falta ROM» y el
+     * botón «Jugar» quedaba bloqueado con la ROM en disco. */
+    romOk:
+      (saved?.romPath ?? '').trim() !== '' ||
+      (installed && (!!saved?.romValidatedAt || state === 'Ready')),
     v: installed ? version : null,
     pin: !!saved?.pinnedVersion,
     auto: !!saved?.autoUpdate,
@@ -698,11 +894,56 @@ function monthsSince(iso: string): number {
   return Math.floor(diff / (30 * 24 * 60 * 60 * 1000));
 }
 
-/** Nombre del proyecto, tolerante a `string`, `null` y objetos del adaptador. */
+/**
+ * Extrae el valor de un campo de un diccionario serializado como texto.
+ *
+ * El indexador arrastra `project` tal cual lo publica la fuente: algunas fichas
+ * (Harbour Masters entre ellas) lo emiten como `repr()` de Python, así que el
+ * campo llega a la UI como `"{'key': 'harbourmasters', 'name': 'Harbour Masters'}"`
+ * y el subtítulo del port mostraba el diccionario en crudo (HU-13).
+ *
+ * @returns El valor desescapado, o `null` si el campo no aparece.
+ */
+function pythonDictField(text: string, field: string): string | null {
+  const pattern = new RegExp(`['"]${field}['"]\\s*:\\s*(?:'((?:[^'\\\\]|\\\\.)*)'|"((?:[^"\\\\]|\\\\.)*)")`);
+  const match = pattern.exec(text);
+  if (!match) return null;
+  const raw = match[1] ?? match[2] ?? '';
+  /* `repr()` escapa comillas y barras invertidas. */
+  const value = raw.replace(/\\(['"\\])/g, '$1').trim();
+  return value || null;
+}
+
+/**
+ * ¿El texto es el `repr()` de un diccionario de Python?
+ *
+ * Se exige llaves en los extremos y al menos un `clave: valor` entrecomillado
+ * para no confundir un título legítimo con paréntesis o comillas.
+ */
+function looksLikePythonDict(text: string): boolean {
+  return /^\s*\{.*\}\s*$/s.test(text) && /['"][^'"]+['"]\s*:/.test(text);
+}
+
+/**
+ * Nombre del proyecto a partir de un `project` textual.
+ *
+ * @returns `null` cuando el texto no es un diccionario reconocible.
+ */
+export function projectFromText(text: string): string | null {
+  const value = text.trim();
+  if (!value || !looksLikePythonDict(value)) return null;
+  return pythonDictField(value, 'name') ?? pythonDictField(value, 'key');
+}
+
+/** Nombre del proyecto, tolerante a `string`, `null`, objetos y `repr()` de Python. */
 export function projectOf(port: PortItem): string {
   const raw = port.project as unknown;
   if (raw === null || raw === undefined) return port.name.split(/[:–-]/)[0].trim();
-  if (typeof raw === 'string') return raw.trim() || port.name;
+  if (typeof raw === 'string') {
+    const fromDict = projectFromText(raw);
+    if (fromDict) return fromDict;
+    return raw.trim() || port.name;
+  }
   if (typeof raw === 'object') {
     const record = raw as { name?: unknown; key?: unknown };
     const name = typeof record.name === 'string' ? record.name : '';

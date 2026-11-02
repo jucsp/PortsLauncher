@@ -14,5 +14,6 @@
 | HU-10 | Robustez del Servidor Estático en Electron (readFile y blindaje statSync) | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.7 |
 | HU-11 | Integración y Ejecución de Addons desde la Interfaz de Usuario | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.8 |
 | HU-12 | Versión Dinámica e Inyectada en Build y Diagnóstico Resiliente de Actualizaciones | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.9 |
+| HU-13 | Soporte Universal de ROMs, Búsqueda Limpia de Addons y Ejecución Fiable de Ports | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.10 |
 
 
