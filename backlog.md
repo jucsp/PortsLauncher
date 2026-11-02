@@ -72,3 +72,11 @@
   3. La clave se sincroniza y almacena también en `~/.steamgrid_credentials.env` vía `POST /api/steamgrid/__save-key`.
   4. El progreso de descarga de imágenes persiste los juegos intentados en almacenamiento local y atiende primero los ports instalados de la biblioteca.
 
+## HU-10: Robustez del Servidor Estático en Electron (readFile y blindaje statSync)
+- **Objetivo:** Eliminar el uso de `fs.createReadStream` en `serveStatic()` de `main.cjs` que provocaba fallos `Uncaught Exception: ENOENT` sobre archivos virtuales dentro de `app.asar`. Migrar a `fs.readFile` con control explícito de errores (404/500) y blindar la llamada a `statSync` en un bloque `try/catch`.
+- **Capa:** Backend Electron (`launcher/electron/main.cjs`).
+- **Criterios de Aceptación:**
+  1. `serveStatic` no usa streams sin listener de error.
+  2. Todo fallo de lectura de archivos estáticos dentro o fuera de `app.asar` responde con código HTTP y no mata el proceso principal de Electron.
+  3. `statSync` protegido contra excepciones síncronas.
+

@@ -87,7 +87,20 @@ function serveStatic(req, res, port) {
   const candidate = path.resolve(DIST_DIR, relative || 'index.html');
   const insideDist = candidate === DIST_DIR || candidate.startsWith(DIST_DIR + path.sep);
 
-  let file = insideDist && fs.existsSync(candidate) && fs.statSync(candidate).isFile() ? candidate : '';
+  /* La resolución del fichero va en un bloque seguro: `statSync` puede lanzar
+   * (`EACCES`, `ELOOP`, `ENAMETOOLONG`, carreras de FS…) y esta función corre
+   * dentro del handler de `http.createServer`; una excepción síncrona ahí es
+   * una `Uncaught Exception` que mata el proceso principal de Electron. Si la
+   * comprobación falla, se degrada a la ruta de la SPA / 404 en lugar de
+   * crashear. */
+  let file = '';
+  if (insideDist) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        file = candidate;
+      }
+    } catch {}
+  }
   /* Sin extensión → ruta de la SPA (`/biblioteca`, `/port-sm64`…). */
   if (!file && !path.extname(relative)) file = path.join(DIST_DIR, 'index.html');
 
@@ -98,11 +111,35 @@ function serveStatic(req, res, port) {
     return;
   }
 
-  res.statusCode = 200;
-  res.setHeader('Content-Type', MIME[path.extname(file).toLowerCase()] || 'application/octet-stream');
-  /* El HTML siempre se revalida: es lo que apunta a los assets con hash. */
-  res.setHeader('Cache-Control', path.extname(file) === '.html' ? 'no-store' : 'public, max-age=31536000');
-  fs.createReadStream(file).pipe(res);
+  const ext = path.extname(file).toLowerCase();
+
+  /* Se usa `fs.readFile` en lugar de `fs.createReadStream(...).pipe(res)`:
+   * dentro de `app.asar` algunos ficheros son "virtuales" y el stream falla en
+   * `_construct` con `ENOENT` (p. ej. si el asar se empaquetó sin `dist/`).
+   * Ese error se emite de forma asíncrona en el stream; al no haber listener
+   * de `error`, se propaga como `Uncaught Exception` y mata el proceso
+   * principal de Electron. Con `readFile` cualquier fallo llega al callback y
+   * se responde 404/500 sin tumbar la app. */
+  fs.readFile(file, (err, data) => {
+    if (err) {
+      const missing = err.code === 'ENOENT' || err.code === 'EISDIR' || err.code === 'ENOTDIR';
+      if (!res.headersSent) {
+        res.statusCode = missing ? 404 : 500;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+      }
+      res.end(missing ? 'No encontrado' : 'Error interno');
+      return;
+    }
+
+    if (res.destroyed) return;
+
+    res.statusCode = 200;
+    res.setHeader('Content-Type', MIME[ext] || 'application/octet-stream');
+    /* El HTML siempre se revalida: es lo que apunta a los assets con hash. */
+    res.setHeader('Cache-Control', ext === '.html' ? 'no-store' : 'public, max-age=31536000');
+    res.end(data);
+  });
 }
 
 /* -------------------------------------------------------------------------- */
