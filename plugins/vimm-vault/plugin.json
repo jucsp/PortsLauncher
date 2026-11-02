@@ -1,0 +1,13 @@
+{
+  "$schema": "https://portslauncher.org/schemas/plugin-v1.json",
+  "id": "vimm-vault",
+  "name": "Vimm's Vault ROM Provider",
+  "version": "1.0.0",
+  "description": "Buscador y proveedor asistido de ROMs desde The Vault de Vimm's Lair.",
+  "author": "PortsLauncher Community",
+  "type": "asset-provider",
+  "platforms": ["n64", "snes", "nes", "gba", "gb", "nds", "ps1", "ps2", "genesis", "xbox"],
+  "entrypoint": "main.py",
+  "runtime": "python3",
+  "capabilities": ["search", "provision"]
+}
