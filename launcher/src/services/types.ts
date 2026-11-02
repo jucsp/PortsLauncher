@@ -777,6 +777,17 @@ export interface Addon {
   installedAt: number;
   /** Carpeta real del plugin en disco (la rellena `GET /api/plugins`). */
   dir?: string;
+  /**
+   * Capacidades declaradas por el manifiesto, en minúsculas (`search`,
+   * `provision`…). Es lo que permite a la UI saber qué addons pueden buscar y
+   * aprovisionar ROMs sin volver a leer el `plugin.json`.
+   */
+  capabilities?: string[];
+  /**
+   * Plataformas de origen que declara el manifiesto, en minúsculas. Una lista
+   * vacía significa «cualquiera» (el plugin decide qué puede servir).
+   */
+  platforms?: string[];
 }
 
 /**

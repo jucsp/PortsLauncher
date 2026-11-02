@@ -105,6 +105,20 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Lista de cadenas normalizada a minúsculas (`['Search']` → `['search']`).
+ *
+ * Se usa con `capabilities` y `platforms` de los addons: el backend ya las
+ * entrega en minúsculas, pero una entrada antigua de `ports.json` puede venir
+ * con otra caja y la comparación de capacidades debe seguir funcionando.
+ */
+function textList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim().toLowerCase());
+}
+
 function emptyLibrary(): LibraryFile {
   return {
     version: LIBRARY_SCHEMA_VERSION,
@@ -226,6 +240,13 @@ export function sanitizeAddon(raw: unknown): Addon | null {
   if (typeof raw['dir'] === 'string' && raw['dir'].trim()) {
     addon.dir = raw['dir'].trim();
   }
+  /* `capabilities` y `platforms` los normaliza el backend a minúsculas; se
+   * conservan porque la UI los necesita para decidir qué addons pueden buscar y
+   * aprovisionar ROMs después de recargar la lista desde `ports.json`. */
+  const capabilities = textList(raw['capabilities']);
+  if (capabilities.length) addon.capabilities = capabilities;
+  const platforms = textList(raw['platforms']);
+  if (platforms.length) addon.platforms = platforms;
 
   return addon;
 }
@@ -957,9 +978,21 @@ export class LibraryService {
     }
 
     /* Sin cambios reales (mismos ids, mismos datos) no se escribe: evita
-     * eventos y `updatedAt` innecesarios en cada arranque. */
+     * eventos y `updatedAt` innecesarios en cada arranque. Las `capabilities`
+     * entran en la firma: si el autor del plugin las amplía, la lista
+     * persistida debe refrescarse para que la UI ofrezca el buscador. */
     const signature = (list: Addon[]): string =>
-      JSON.stringify(list.map((entry) => [entry.id, entry.name, entry.version, entry.enabled, entry.dir ?? '']));
+      JSON.stringify(
+        list.map((entry) => [
+          entry.id,
+          entry.name,
+          entry.version,
+          entry.enabled,
+          entry.dir ?? '',
+          (entry.capabilities ?? []).join(','),
+          (entry.platforms ?? []).join(','),
+        ])
+      );
     const unchanged = signature(this.file.addons ?? []) === signature(next);
     this.file.addons = next;
     if (!unchanged) this.write('addons');

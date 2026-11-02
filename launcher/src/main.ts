@@ -21,6 +21,14 @@ import type {
 import { DEFAULT_SETTINGS, LEGACY_VIEW_ALIASES } from './services/types';
 import { catalogService } from './services/catalogService';
 import { libraryService } from './services/libraryService';
+import {
+  providerForPlatform,
+  provisionProviderAsset,
+  romProviders,
+  searchProviderAssets,
+  variantLabel,
+} from './services/addonProvider';
+import type { ProviderPhase, ProviderResult } from './services/addonProvider';
 import type { Game } from './ui/model';
 import { toGame, statusOf, esc, styleFor, folderOf } from './ui/model';
 import { mediaHTML } from './ui/media';
@@ -131,6 +139,259 @@ let W: RomWizardState = {
   fromInstall: false,
 };
 
+/* -------------------------------------------------------------------------- */
+/* Flujo asistido con addons (`asset-provider`)                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Estado del buscador de ROMs que se pinta dentro del modal de ROM y del drawer
+ * de configuración.
+ *
+ * Es un único objeto (no estado por port) porque el flujo vive siempre dentro de
+ * una capa modal: abrir otra lo reinicia. `addonId` lo devuelve el backend, que
+ * puede resolver un plugin distinto del propuesto si el declarado no soporta la
+ * plataforma del port.
+ */
+interface ProviderFlow {
+  addonId: string;
+  addonName: string;
+  /** Título con el que se consulta al plugin (el del port). */
+  query: string;
+  phase: ProviderPhase;
+  message: string;
+  results: ProviderResult[];
+  error: string | null;
+  /** Ficha remota para la descarga manual cuando el plugin no la detectó. */
+  url: string | null;
+}
+
+let PF: ProviderFlow | null = null;
+
+/** `true` mientras hay una petición al backend en vuelo (evita dobles envíos). */
+let providerBusy = false;
+
+/** Proveedor activo que puede servir la plataforma del port, o `null`. */
+function providerFor(game: Game | undefined): Addon | null {
+  if (!game) return null;
+  return providerForPlatform(romProviders(S.addons), game.platform);
+}
+
+/**
+ * Prepara el flujo al abrir el modal de ROM.
+ *
+ * Sin addons aptos deja `PF` en `null` y la sección no se pinta: la UI no
+ * promete un buscador que no existe.
+ */
+function resetProviderFlow(game: Game): void {
+  const addon = providerFor(game);
+  providerBusy = false;
+  PF = addon
+    ? {
+        addonId: addon.id,
+        addonName: addon.name || addon.id,
+        query: game.t,
+        phase: 'idle',
+        message: '',
+        results: [],
+        error: null,
+        url: null,
+      }
+    : null;
+}
+
+/** Icono/estado textual de cada fase del flujo. */
+function providerStatusLine(flow: ProviderFlow): string {
+  if (flow.phase === 'searching') {
+    return (
+      '<div class="chk"><i>⋯</i><span style="flex:1">Buscando en ' +
+      `${esc(flow.addonName)}…</span></div>`
+    );
+  }
+  if (flow.phase === 'provisioning') {
+    /* Texto literal del contrato: la descarga la confirma el usuario en el
+     * navegador, así que la UI tiene que decirlo sin rodeos. */
+    return (
+      '<div class="chk"><i>⋯</i><span style="flex:1">Abriendo navegador y esperando descarga...</span></div>' +
+      '<div class="muted" style="font-size:12px">Confirma la descarga en el navegador que se acaba de abrir; ' +
+      'el launcher moverá el archivo a la carpeta del port.</div>'
+    );
+  }
+  if (flow.phase === 'done') {
+    return (
+      '<div class="chk"><i>✓</i><span style="flex:1">' +
+      `${esc(flow.message || 'ROM aprovisionada')}</span></div>`
+    );
+  }
+  if (flow.phase === 'error') {
+    return (
+      '<div class="chk bad"><i>✕</i><span style="flex:1">' +
+      `${esc(flow.error ?? 'El addon no devolvió resultados')}</span></div>` +
+      (flow.url
+        ? `<button class="btn sm" data-act="provider-open" data-url="${esc(flow.url)}">Abrir ficha en el navegador</button>`
+        : '')
+    );
+  }
+  return '';
+}
+
+/**
+ * Sección «PROVEEDORES Y ADDONS» del modal de ROM y del drawer de configuración.
+ *
+ * Devuelve `''` cuando no hay ningún addon de aprovisionamiento activo, de modo
+ * que la UI de un launcher sin plugins queda exactamente como antes.
+ *
+ * @param searchLabel Texto del botón de búsqueda. El drawer de configuración usa
+ *   «Buscar ROM con Addon» (genérico, porque puede haber más de un proveedor
+ *   instalado); el modal de ROM nombra al proveedor concreto que va a responder.
+ */
+function providerSectionHTML(game: Game, searchLabel?: string): string {
+  if (!PF) return '';
+  const busy = providerBusy || PF.phase === 'searching' || PF.phase === 'provisioning';
+  const disabled = busy ? 'disabled style="opacity:.45;cursor:not-allowed"' : '';
+
+  const head =
+    '<div class="lbl" style="padding:0">PROVEEDORES Y ADDONS</div>' +
+    `<div class="muted" style="font-size:12px">${esc(PF.addonName)} · ${esc(PF.addonId)}</div>`;
+
+  const searchBtn =
+    `<button class="btn" data-act="provider-search" data-id="${esc(game.id)}" ${disabled}>` +
+    `${
+      busy && PF.phase === 'searching'
+        ? 'Buscando…'
+        : esc(searchLabel ?? `Buscar ROM con ${PF.addonName}`)
+    }</button>`;
+
+  const rows = PF.results
+    .map((result) => {
+      const detail = [result.description, result.platform].filter(Boolean).join(' · ');
+      return (
+        '<div class="chk" style="align-items:flex-start;gap:10px">' +
+        `<span style="flex:1;min-width:0"><b>${esc(result.title)}</b>` +
+        `<div class="muted mono" style="font-size:12px">${esc(variantLabel(result))}</div>` +
+        (detail ? `<div class="muted" style="font-size:12px">${esc(detail)}</div>` : '') +
+        '</span>' +
+        `<button class="btn sm pri" data-act="provider-provision" data-id="${esc(game.id)}" ` +
+        `data-asset-id="${esc(result.id)}" ${disabled}>Descargar y aprovisionar</button>` +
+        '</div>'
+      );
+    })
+    .join('');
+
+  const list = PF.results.length
+    ? `<div style="display:flex;flex-direction:column;gap:8px">${rows}</div>`
+    : PF.phase === 'results'
+      ? '<div class="muted" style="font-size:12px">No se encontraron ROMs para este port en el addon.</div>'
+      : '';
+
+  return (
+    `<section style="display:flex;flex-direction:column;gap:10px">${head}${searchBtn}` +
+    `${providerStatusLine(PF)}${list}` +
+    '<div class="muted" style="font-size:12px">El addon solo localiza la ficha: la descarga la confirmas tú ' +
+    'en el navegador y el archivo se queda en tu equipo.</div></section>'
+  );
+}
+
+/** `POST /api/plugins/search` con el título y la plataforma del port. */
+async function triggerProviderSearch(game: Game): Promise<void> {
+  if (providerBusy) return;
+  if (!PF) resetProviderFlow(game);
+  const flow = PF;
+  if (!flow) {
+    toast('No hay addons de aprovisionamiento activos');
+    return;
+  }
+
+  providerBusy = true;
+  flow.phase = 'searching';
+  flow.message = '';
+  flow.error = null;
+  flow.url = null;
+  flow.results = [];
+  renderLayer();
+
+  const outcome = await searchProviderAssets({
+    query: flow.query || game.t,
+    platform: game.platform,
+    pluginId: flow.addonId,
+  });
+
+  providerBusy = false;
+  /* El usuario pudo cerrar el modal o abrir otro port mientras se esperaba. */
+  if (PF !== flow) return;
+
+  if (outcome.pluginId) flow.addonId = outcome.pluginId;
+  if (!outcome.ok) {
+    flow.phase = 'error';
+    flow.error = outcome.error ?? 'No se pudo buscar en el addon.';
+  } else {
+    flow.results = outcome.results;
+    flow.phase = 'results';
+  }
+
+  if (L && 'id' in L && L.id === game.id) renderLayer();
+  else toast(flow.phase === 'error' ? (flow.error ?? 'Error del addon') : 'Búsqueda completada');
+}
+
+/**
+ * `POST /api/plugins/provision` y registro de la ROM en la biblioteca.
+ *
+ * Al terminar con archivo se actualiza el estado local, se persiste con
+ * `libraryService.setRom` (que deja el port en `Ready` y habilita «Jugar») y se
+ * repinta: el modal queda abierto mostrando el éxito y la ficha cambia de
+ * «Falta ROM» a «Listo».
+ */
+async function triggerProviderProvision(game: Game, assetId: string): Promise<void> {
+  if (providerBusy) return;
+  const flow = PF;
+  if (!flow || !assetId) return;
+
+  const outputDir = (game.dir || `${S.settings.installDir}/${folderOf(game.t)}`).trim();
+
+  providerBusy = true;
+  flow.phase = 'provisioning';
+  flow.message = 'Abriendo navegador y esperando descarga...';
+  flow.error = null;
+  flow.url = null;
+  renderLayer();
+
+  const outcome = await provisionProviderAsset({
+    pluginId: flow.addonId,
+    assetId,
+    outputDir,
+  });
+
+  providerBusy = false;
+  if (PF !== flow) return;
+
+  if (!outcome.ok || !outcome.outputPath) {
+    flow.phase = 'error';
+    flow.error = outcome.error ?? 'No se detectó descarga de ROM.';
+    flow.url = outcome.url;
+    renderLayer();
+    toast('El addon necesita que confirmes la descarga en el navegador');
+    return;
+  }
+
+  /* Registro y validación: `romOk` + `setRom(…, true)` es lo que convierte el
+   * estado de la ficha en `Ready` («Listo» con botón «Jugar»). */
+  game.romPath = outcome.outputPath;
+  game.romOk = true;
+  try {
+    libraryService.setRom(game.id, outcome.outputPath, game.romMode, true);
+  } catch (error) {
+    console.warn('[PortsLauncher] No se pudo registrar la ROM en la biblioteca:', error);
+  }
+  saveState();
+
+  flow.phase = 'done';
+  flow.message = `ROM registrada en ${outcome.outputPath}`;
+  flow.results = [];
+
+  draw();
+  renderLayer();
+  toast(`${game.t}: ROM lista · ya puedes jugar`);
+}
+
 export function toast(msg: string): void {
   const container = $('#toast');
   if (!container) return;
@@ -181,6 +442,11 @@ function openRom(id: string, fromInstall = false): void {
     mode: S.settings.romMode,
     fromInstall: !!fromInstall,
   };
+  /* El buscador de addons se reinicia con cada apertura: así no arrastra
+   * resultados del port anterior ni de una búsqueda ya cerrada. */
+  const game = S.byId.get(id);
+  if (game) resetProviderFlow(game);
+  else PF = null;
   L = { type: 'rom', id };
   renderLayer();
 }
@@ -252,6 +518,7 @@ function renderLayer(): void {
     <div class="mbody"><div class="drop" id="drop"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
      <b style="font-size:16px">${W.file ? esc(W.file.name) : 'Suelta aquí tu archivo de ROM'}</b><div class="muted">${game.rom ? game.rom.n + ' · ' + game.rom.x.join(' ') : 'Archivos de juego'}</div>
      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button class="btn" data-act="pick">Elegir archivo…</button><button class="btn" data-act="sample">Usar ROM de ejemplo</button></div><input type="file" id="fpick" hidden><div class="muted" style="font-size:12px">Prototipo: solo se lee el nombre del archivo, nunca su contenido.</div></div>
+    ${providerSectionHTML(game)}
     ${W.checks.length ? `<div style="display:flex;flex-direction:column;gap:8px"><div class="lbl" style="padding:0">VALIDACIÓN</div>${W.checks.map((c) => `<div class="chk ${c.ok ? '' : 'bad'}"><i>${c.ok ? '✓' : '✕'}</i><span style="flex:1">${c.t}</span><span class="mono muted" style="font-size:12px">${esc(c.v)}</span></div>`).join('')}</div>` : ''}
     <div><div class="lbl" style="padding:0;margin-bottom:10px">¿CÓMO LA USAMOS?</div><div style="display:flex;flex-wrap:wrap;gap:12px"><button class="opt" role="radio" aria-checked="${W.mode === 'link'}" data-act="wmode" data-k="link"><b>Usarla desde donde está</b><span class="muted">Se enlaza a <span class="mono" style="font-size:12px">${esc(W.file ? '~/Descargas/' + W.file.name : '~/Descargas/…')}</span>. No se mueve nada.</span></button><button class="opt" role="radio" aria-checked="${W.mode === 'copy'}" data-act="wmode" data-k="copy"><b>Copiarla a la carpeta del port</b><span class="muted">Se copia a <span class="mono" style="font-size:12px">${esc(S.settings.romDir)}/…</span></span></button></div><div class="muted" style="font-size:12px;margin-top:8px">El archivo original nunca se mueve ni se borra. Puedes cambiarlo luego en el engranaje ⚙.</div></div></div>
     <div class="mfoot"><button class="btn" data-act="closeL">${W.fromInstall ? 'Hacerlo después' : 'Cancelar'}</button><button class="btn pri" data-act="saveRom" ${W.ok ? '' : 'disabled style="opacity:.45;cursor:not-allowed"'}>${W.fromInstall ? 'Guardar y jugar' : 'Guardar'}</button></div></div>`;
@@ -265,6 +532,7 @@ function renderLayer(): void {
     ${hasRom ? `<section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">ROM</div><div style="display:flex;gap:8px"><div class="in-txt" style="display:flex;align-items:center;overflow:hidden;white-space:nowrap">${game.romOk ? esc(game.romPath) : 'Sin ROM'}</div><button class="btn" data-act="rom" data-id="${L.id}">Cambiar…</button></div>
      <div class="seg" role="group" aria-label="Modo de ROM"><button style="flex:1;width:auto;font-weight:600" aria-pressed="${game.romMode === 'link'}" data-act="gmode" data-k="link">Usar donde está</button><button style="flex:1;width:auto;font-weight:600" aria-pressed="${game.romMode === 'copy'}" data-act="gmode" data-k="copy">Copiar a carpeta del port</button></div>
      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><span style="color:${game.romOk ? 'var(--accent2)' : 'var(--warn)'};font-weight:600">${game.romOk ? '● Validada · SHA-1 coincide' : '● Falta la ROM'}</span><button class="btn sm" data-act="reval">Revalidar</button></div></section>` : '<section class="box"><b>Este port no necesita ROM.</b></section>'}
+    ${providerSectionHTML(game, 'Buscar ROM con Addon')}
     <section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">ACTUALIZACIONES</div>
      <div class="chk" style="justify-content:space-between"><span>Actualizar automáticamente</span><button class="tog" role="switch" aria-checked="${game.auto}" data-act="gtog" data-k="auto" aria-label="Actualizar automáticamente"><i></i></button></div>
      <div class="chk" style="justify-content:space-between"><span>Fijar versión <span class="mono warn" style="color:var(--warn)">v${game.v ?? game.lv}</span></span><button class="tog" role="switch" aria-checked="${game.pin}" data-act="gtog" data-k="pin" aria-label="Fijar versión"><i></i></button></div></section>
@@ -2061,7 +2329,32 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   gear: (d) => {
     if (!d.id) return;
     L = { type: 'gear', id: d.id };
+    /* El drawer incluye el buscador de addons: hay que preparar el flujo del
+     * port abierto o `providerSectionHTML` devolvería '' (PF seguiría en null). */
+    const game = S.byId.get(d.id);
+    if (game) resetProviderFlow(game);
+    else PF = null;
     renderLayer();
+  },
+  /* --- Flujo asistido de ROMs con addons `asset-provider` ------------------ */
+  'provider-search': (d) => {
+    const game = d.id ? S.byId.get(d.id) : null;
+    if (game) void triggerProviderSearch(game);
+  },
+  'provider-provision': (d) => {
+    const game = d.id ? S.byId.get(d.id) : null;
+    if (game && d.assetId) void triggerProviderProvision(game, d.assetId);
+  },
+  'provider-open': (d) => {
+    if (d.url) openExternalUrl(d.url);
+  },
+  'provider-reset': () => {
+    if (PF) {
+      PF.phase = 'idle';
+      PF.results = [];
+      PF.error = null;
+      renderLayer();
+    }
   },
   plat: (d) => {
     B.plat = (d.k as any) || 'all';

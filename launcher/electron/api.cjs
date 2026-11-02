@@ -14,6 +14,9 @@
  *   POST /api/launcher/self-update       → guarda el instalador de una versión nueva en ~/Downloads.
  *   GET  /api/library                    → lee la biblioteca de `~/PortsLauncher/ports.json`.
  *   POST /api/library                    → guarda la biblioteca en `~/PortsLauncher/ports.json`.
+ *   GET  /api/plugins                    → plugins `asset-provider` instalados en disco.
+ *   POST /api/plugins/search             → busca assets ejecutando el plugin (capacidad `search`).
+ *   POST /api/plugins/provision          → aprovisiona un asset con el plugin (capacidad `provision`).
  *   GET  /api/steamgrid/__status         → informa de la clave disponible y la devuelve.
  *   POST /api/steamgrid/__save-key       → guarda la clave en ~/.steamgrid_credentials.env.
  *   GET  /api/steamgrid/<api>            → proxy con la clave del usuario o del servidor.
@@ -1857,6 +1860,589 @@ async function handlePluginsDir(req, res) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Ejecución de plugins de aprovisionamiento (`asset-provider`)               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Tope de tiempo de un `search`.
+ *
+ * Un `search` sale a la red (Vimm, GitHub, …) y puede tardar, pero por encima
+ * de este umbral se mata el proceso y se responde 504: una petición HTTP del
+ * renderer no puede quedarse colgada esperando a un plugin que no responde.
+ */
+const PLUGIN_SEARCH_TIMEOUT = 45_000;
+
+/** Tope de tiempo de un `provision` (abre el navegador y espera la descarga). */
+const PLUGIN_PROVISION_TIMEOUT = 90_000;
+
+/** Tope de `stdout` acumulado de un plugin (protección anti-OOM). */
+const PLUGIN_MAX_STDOUT = 8 * 1024 * 1024;
+
+/** Tope de `stderr` acumulado, que solo se usa para el mensaje de error. */
+const PLUGIN_MAX_STDERR = 64 * 1024;
+
+/** Tope de eventos de progreso retenidos de un `provision`. */
+const PLUGIN_MAX_EVENTS = 200;
+
+/** Intérpretes conocidos para el campo `runtime` del manifiesto. */
+const PLUGIN_RUNTIMES = new Map([
+  ['python3', 'python3'],
+  ['python', 'python3'],
+  ['py', 'python3'],
+  ['node', 'node'],
+  ['nodejs', 'node'],
+  ['bash', 'bash'],
+  ['sh', 'bash'],
+]);
+
+/**
+ * Extrae de `plugin.json` lo necesario para *ejecutar* el plugin.
+ *
+ * `readPluginManifest` normaliza solo lo que pinta la vista de addons y descarta
+ * `entrypoint`, `runtime`, `capabilities` y `platforms`, que son justo los datos
+ * que necesita la ejecución. El `entrypoint` se resuelve con `safeEntry` para
+ * que un manifiesto con `../` no pueda apuntar fuera de su carpeta.
+ *
+ * @returns La especificación ejecutable, o `null` si el plugin no es ejecutable.
+ */
+function readPluginExecSpec(dir) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  /* `enabled: false` en el manifiesto desactiva el plugin también para la API. */
+  if (parsed.enabled === false) return null;
+
+  const id = textOrNull(parsed.id) ?? textOrNull(parsed.slug) ?? path.basename(dir);
+  const entry = textOrNull(parsed.entrypoint) ?? textOrNull(parsed.main);
+  if (!id || !entry) return null;
+
+  const entrypoint = safeEntry(dir, entry);
+  if (!entrypoint) {
+    console.warn(`[plugins] entrypoint fuera de la carpeta del plugin en ${dir}: ${entry}`);
+    return null;
+  }
+  try {
+    if (!fs.statSync(entrypoint).isFile()) return null;
+  } catch {
+    return null;
+  }
+
+  /* Listas normalizadas a minúsculas: `--platform N64` y `n64` deben coincidir. */
+  const toList = (value) =>
+    Array.isArray(value)
+      ? value
+          .filter((item) => typeof item === 'string' && item.trim())
+          .map((item) => item.trim().toLowerCase())
+      : [];
+
+  return {
+    id,
+    name: textOrNull(parsed.name) ?? id,
+    dir,
+    entrypoint,
+    runtime: textOrNull(parsed.runtime),
+    type: textOrNull(parsed.type) ?? 'plugin',
+    platforms: toList(parsed.platforms),
+    capabilities: toList(parsed.capabilities),
+  };
+}
+
+/** Manifiestos ejecutables en disco, en el mismo orden que `listPlugins()`. */
+function listPluginSpecs() {
+  const specs = [];
+  for (const plugin of listPlugins()) {
+    const spec = readPluginExecSpec(plugin.dir);
+    if (spec) specs.push(spec);
+  }
+  return specs;
+}
+
+/**
+ * Comando a lanzar para un plugin según su `runtime` declarado.
+ *
+ * Sin `runtime` (o con `binary`) se ejecuta el `entrypoint` directamente; el
+ * resto se delega en el intérprete. Nunca hay `shell` de por medio, así que los
+ * argumentos no pueden interpretarse como metacaracteres.
+ */
+function pluginCommand(spec) {
+  const runtime = (spec.runtime || '').toLowerCase();
+  const interpreter = PLUGIN_RUNTIMES.get(runtime);
+  if (interpreter) return { command: interpreter, args: [spec.entrypoint] };
+  if (runtime && runtime !== 'binary' && runtime !== 'direct' && runtime !== 'executable') {
+    console.warn(
+      `[plugins] runtime '${runtime}' desconocido en ${spec.id}: se ejecuta el entrypoint directamente.`
+    );
+  }
+  return { command: spec.entrypoint, args: [] };
+}
+
+/** Entorno del plugin: UTF-8 explícito y sin color en `stderr`. */
+function pluginEnv() {
+  return {
+    ...process.env,
+    PYTHONUNBUFFERED: '1',
+    PYTHONIOENCODING: 'utf-8',
+    NO_COLOR: '1',
+  };
+}
+
+/**
+ * Valor apto para el CLI del plugin.
+ *
+ * No hay shell, pero un valor que empiece por `-` lo leería `argparse` como una
+ * opción: un `query` igual a `--output` inyectaría flags en la invocación.
+ * También se rechazan caracteres de control y cadenas desmedidas.
+ */
+function pluginArg(value, name) {
+  const text = String(value ?? '');
+  if (!text.trim()) throw new Error(`El parámetro "${name}" está vacío.`);
+  if (text.startsWith('-')) throw new Error(`El parámetro "${name}" no puede empezar por "-".`);
+  if (/[\u0000-\u001f\u007f]/.test(text)) {
+    throw new Error(`El parámetro "${name}" contiene caracteres de control.`);
+  }
+  if (text.length > 256) throw new Error(`El parámetro "${name}" es demasiado largo.`);
+  return text;
+}
+
+/**
+ * Último objeto JSON válido de un texto.
+ *
+ * Los plugins pueden escribir avisos sueltos en `stdout`; se recorre hacia atrás
+ * y se devuelve el último objeto parseable, que es el mensaje final del
+ * protocolo (`{"success": …}` para `search`, `{"type": "completed"}` para
+ * `provision`).
+ */
+function parsePluginJson(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index].trim();
+    if (!line.startsWith('{')) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch {
+      /* Línea no JSON: se prueba con la anterior. */
+    }
+  }
+  return null;
+}
+
+/** Cola de `stderr` para adjuntar al error sin volcar el log entero. */
+function stderrTail(text, limit = 800) {
+  const clean = String(text || '').trim();
+  return clean.length > limit ? clean.slice(-limit) : clean;
+}
+
+/**
+ * Ejecuta el plugin y acumula su salida.
+ *
+ * `onLine` recibe cada línea de `stdout` según llega (el protocolo de
+ * `provision` es JSON por líneas). La promesa **no rechaza por código de
+ * salida**: el código y el `timedOut` viajan en el resultado para que el
+ * llamante elija el status HTTP. Solo rechaza si el proceso no se pudo lanzar
+ * (con `error.status = 502`).
+ */
+function runPlugin(spec, args, options = {}) {
+  const timeout = Number.isFinite(options.timeout) ? options.timeout : PLUGIN_SEARCH_TIMEOUT;
+  const onLine = typeof options.onLine === 'function' ? options.onLine : null;
+  const { command, args: prefix } = pluginCommand(spec);
+
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(command, [...prefix, ...args], {
+        cwd: spec.dir,
+        /* `stdin` cerrado: el plugin ve que no hay TTY (`sys.stdin.isatty()`) y
+         * usa sus tiempos cortos de modo no interactivo. */
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        env: pluginEnv(),
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      reject(Object.assign(new Error(`No se pudo ejecutar el plugin ${spec.id}: ${detail}`), {
+        status: 502,
+      }));
+      return;
+    }
+
+    let stdout = '';
+    let stderr = '';
+    let pending = '';
+    let timedOut = false;
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, timeout);
+
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(payload);
+    };
+
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk) => {
+      if (stdout.length < PLUGIN_MAX_STDOUT) stdout += chunk;
+      if (!onLine) return;
+      pending += chunk;
+      let index = pending.indexOf('\n');
+      while (index !== -1) {
+        const line = pending.slice(0, index).trim();
+        pending = pending.slice(index + 1);
+        if (line) onLine(line);
+        index = pending.indexOf('\n');
+      }
+    });
+
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk) => {
+      if (stderr.length < PLUGIN_MAX_STDERR) stderr += chunk;
+    });
+
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const detail = error instanceof Error ? error.message : String(error);
+      reject(Object.assign(new Error(`No se pudo ejecutar el plugin ${spec.id}: ${detail}`), {
+        status: 502,
+      }));
+    });
+
+    child.on('close', (code, signal) => {
+      if (onLine && pending.trim()) onLine(pending.trim());
+      finish({ code, signal, stdout, stderr, timedOut, timeout });
+    });
+  });
+}
+
+/**
+ * Primer plugin habilitado que sirve para lo pedido.
+ *
+ * Preferencia: `pluginId` explícito → plugin que declare la plataforma pedida →
+ * plugin sin `platforms` (comodín) → primero disponible.
+ *
+ * @returns `{ spec }` si hay candidato, o `{ status, error }` si no.
+ */
+function selectPlugin({ capability, pluginId, platform }) {
+  const specs = listPluginSpecs();
+  const capable = specs.filter((spec) => spec.capabilities.includes(capability));
+
+  if (pluginId) {
+    const wanted = String(pluginId).trim();
+    const known = specs.find((spec) => spec.id === wanted);
+    if (!known) {
+      return {
+        status: 404,
+        error: `No existe ningún plugin con id '${wanted}' en ${PLUGINS_DIR}.`,
+      };
+    }
+    if (!known.capabilities.includes(capability)) {
+      return {
+        status: 409,
+        error: `El plugin '${wanted}' no declara la capacidad '${capability}'.`,
+      };
+    }
+    return { spec: known };
+  }
+
+  if (platform) {
+    const wanted = String(platform).trim().toLowerCase();
+    const exact = capable.find((spec) => spec.platforms.includes(wanted));
+    if (exact) return { spec: exact };
+    const wildcard = capable.find((spec) => spec.platforms.length === 0);
+    if (wildcard) return { spec: wildcard };
+    return {
+      status: 404,
+      error: `Ningún plugin habilitado con la capacidad '${capability}' soporta la plataforma '${wanted}'.`,
+      plugins: capable.map((spec) => spec.id),
+    };
+  }
+
+  if (!capable.length) {
+    return {
+      status: 404,
+      error: `No hay ningún plugin habilitado con la capacidad '${capability}' en ${PLUGINS_DIR}.`,
+      plugins: specs.map((spec) => spec.id),
+    };
+  }
+  return { spec: capable[0] };
+}
+
+/**
+ * `POST /api/plugins/search` → busca assets con un plugin `asset-provider`.
+ *
+ * Cuerpo: `{ query, platform?, pluginId?, region?, version? }`.
+ * Respuesta: `{ ok: true, results: [...] }` (el `success` del plugin se traduce
+ * a `ok` para que el contrato HTTP sea uniforme).
+ */
+async function handlePluginSearch(req, res) {
+  if (req.method !== 'POST') {
+    sendJSON(res, 405, { ok: false, error: 'Usa POST.' });
+    return;
+  }
+  try {
+    let body;
+    try {
+      body = await readJSON(req);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      sendJSON(res, 400, { ok: false, error: detail });
+      return;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      sendJSON(res, 400, { ok: false, error: 'Se esperaba un objeto JSON.' });
+      return;
+    }
+
+    let query;
+    let platform = null;
+    let region = null;
+    let version = null;
+    let pluginId = null;
+    try {
+      query = pluginArg(body.query, 'query');
+      if (textOrNull(body.platform)) platform = pluginArg(body.platform, 'platform').toLowerCase();
+      if (textOrNull(body.region)) region = pluginArg(body.region, 'region');
+      if (textOrNull(body.version)) version = pluginArg(body.version, 'version');
+      if (textOrNull(body.pluginId)) pluginId = pluginArg(body.pluginId, 'pluginId');
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      sendJSON(res, 400, { ok: false, error: detail });
+      return;
+    }
+
+    const picked = selectPlugin({ capability: 'search', pluginId, platform });
+    if (!picked.spec) {
+      sendJSON(res, picked.status ?? 404, {
+        ok: false,
+        error: picked.error,
+        plugins: picked.plugins ?? [],
+      });
+      return;
+    }
+
+    const args = ['search', query];
+    if (platform) args.push('--platform', platform);
+    if (region) args.push('--region', region);
+    if (version) args.push('--version', version);
+
+    const run = await runPlugin(picked.spec, args, { timeout: PLUGIN_SEARCH_TIMEOUT });
+
+    if (run.timedOut) {
+      sendJSON(res, 504, {
+        ok: false,
+        pluginId: picked.spec.id,
+        error: `El plugin ${picked.spec.id} no respondió en ${Math.round(run.timeout / 1000)} s.`,
+        stderr: stderrTail(run.stderr),
+      });
+      return;
+    }
+
+    const payload = parsePluginJson(run.stdout);
+    if (!payload) {
+      sendJSON(res, 502, {
+        ok: false,
+        pluginId: picked.spec.id,
+        error: `El plugin ${picked.spec.id} no devolvió JSON válido por stdout.`,
+        code: run.code,
+        stderr: stderrTail(run.stderr),
+      });
+      return;
+    }
+
+    if (payload.success === false || payload.ok === false) {
+      sendJSON(res, 502, {
+        ok: false,
+        pluginId: picked.spec.id,
+        error: textOrNull(payload.error) ?? 'El plugin informó de un error.',
+        stderr: stderrTail(run.stderr),
+      });
+      return;
+    }
+
+    const results = Array.isArray(payload.results)
+      ? payload.results.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+      : [];
+
+    sendJSON(res, 200, {
+      ok: true,
+      pluginId: picked.spec.id,
+      query,
+      platform,
+      region,
+      version,
+      results,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const status = typeof error?.status === 'number' ? error.status : 500;
+    sendJSON(res, status, { ok: false, error: detail });
+  }
+}
+
+/**
+ * `POST /api/plugins/provision` → ejecuta `provision` en un plugin.
+ *
+ * Cuerpo: `{ pluginId, assetId, outputDir }`.
+ * Respuesta: `{ ok: true, outputPath, sha1, events }`. Los eventos de progreso
+ * (`{"type":"progress"}`) se retienen porque este endpoint responde un único
+ * JSON al final; la UI los repinta al recibir la respuesta.
+ */
+async function handlePluginProvision(req, res) {
+  if (req.method !== 'POST') {
+    sendJSON(res, 405, { ok: false, error: 'Usa POST.' });
+    return;
+  }
+  try {
+    let body;
+    try {
+      body = await readJSON(req);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      sendJSON(res, 400, { ok: false, error: detail });
+      return;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      sendJSON(res, 400, { ok: false, error: 'Se esperaba un objeto JSON.' });
+      return;
+    }
+
+    let pluginId;
+    let assetId;
+    let rawOutput;
+    try {
+      pluginId = pluginArg(body.pluginId, 'pluginId');
+      assetId = pluginArg(body.assetId, 'assetId');
+      rawOutput = pluginArg(body.outputDir, 'outputDir');
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      sendJSON(res, 400, { ok: false, error: detail });
+      return;
+    }
+
+    /* `assetId` viaja como primer posicional del plugin: se acota a un conjunto
+     * de caracteres seguro y se corta cualquier intento de ruta. */
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(assetId)) {
+      sendJSON(res, 400, {
+        ok: false,
+        error: `assetId no válido: ${assetId.slice(0, 80)}`,
+      });
+      return;
+    }
+
+    /* El destino lo propone el renderer; se acota al árbol del launcher, igual
+     * que `open-path`, para que el endpoint no sea una escritura arbitraria. */
+    const homeRoot = canonicalPath(path.resolve(LAUNCHER_HOME));
+    const expanded = rawOutput.replace(/^~(?=$|[\\/])/, os.homedir());
+    const outputDir = canonicalPath(path.resolve(expanded));
+    if (outputDir !== homeRoot && !outputDir.startsWith(homeRoot + path.sep)) {
+      sendJSON(res, 400, {
+        ok: false,
+        error: `outputDir debe estar dentro de ${homeRoot} (recibido: ${outputDir}).`,
+      });
+      return;
+    }
+
+    const picked = selectPlugin({ capability: 'provision', pluginId });
+    if (!picked.spec) {
+      sendJSON(res, picked.status ?? 404, {
+        ok: false,
+        error: picked.error,
+        plugins: picked.plugins ?? [],
+      });
+      return;
+    }
+
+    try {
+      ensureDir(outputDir);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      sendJSON(res, 500, { ok: false, error: `No se pudo crear ${outputDir}: ${detail}` });
+      return;
+    }
+
+    const events = [];
+    const run = await runPlugin(picked.spec, ['provision', assetId, '--output', outputDir], {
+      timeout: PLUGIN_PROVISION_TIMEOUT,
+      onLine: (line) => {
+        const event = parsePluginJson(line);
+        if (event && events.length < PLUGIN_MAX_EVENTS) events.push(event);
+      },
+    });
+
+    const payload = parsePluginJson(run.stdout) ?? (events.length ? events[events.length - 1] : null);
+
+    if (run.timedOut) {
+      sendJSON(res, 504, {
+        ok: false,
+        pluginId: picked.spec.id,
+        assetId,
+        outputDir,
+        error: `El plugin ${picked.spec.id} no terminó en ${Math.round(run.timeout / 1000)} s.`,
+        events,
+        stderr: stderrTail(run.stderr),
+      });
+      return;
+    }
+
+    if (!payload) {
+      sendJSON(res, 502, {
+        ok: false,
+        pluginId: picked.spec.id,
+        assetId,
+        outputDir,
+        error: `El plugin ${picked.spec.id} no devolvió JSON válido por stdout.`,
+        code: run.code,
+        events,
+        stderr: stderrTail(run.stderr),
+      });
+      return;
+    }
+
+    /* Un `provision` puede no poder completarse sin intervención humana (por
+     * ejemplo una ROM que hay que descargar a mano). Eso no es un 200: la UI
+     * necesita saber que no hay archivo y ofrecer el enlace. */
+    if (payload.type === 'error' || payload.success === false || payload.ok === false) {
+      sendJSON(res, 502, {
+        ok: false,
+        pluginId: picked.spec.id,
+        assetId,
+        outputDir,
+        error: textOrNull(payload.error) ?? 'El plugin informó de un error.',
+        url: textOrNull(payload.url),
+        events,
+        stderr: stderrTail(run.stderr),
+      });
+      return;
+    }
+
+    sendJSON(res, 200, {
+      ok: true,
+      pluginId: picked.spec.id,
+      assetId,
+      outputDir,
+      type: textOrNull(payload.type),
+      outputPath: textOrNull(payload.outputPath),
+      sha1: textOrNull(payload.sha1),
+      events,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const status = typeof error?.status === 'number' ? error.status : 500;
+    sendJSON(res, status, { ok: false, error: detail });
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Enrutador                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -1900,6 +2486,14 @@ async function handleApiRequest(req, res) {
     await handlePluginsDir(req, res);
     return true;
   }
+  if (url === '/api/plugins/search') {
+    await handlePluginSearch(req, res);
+    return true;
+  }
+  if (url === '/api/plugins/provision') {
+    await handlePluginProvision(req, res);
+    return true;
+  }
   if (url.startsWith(STEAMGRID_PREFIX)) {
     await steamgridProxy(req, res);
     return true;
@@ -1929,6 +2523,8 @@ function createApiMiddleware() {
       url === '/api/library' ||
       url === '/api/plugins' ||
       url === '/api/plugins/dir' ||
+      url === '/api/plugins/search' ||
+      url === '/api/plugins/provision' ||
       url === '/api/health' ||
       url.startsWith(STEAMGRID_PREFIX);
     if (!isApi) {
@@ -1962,6 +2558,8 @@ module.exports = {
   handleLaunch,
   handleLibrary,
   handleOpenPath,
+  handlePluginProvision,
+  handlePluginSearch,
   handlePlugins,
   handlePluginsDir,
   handleReportError,

@@ -78,5 +78,18 @@
 - **Criterios de Aceptación:**
   1. `serveStatic` no usa streams sin listener de error.
   2. Todo fallo de lectura de archivos estáticos dentro o fuera de `app.asar` responde con código HTTP y no mata el proceso principal de Electron.
-  3. `statSync` protegido contra excepciones síncronas.
+## HU-11: Integración y Ejecución de Addons desde la Interfaz de Usuario
+- **Contexto de Negocio:** El usuario cuenta con addons instalados (ej. Vimm's Vault para Nintendo 64), pero en la interfaz gráfica del port o asistente de ROM no existe un mecanismo para ejecutarlos; obligaba al usuario a usar la terminal manualmente. Un addon debe integrarse transparentemente en PortsLauncher para buscar y aprovisionar ROMs con un solo clic.
+- **Objetivo:**
+  1. Backend: Implementar endpoints en `launcher/electron/api.cjs` (`POST /api/plugins/search` y `POST /api/plugins/provision`) para invocar el ejecutable de los plugins activos de forma desacoplada y segura.
+  2. Frontend: En la vista de detalle del port y en el Asistente de ROMs (`RomAssistantModal.ts` / `main.ts` / `render.ts`), cuando un port requiera ROM o el usuario configure la ROM y exista un plugin activo con capacidad `search`/`provision` para la plataforma del port:
+     - Mostrar un botón o sección interactiva con el addon (ej: "Buscar ROM con Vimm's Vault").
+     - Mostrar resultados de búsqueda con selector de versión/región.
+     - Permitir iniciar el aprovisionamiento, mostrando el progreso en la UI mientras el plugin coordina la descarga y coloca el archivo en el directorio del port.
+- **Capa:** Backend (`launcher/electron/api.cjs`), Frontend (`launcher/src/components/RomAssistantModal.ts`, `launcher/src/main.ts`, `launcher/src/ui/render.ts`, `launcher/src/services/types.ts`).
+- **Criterios de Aceptación:**
+  1. `POST /api/plugins/search` ejecuta `python3 <dir>/main.py search "<q>" --platform <plat>` y devuelve la lista de resultados en formato JSON.
+  2. `POST /api/plugins/provision` ejecuta `python3 <dir>/main.py provision "<asset_id>" --output "<dir>"` y retorna el resultado (outputPath y sha1).
+  3. En la ficha del juego o asistente de ROMs, el usuario puede buscar y aprovisionar la ROM directamente sin salir de PortsLauncher.
+  4. Suite de pruebas pasando al 100%.
 
