@@ -12,6 +12,6 @@
 | HU-08 | Sincronización Bidireccional de Biblioteca y Persistencia en ports.json | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.7 |
 | HU-09 | Persistencia de Ajustes (SteamGrid API Key, Onboarding) y Progreso de Descarga de Arte | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.7 |
 | HU-10 | Robustez del Servidor Estático en Electron (readFile y blindaje statSync) | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.7 |
-| HU-11 | Integración y Ejecución de Addons desde la Interfaz de Usuario | En progreso | DeepSeek (Dev) / Claude (QA) | Pendiente (v0.1.8) |
+| HU-11 | Integración y Ejecución de Addons desde la Interfaz de Usuario | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.8 |
 
 
