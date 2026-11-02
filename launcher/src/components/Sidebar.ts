@@ -23,6 +23,7 @@ import type { SourcePlatform } from '../services/types';
 import { CATALOG_PLATFORMS, PLATFORM_LABELS, PLATFORM_SHORT } from '../services/types';
 import { catalogService } from '../services/catalogService';
 import { libraryService } from '../services/libraryService';
+import { CURRENT_VERSION } from '../services/updateService';
 import { cx, esc, icon, styleAttr } from './Icons';
 
 /* -------------------------------------------------------------------------- */
@@ -104,7 +105,16 @@ export interface SidebarHandle {
   destroy: () => void;
 }
 
-export const LAUNCHER_VERSION = '1.0.0';
+/**
+ * Versión del launcher mostrada en la barra lateral.
+ *
+ * Ya NO es una constante propia: se reexporta la que `updateService` obtiene de
+ * `launcher/package.json` vía `__APP_VERSION__` (ver `define` en
+ * `vite.config.ts`). Antes decía `1.0.0` fijo mientras Ajustes mostraba
+ * `0.1.0`, así que la UI nunca reflejaba la build instalada. Se mantiene el
+ * alias exportado por compatibilidad con importadores previos.
+ */
+export const LAUNCHER_VERSION = CURRENT_VERSION;
 
 /* -------------------------------------------------------------------------- */
 /* Estado                                                                     */

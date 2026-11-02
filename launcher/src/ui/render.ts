@@ -203,6 +203,29 @@ export function launcherUpdateBodyHTML(): string {
   }
 
   const result = launcherUpdate.result;
+
+  /* Consulta fallida: NO se puede afirmar «estás al día». GitHub responde 404
+   * cuando el repositorio es privado o no tiene ningún release, y antes eso se
+   * pintaba como «v0.1.0 es la última versión publicada». */
+  if (result.status !== 'ok') {
+    const retry =
+      '<button type="button" class="btn sm" data-act="check-updates">Reintentar</button>';
+    const repoLink = result.htmlUrl
+      ? `<a class="btn sm" href="${esc(result.htmlUrl)}" target="_blank" rel="noreferrer noopener">Abrir GitHub</a>`
+      : '';
+    return (
+      '<div class="update-note err" role="status">' +
+      '<b>No se pudo comprobar la actualización</b>' +
+      `<div class="muted" style="font-size:12.5px;margin-top:4px">${esc(
+        result.error ?? 'La consulta a GitHub no se completó.'
+      )}</div>` +
+      `<div class="muted mono" style="font-size:11.5px;margin-top:4px">estado: ${esc(result.status)} · ` +
+      `instalada v${esc(result.currentVersion)}</div>` +
+      `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px">${retry}${repoLink}</div>` +
+      '</div>'
+    );
+  }
+
   if (!result.hasUpdate) {
     return (
       '<div class="update-note ok" role="status">' +

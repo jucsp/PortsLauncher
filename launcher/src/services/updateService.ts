@@ -4,17 +4,72 @@
  * Comprobación de actualizaciones del LAUNCHER (no de los ports) contra los
  * GitHub Releases del repositorio publicado.
  *
- * El módulo es puro salvo por dos accesos explícitos al entorno:
- *   - `fetch`         → consulta la API pública de GitHub.
- *   - `localStorage`  → recuerda el repositorio elegido por el usuario.
+ * El módulo es puro salvo por tres accesos explícitos al entorno:
+ *   - `__APP_VERSION__` → versión instalada, inyectada por Vite en el build.
+ *   - `fetch`           → consulta la API pública de GitHub.
+ *   - `localStorage`    → recuerda el repositorio elegido por el usuario.
  *
- * Ambos están guardados, así que el módulo se puede importar (y probar) en
- * Node sin `fetch` ni `localStorage` disponibles: en ese caso
- * `checkForUpdates` devuelve un resultado sin actualización en vez de lanzar.
+ * Todos están guardados, así que el módulo se puede importar (y probar) en
+ * Node sin `fetch`, `localStorage` ni `define`: en ese caso `CURRENT_VERSION`
+ * cae a `FALLBACK_VERSION` y `checkForUpdates` devuelve un resultado con
+ * `status` distinto de `ok` en vez de lanzar.
  * ========================================================================== */
 
-/** Versión del launcher que se está ejecutando. */
-export const CURRENT_VERSION = '0.1.0';
+/* -------------------------------------------------------------------------- */
+/* Versión instalada                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Constante inyectada por Vite desde `launcher/package.json` (`define` en
+ * `vite.config.ts`).
+ *
+ * La declaración sólo existe para TypeScript; en tiempo de ejecución el
+ * identificador puede no estar presente (Node puro, otro bundler, REPL), así
+ * que siempre se lee con `typeof`, que nunca lanza `ReferenceError`.
+ */
+declare const __APP_VERSION__: string | undefined;
+
+/** Valor de emergencia cuando no hay versión inyectada (Vitest sin `define`). */
+export const FALLBACK_VERSION = '0.0.0-dev';
+
+/** Origen de `CURRENT_VERSION`, para diagnóstico en Ajustes. */
+export type VersionSource = 'build' | 'fallback';
+
+/**
+ * Normaliza una versión candidata: sin prefijo `v`, sin espacios y con los tres
+ * componentes completados (`0.1` → `0.1.0`).
+ *
+ * @returns `''` si el valor no parece semver, para que el llamante aplique el
+ * fallback en vez de comparar contra basura.
+ */
+function normalizeInjectedVersion(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const raw = cleanVersion(value);
+  if (!/^\d+(?:\.\d+)*$/.test(raw)) return '';
+  const [major, minor, patch] = parseSemver(raw);
+  return `${major}.${minor}.${patch}`;
+}
+
+/** Versión inyectada por el build, o `''` si no hay ninguna disponible. */
+function readInjectedVersion(): string {
+  /* `typeof` sobre un identificador no declarado es seguro y no lanza. */
+  if (typeof __APP_VERSION__ !== 'string') return '';
+  return normalizeInjectedVersion(__APP_VERSION__);
+}
+
+const INJECTED_VERSION = readInjectedVersion();
+
+/**
+ * Versión del launcher que se está ejecutando.
+ *
+ * Se inyecta desde `launcher/package.json` durante el build; si el plugin no
+ * se aplicó (Vitest/Node) cae a {@link FALLBACK_VERSION} para no romper la
+ * importación. Es la ÚNICA fuente de verdad de la versión en la UI.
+ */
+export const CURRENT_VERSION = INJECTED_VERSION || FALLBACK_VERSION;
+
+/** `'build'` si la versión vino del `package.json`; `'fallback'` si no. */
+export const VERSION_SOURCE: VersionSource = INJECTED_VERSION ? 'build' : 'fallback';
 
 /** Repositorio de releases por defecto (configurable en Ajustes). */
 export const DEFAULT_UPDATE_REPO = 'jucsp/PortsLauncher';
@@ -32,9 +87,44 @@ export interface GithubReleaseAsset {
   size?: number;
 }
 
-/** Resultado de `checkForUpdates`. Nunca es `null`: sin red devuelve «al día». */
+/**
+ * Desenlace de la consulta a GitHub.
+ *
+ * Sólo `ok` autoriza a afirmar «estás al día». El resto indica que la
+ * comprobación no llegó a buen término, que es justo lo que hay que decirle al
+ * usuario cuando el repositorio es privado, no tiene releases publicados
+ * (GitHub responde `404 Not Found`) o la red falla:
+ *
+ *   - `not_found`     → 404: repo privado/inexistente o sin releases.
+ *   - `rate_limited`  → 403/429: cuota de la API agotada.
+ *   - `network_error` → DNS, CORS, timeout, offline o 5xx.
+ *   - `invalid_repo`  → el `owner/repo` configurado no es válido.
+ *   - `unsupported`   → el entorno no tiene `fetch` (Node sin runtime web).
+ *   - `no_release`    → respondió 200 pero sin release estable (borrador,
+ *                       prerelease o `tag_name` vacío).
+ */
+export type UpdateCheckStatus =
+  | 'ok'
+  | 'not_found'
+  | 'rate_limited'
+  | 'network_error'
+  | 'invalid_repo'
+  | 'unsupported'
+  | 'no_release';
+
+/**
+ * Resultado de `checkForUpdates`. Nunca es `null` ni lanza.
+ *
+ * `status` y `error` distinguen «no hay actualizaciones» (`ok` +
+ * `hasUpdate: false`) de «no se pudo comprobar» (cualquier otro `status`), que
+ * es el fallo que hacía que la UI mintiera diciendo «Estás al día · v0.1.0».
+ */
 export interface UpdateCheckResult {
   hasUpdate: boolean;
+  /** Desenlace de la consulta; `ok` es el único estado «al día» fiable. */
+  status: UpdateCheckStatus;
+  /** Mensaje legible del fallo, o `null` si la consulta fue correcta. */
+  error: string | null;
   currentVersion: string;
   latestVersion: string;
   releaseName: string;
@@ -43,6 +133,16 @@ export interface UpdateCheckResult {
   downloadUrl: string | null;
   assetName: string | null;
   htmlUrl: string;
+}
+
+/** `true` sólo cuando GitHub confirmó que no hay versión superior. */
+export function isUpToDate(result: UpdateCheckResult | null | undefined): boolean {
+  return result ? result.status === 'ok' && !result.hasUpdate : false;
+}
+
+/** `true` si la comprobación falló y no sabemos si hay actualización. */
+export function isCheckFailed(result: UpdateCheckResult | null | undefined): boolean {
+  return result ? result.status !== 'ok' : false;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -186,12 +286,21 @@ export function setUpdateRepo(repo: string): string {
 /* Comprobación                                                               */
 /* -------------------------------------------------------------------------- */
 
-/** Resultado neutro: «al día» o «no se pudo comprobar». */
-function noUpdate(latestVersion = CURRENT_VERSION): UpdateCheckResult {
+/**
+ * Resultado neutro: sin actualización conocida y con el motivo del desenlace.
+ *
+ * `latestVersion` se mantiene en `CURRENT_VERSION` (nunca se inventa una
+ * versión «última» que no se ha visto) y `hasUpdate` en `false`, de modo que la
+ * forma del objeto es estable; quien decide si se puede afirmar «al día» es
+ * `status`.
+ */
+function neutralResult(status: UpdateCheckStatus, error: string | null = null): UpdateCheckResult {
   return {
     hasUpdate: false,
+    status,
+    error,
     currentVersion: CURRENT_VERSION,
-    latestVersion: cleanVersion(latestVersion) || CURRENT_VERSION,
+    latestVersion: CURRENT_VERSION,
     releaseName: '',
     releaseNotes: '',
     publishedAt: '',
@@ -200,6 +309,16 @@ function noUpdate(latestVersion = CURRENT_VERSION): UpdateCheckResult {
     htmlUrl: '',
   };
 }
+
+/* Mensajes de diagnóstico: los usa la UI y los tests (texto estable). */
+const MSG_NOT_FOUND =
+  'GitHub no encontró releases para este repositorio (404). Puede ser privado, ' +
+  'no existir o no tener ningún release publicado todavía.';
+const MSG_RATE_LIMITED =
+  'GitHub limitó la consulta (403/429). Espera unos minutos o configura un token.';
+const MSG_INVALID_REPO = 'El repositorio de releases debe tener el formato owner/repo.';
+const MSG_UNSUPPORTED = 'Este entorno no permite consultar GitHub (fetch no disponible).';
+const MSG_NO_RELEASE = 'El repositorio no tiene ningún release estable publicado.';
 
 /** Forma mínima del JSON de `/releases/latest` que consume este módulo. */
 interface GithubRelease {
@@ -213,40 +332,63 @@ interface GithubRelease {
   assets?: GithubReleaseAsset[];
 }
 
+/** Mensaje de error de red legible a partir de una excepción desconocida. */
+function networkMessage(error: unknown): string {
+  const detail =
+    error instanceof Error && error.message
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : 'error desconocido';
+  return `No se pudo conectar con GitHub: ${detail}`;
+}
+
 /**
  * Consulta el último release publicado y lo compara con `CURRENT_VERSION`.
  *
- * Nunca lanza: sin red, con rate-limit (403/429), 404 o JSON inválido devuelve
- * un `UpdateCheckResult` sin actualización. La UI distingue «al día» de «no se
- * pudo comprobar» por su cuenta si lo necesita.
+ * Nunca lanza: cualquier fallo (sin red, timeout, CORS, 404 de repo privado sin
+ * releases, 403 por rate limit, JSON inválido) devuelve un resultado con
+ * `status` distinto de `ok` y un `error` legible. La UI debe usar ese campo para
+ * NO anunciar «estás al día» cuando en realidad no se pudo comprobar.
  */
 export async function checkForUpdates(
   repo?: string,
   platform: UpdatePlatform = detectPlatform()
 ): Promise<UpdateCheckResult> {
   const target = String(repo ?? '').trim() || getUpdateRepo();
-  if (!isValidRepo(target)) return noUpdate();
-  if (typeof fetch !== 'function') return noUpdate();
+  if (!isValidRepo(target)) return neutralResult('invalid_repo', MSG_INVALID_REPO);
+  if (typeof fetch !== 'function') return neutralResult('unsupported', MSG_UNSUPPORTED);
 
   try {
     const response = await fetch(`https://api.github.com/repos/${target}/releases/latest`, {
       headers: { Accept: 'application/vnd.github+json' },
     });
-    if (!response.ok) return noUpdate();
+    if (!response.ok) {
+      const status = Number(response.status) || 0;
+      /* 404 = repo privado/inexistente o sin releases: NO es «estás al día». */
+      if (status === 404) return neutralResult('not_found', MSG_NOT_FOUND);
+      if (status === 403 || status === 429) return neutralResult('rate_limited', MSG_RATE_LIMITED);
+      return neutralResult('network_error', `GitHub respondió HTTP ${status} al consultar ${target}.`);
+    }
 
     const release = (await response.json()) as GithubRelease;
     /* Un borrador o un prerelease nunca es «la última versión estable». */
-    if (!release || release.draft || release.prerelease) return noUpdate();
+    if (!release || release.draft || release.prerelease) {
+      return neutralResult('no_release', MSG_NO_RELEASE);
+    }
 
     const rawTag = String(release.tag_name ?? release.name ?? '').trim();
     const latestVersion = cleanVersion(rawTag);
-    if (!latestVersion) return noUpdate();
+    if (!latestVersion) return neutralResult('no_release', MSG_NO_RELEASE);
 
     const asset = findPlatformAsset(release.assets ?? [], platform);
     const hasUpdate = compareSemver(latestVersion, CURRENT_VERSION) > 0;
 
     return {
       hasUpdate,
+      /* Consulta completada: aquí sí se puede afirmar «al día» si no hay update. */
+      status: 'ok',
+      error: null,
       currentVersion: CURRENT_VERSION,
       latestVersion,
       releaseName: String(release.name ?? rawTag),
@@ -257,8 +399,8 @@ export async function checkForUpdates(
       assetName: asset?.name ?? null,
       htmlUrl: String(release.html_url ?? ''),
     };
-  } catch {
-    /* Offline, CORS, DNS, timeout… todo acaba en «no hay novedades conocidas». */
-    return noUpdate();
+  } catch (error) {
+    /* Offline, CORS, DNS, timeout, JSON inválido… se reporta, no se disimula. */
+    return neutralResult('network_error', networkMessage(error));
   }
 }

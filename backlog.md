@@ -93,3 +93,11 @@
   3. En la ficha del juego o asistente de ROMs, el usuario puede buscar y aprovisionar la ROM directamente sin salir de PortsLauncher.
   4. Suite de pruebas pasando al 100%.
 
+
+## HU-12: Versión Dinámica e Inyectada en Build y Diagnóstico Resiliente de Actualizaciones
+- **Estado:** Completado (Tag v0.1.8) — Responsable: DeepSeek (Dev) / Claude (QA)
+- **Objetivo:** Inyectar la versión de la aplicación en tiempo de build (sin valores hardcodeados) y hacer resiliente el diagnóstico de actualizaciones ante fallos de red o respuestas inválidas.
+- **Criterios de Aceptación:**
+  1. La versión mostrada en la UI proviene de la inyección en build.
+  2. El diagnóstico de actualizaciones maneja errores sin interrumpir la aplicación.
+  3. Suite de pruebas pasando al 100%.

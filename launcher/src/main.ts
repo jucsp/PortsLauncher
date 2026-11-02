@@ -71,6 +71,7 @@ import { art } from './ui/model';
 import {
   checkForUpdates,
   getUpdateRepo,
+  isCheckFailed,
   isValidRepo,
   setUpdateRepo,
 } from './services/updateService';
@@ -1066,6 +1067,11 @@ function refreshLauncherUpdateUI(): void {
  * `silent` se usa en el arranque: no muestra toasts y deja la insignia lista si
  * hay novedades. `checkForUpdates` nunca lanza, pero el `try` protege de
  * cualquier fallo del propio repintado.
+ *
+ * Importante: un resultado con `status !== 'ok'` es un FALLO de consulta (404 de
+ * repo privado sin releases, rate limit, red caída), no «estás al día». Se
+ * guarda igual en el estado para que Ajustes muestre el diagnóstico, pero el
+ * toast lo dice sin ambigüedad.
  */
 async function checkLauncherUpdates(silent = false): Promise<void> {
   if (getLauncherUpdate().state === 'checking') return;
@@ -1075,11 +1081,9 @@ async function checkLauncherUpdates(silent = false): Promise<void> {
     const result = await checkForUpdates(getUpdateRepo());
     setLauncherUpdate({ state: 'done', result });
     if (!silent) {
-      toast(
-        result.hasUpdate
-          ? 'Nueva versión disponible: v' + result.latestVersion
-          : 'Tienes la última versión de PortsLauncher'
-      );
+      if (isCheckFailed(result)) toast('No se pudo comprobar la actualización');
+      else if (result.hasUpdate) toast('Nueva versión disponible: v' + result.latestVersion);
+      else toast('Tienes la última versión de PortsLauncher (v' + result.currentVersion + ')');
     }
   } catch (error) {
     setLauncherUpdate({

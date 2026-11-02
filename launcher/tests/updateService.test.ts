@@ -8,12 +8,18 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import pkg from '../package.json';
+
 import {
   CURRENT_VERSION,
+  FALLBACK_VERSION,
+  VERSION_SOURCE,
   checkForUpdates,
   cleanVersion,
   compareSemver,
   findPlatformAsset,
+  isCheckFailed,
+  isUpToDate,
   isValidRepo,
   parseSemver,
 } from '../src/services/updateService';
@@ -260,5 +266,125 @@ describe('checkForUpdates', () => {
     expect(result.downloadUrl).toBe(
       'https://github.com/jucsp/PortsLauncher/releases/tag/v0.4.0'
     );
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* HU-12 · versión dinámica                                                   */
+/* -------------------------------------------------------------------------- */
+
+describe('CURRENT_VERSION', () => {
+  it('es un semver completo o el fallback declarado', () => {
+    if (VERSION_SOURCE === 'build') {
+      expect(CURRENT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    } else {
+      expect(CURRENT_VERSION).toBe(FALLBACK_VERSION);
+    }
+  });
+
+  it('coincide con la versión de package.json cuando el define está aplicado', () => {
+    /* `vite.config.ts` inyecta `pkg.version`; Vitest reutiliza esa config. Si
+     * el entorno no aplica `define`, el módulo cae al fallback y aquí no hay
+     * nada que comparar. */
+    if (VERSION_SOURCE === 'build') {
+      expect(CURRENT_VERSION).toBe(String((pkg as { version?: string }).version));
+    }
+  });
+
+  it('no es la cadena vacía ni un placeholder obsoleto', () => {
+    expect(CURRENT_VERSION.trim().length).toBeGreaterThan(0);
+    expect(CURRENT_VERSION).not.toBe('undefined');
+    expect(CURRENT_VERSION).not.toBe('null');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* HU-12 · diagnóstico de la consulta                                         */
+/* -------------------------------------------------------------------------- */
+
+describe('checkForUpdates · status y error', () => {
+  it('un release válido deja status ok y error null', async () => {
+    stubFetch(async () => jsonResponse({ tag_name: `v${CURRENT_VERSION}` }));
+
+    const result = await checkForUpdates(REPO, 'linux');
+    expect(result.status).toBe('ok');
+    expect(result.error).toBeNull();
+    expect(isCheckFailed(result)).toBe(false);
+    expect(isUpToDate(result)).toBe(true);
+  });
+
+  it('un 404 se reporta como not_found y NO como «al día»', async () => {
+    stubFetch(async () => jsonResponse({ message: 'Not Found' }, false, 404));
+
+    const result = await checkForUpdates(REPO, 'linux');
+    expect(result.status).toBe('not_found');
+    expect(result.error).toBeTruthy();
+    expect(result.error).toContain('404');
+    expect(result.hasUpdate).toBe(false);
+    expect(isUpToDate(result)).toBe(false);
+    expect(isCheckFailed(result)).toBe(true);
+  });
+
+  it('un 403 se reporta como rate_limited', async () => {
+    stubFetch(async () => jsonResponse({ message: 'API rate limit exceeded' }, false, 403));
+
+    const result = await checkForUpdates(REPO, 'linux');
+    expect(result.status).toBe('rate_limited');
+    expect(isCheckFailed(result)).toBe(true);
+    expect(isUpToDate(result)).toBe(false);
+  });
+
+  it('un 429 también es rate_limited', async () => {
+    stubFetch(async () => jsonResponse({}, false, 429));
+    expect((await checkForUpdates(REPO, 'linux')).status).toBe('rate_limited');
+  });
+
+  it('un 500 se reporta como network_error', async () => {
+    stubFetch(async () => jsonResponse({}, false, 500));
+
+    const result = await checkForUpdates(REPO, 'linux');
+    expect(result.status).toBe('network_error');
+    expect(result.error).toContain('500');
+  });
+
+  it('un fallo de red se reporta con el mensaje de la excepción', async () => {
+    stubFetch(async () => {
+      throw new Error('offline');
+    });
+
+    const result = await checkForUpdates(REPO, 'linux');
+    expect(result.status).toBe('network_error');
+    expect(result.error).toContain('offline');
+    expect(isUpToDate(result)).toBe(false);
+  });
+
+  it('un repositorio inválido no consulta la red y lo reporta', async () => {
+    const spy = stubFetch(async () => jsonResponse({ tag_name: 'v9.9.9' }));
+
+    const result = await checkForUpdates('no-es-un-repo', 'linux');
+    expect(spy).not.toHaveBeenCalled();
+    expect(result.status).toBe('invalid_repo');
+    expect(isUpToDate(result)).toBe(false);
+  });
+
+  it('un release sin tag ni name se reporta como no_release', async () => {
+    stubFetch(async () => jsonResponse({ name: '' }));
+
+    const result = await checkForUpdates(REPO, 'linux');
+    expect(result.status).toBe('no_release');
+    expect(isUpToDate(result)).toBe(false);
+  });
+
+  it('un borrador o prerelease se reporta como no_release', async () => {
+    stubFetch(async () => jsonResponse({ tag_name: 'v9.9.9', draft: true }));
+    expect((await checkForUpdates(REPO, 'linux')).status).toBe('no_release');
+
+    stubFetch(async () => jsonResponse({ tag_name: 'v9.9.9', prerelease: true }));
+    expect((await checkForUpdates(REPO, 'linux')).status).toBe('no_release');
+  });
+
+  it('isUpToDate/isCheckFailed toleran null y undefined', () => {
+    expect(isUpToDate(null)).toBe(false);
+    expect(isCheckFailed(undefined)).toBe(false);
   });
 });

@@ -6,11 +6,12 @@
  * de SteamGridDB: no hace falta DOM.
  * ========================================================================== */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_SETTINGS } from '../src/services/types';
 import type { Settings } from '../src/services/types';
-import { wizardModalHTML } from '../src/ui/render';
+import { launcherUpdateBodyHTML, setLauncherUpdate, wizardModalHTML } from '../src/ui/render';
+import type { UpdateCheckResult } from '../src/services/updateService';
 
 /** Ajustes base con la clave vacía (copia: `DEFAULT_SETTINGS` es compartido). */
 function settingsWith(patch: Partial<Settings> = {}): Settings {
@@ -81,5 +82,60 @@ describe('wizardModalHTML', () => {
     expect(wizardModalHTML(settingsWith(), 0)).toBe(first);
     expect(wizardModalHTML(settingsWith(), 7)).toBe(first);
     expect(wizardModalHTML(settingsWith(), -1)).toBe(first);
+  });
+});
+
+/** Resultado de comprobación fallido (sin versión superior conocida). */
+function failedCheck(status: UpdateCheckResult['status'], error: string): UpdateCheckResult {
+  return {
+    hasUpdate: false,
+    status,
+    error,
+    currentVersion: '0.1.0',
+    latestVersion: '',
+    releaseName: '',
+    releaseNotes: '',
+    publishedAt: '',
+    downloadUrl: null,
+    assetName: null,
+    htmlUrl: '',
+  };
+}
+
+describe('launcherUpdateBodyHTML (consulta fallida)', () => {
+  afterEach(() => setLauncherUpdate({ state: 'idle' }));
+
+  it('not_found no afirma «Estás al día» y ofrece Reintentar', () => {
+    setLauncherUpdate({ state: 'done', result: failedCheck('not_found', 'Sin releases.') });
+    const html = launcherUpdateBodyHTML();
+
+    expect(html).not.toContain('Estás al día');
+    expect(html).toContain('No se pudo comprobar la actualización');
+    expect(html).toContain('data-act="check-updates"');
+    expect(html).toContain('Reintentar');
+  });
+
+  it('rate_limited muestra el mensaje de cuota y no «Estás al día»', () => {
+    setLauncherUpdate({
+      state: 'done',
+      result: failedCheck('rate_limited', 'GitHub limitó la consulta (403/429). Espera unos minutos.'),
+    });
+    const html = launcherUpdateBodyHTML();
+
+    expect(html).not.toContain('Estás al día');
+    expect(html).toContain('GitHub limitó la consulta');
+    expect(html).toContain('estado: rate_limited');
+  });
+
+  it('network_error muestra el error de conexión', () => {
+    setLauncherUpdate({
+      state: 'done',
+      result: failedCheck('network_error', 'No se pudo conectar con GitHub: Failed to fetch.'),
+    });
+    const html = launcherUpdateBodyHTML();
+
+    expect(html).not.toContain('Estás al día');
+    expect(html).toContain('No se pudo conectar con GitHub');
+    expect(html).toContain('estado: network_error');
   });
 });

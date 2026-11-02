@@ -19,6 +19,22 @@ import { createRequire } from 'node:module';
 /** `require` en un módulo ESM (el paquete es `"type": "module"`). */
 const nodeRequire = createRequire(import.meta.url);
 
+/**
+ * Versión real del launcher, leída de `launcher/package.json` en el momento de
+ * configurar el build.
+ *
+ * Se inyecta en el bundle como `__APP_VERSION__` (ver `define` más abajo) para
+ * que la UI no tenga que hardcodearla: antes `Sidebar.ts` decía `1.0.0` y
+ * `updateService.ts` decía `0.1.0`, así que la pantalla mentía aunque se
+ * compilara una versión nueva. `createRequire` (no `import … from
+ * './package.json'`) evita depender de import attributes en este fichero, que
+ * esbuild procesa sin empaquetar.
+ */
+const pkg = nodeRequire('./package.json') as { version?: unknown };
+
+/** Versión normalizada (`0.1.8`); `0.0.0` si el manifiesto no la declara. */
+const APP_VERSION = String(pkg.version ?? '').trim() || '0.0.0';
+
 /** Forma mínima del módulo compartido que consume este fichero. */
 interface ApiModule {
   createApiMiddleware: () => (
@@ -59,6 +75,19 @@ function localApiPlugin(): Plugin {
 export default defineConfig({
   root: '.',
   publicDir: 'public',
+
+  /**
+   * Constantes sustituidas en tiempo de build/transform.
+   *
+   * `__APP_VERSION__` sale del `package.json` real, de modo que basta con
+   * `npm version`/editar el manifiesto para que la barra lateral, los Ajustes y
+   * el comprobador de actualizaciones muestren la versión instalada de verdad.
+   * Vitest reutiliza esta configuración, así que los tests también reciben el
+   * valor inyectado (y `updateService` mantiene un fallback si no llegara).
+   */
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
 
   plugins: [localApiPlugin()],
 
