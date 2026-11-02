@@ -349,6 +349,91 @@ function migrateSettings(settings: Settings, storedVersion: unknown): Settings {
   return settings;
 }
 
+/**
+ * ¿El valor tiene forma de `ports.json`?
+ *
+ * Es la comprobación que separa «hay biblioteca» de «hay cualquier cosa»: se
+ * usa al hidratar desde disco para no sustituir el estado local por contenido
+ * inválido. Coincide con la que aplica el backend en `POST /api/library`.
+ */
+export function isLibraryPayload(value: unknown): value is Record<string, unknown> {
+  return isObject(value) && isObject(value['games']);
+}
+
+/**
+ * Sanea un `ports.json` ya parseado (de `localStorage` o de disco).
+ *
+ * Devuelve `null` solo si el valor no es un objeto. Un fichero sin `games` se
+ * acepta como biblioteca vacía (conservando ajustes y arte): así una biblioteca
+ * antigua o parcial nunca se descarta entera.
+ */
+export function parseLibrary(parsed: unknown): LibraryFile | null {
+  if (!isObject(parsed)) return null;
+
+  const games: Record<string, LibraryGame> = {};
+  const rawGames = parsed['games'];
+  if (isObject(rawGames)) {
+    for (const [pid, value] of Object.entries(rawGames)) {
+      if (!pid) continue;
+      games[pid] = sanitizeGame(pid, value);
+    }
+  }
+
+  const storedVersion = parsed['version'];
+  const settings = migrateSettings(sanitizeSettings(parsed['settings']), storedVersion);
+
+  const customArt: Record<string, CustomArtwork> = {};
+  const rawArt = parsed['customArt'];
+  if (isObject(rawArt)) {
+    for (const [pid, value] of Object.entries(rawArt)) {
+      if (!pid) continue;
+      const art = sanitizeCustomArt(value);
+      if (art) customArt[pid] = art;
+    }
+  }
+
+  /* Addons: se respeta lo guardado y, si la biblioteca es anterior a la
+   * sección de plugins (no hay clave `addons`), se arranca sin ninguno. El
+   * disco es la única fuente de verdad: `syncAddons()` rellena la lista con
+   * los `plugin.json` reales al iniciar. Nunca se siembran plugins de
+   * ejemplo. */
+  const rawAddons = parsed['addons'];
+  const addons: Addon[] = Array.isArray(rawAddons)
+    ? rawAddons
+        .map((entry) => sanitizeAddon(entry))
+        .filter((entry): entry is Addon => entry !== null)
+    : [];
+
+  return {
+    version: typeof parsed['version'] === 'number' ? parsed['version'] : LIBRARY_SCHEMA_VERSION,
+    updatedAt: typeof parsed['updatedAt'] === 'string' ? parsed['updatedAt'] : nowIso(),
+    games,
+    settings,
+    customArt,
+    addons,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Sincronización con disco (`~/PortsLauncher/ports.json`)                    */
+/* -------------------------------------------------------------------------- */
+
+/** Endpoint del backend local que lee y persiste la biblioteca en disco. */
+export const LIBRARY_DISK_ENDPOINT = '/api/library';
+
+/** Configuración de la persistencia en disco. */
+export interface DiskSyncConfig {
+  /** Ruta del endpoint (por defecto `LIBRARY_DISK_ENDPOINT`). */
+  endpoint?: string;
+  /** Implementación de `fetch`; los tests inyectan una falsa. */
+  fetchImpl?: typeof fetch;
+}
+
+interface DiskSyncTarget {
+  endpoint: string;
+  send: (payload: string) => Promise<void>;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Eventos                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -374,6 +459,13 @@ export class LibraryService {
   private listeners = new Set<LibraryListener>();
   private storageListenerAttached = false;
 
+  /** Destino de persistencia en disco; `null` mientras no se active. */
+  private diskSync: DiskSyncTarget | null = null;
+  /** Cola serializada de escrituras: coalesce ráfagas y respeta el orden. */
+  private diskQueue: Promise<void> = Promise.resolve();
+  /** Hay cambios locales sin volcar a `ports.json`. */
+  private diskDirty = false;
+
   constructor(storage?: KeyValueStore | null) {
     const detected = storage === undefined ? detectStorage() : storage;
     this.persistent = !!detected;
@@ -384,50 +476,17 @@ export class LibraryService {
 
   /* --------------------------- lectura / escritura ------------------------ */
 
+  /**
+   * Estado persistido en `localStorage` (caché local).
+   *
+   * El fichero `~/PortsLauncher/ports.json` manda sobre esta caché: `init()` lo
+   * lee con `GET /api/library` y llama a `hydrateFromDisk()` antes de pintar.
+   */
   private read(): LibraryFile {
     const raw = this.store.getItem(LIBRARY_STORAGE_KEY);
     if (!raw) return emptyLibrary();
     try {
-      const parsed: unknown = JSON.parse(raw);
-      if (!isObject(parsed)) return emptyLibrary();
-      const games: Record<string, LibraryGame> = {};
-      const rawGames = parsed['games'];
-      if (isObject(rawGames)) {
-        for (const [pid, value] of Object.entries(rawGames)) {
-          if (!pid) continue;
-          games[pid] = sanitizeGame(pid, value);
-        }
-      }
-      const storedVersion = parsed['version'];
-      const settings = migrateSettings(sanitizeSettings(parsed['settings']), storedVersion);
-      const customArt: Record<string, CustomArtwork> = {};
-      const rawArt = parsed['customArt'];
-      if (isObject(rawArt)) {
-        for (const [pid, value] of Object.entries(rawArt)) {
-          if (!pid) continue;
-          const art = sanitizeCustomArt(value);
-          if (art) customArt[pid] = art;
-        }
-      }
-      /* Addons: se respeta lo guardado y, si la biblioteca es anterior a la
-       * sección de plugins (no hay clave `addons`), se arranca sin ninguno. El
-       * disco es la única fuente de verdad: `syncAddons()` rellena la lista con
-       * los `plugin.json` reales al iniciar. Nunca se siembran plugins de
-       * ejemplo. */
-      const rawAddons = parsed['addons'];
-      const addons: Addon[] = Array.isArray(rawAddons)
-        ? rawAddons
-            .map((entry) => sanitizeAddon(entry))
-            .filter((entry): entry is Addon => entry !== null)
-        : [];
-      return {
-        version: typeof parsed['version'] === 'number' ? parsed['version'] : LIBRARY_SCHEMA_VERSION,
-        updatedAt: typeof parsed['updatedAt'] === 'string' ? parsed['updatedAt'] : nowIso(),
-        games,
-        settings,
-        customArt,
-        addons,
-      };
+      return parseLibrary(JSON.parse(raw)) ?? emptyLibrary();
     } catch {
       // JSON corrupto: no perdemos la sesión, arrancamos limpio.
       return emptyLibrary();
@@ -443,6 +502,8 @@ export class LibraryService {
       // Cuota llena o almacén no disponible: seguimos en memoria.
       this.persistent = false;
     }
+    /* Cada escritura viaja al fichero de disco: `localStorage` es solo caché. */
+    this.scheduleDiskPush();
     this.emit({ type: event, pid, file: this.file });
   }
 
@@ -479,6 +540,149 @@ export class LibraryService {
       this.storageListenerAttached = true;
     } catch {
       // Sin soporte de eventos: la sincronización multi-pestaña es opcional.
+    }
+  }
+
+  /* -------------------------- persistencia en disco ------------------------ */
+
+  /**
+   * Activa el volcado a `~/PortsLauncher/ports.json` vía `POST /api/library`.
+   *
+   * Se llama desde `init()` **después** de intentar hidratar desde disco. A
+   * partir de ahí, cada `write()` programa una escritura; las ráfagas se
+   * coalescen (una instalación emite decenas de eventos de progreso y no tiene
+   * sentido reescribir el fichero en cada uno).
+   *
+   * Si no hay `fetch` disponible (entorno sin DOM y sin inyección) la llamada es
+   * un no-op: la biblioteca sigue funcionando en `localStorage`.
+   */
+  enableDiskSync(config: DiskSyncConfig = {}): void {
+    const endpoint = config.endpoint ?? LIBRARY_DISK_ENDPOINT;
+    let fetchFn: typeof fetch | null = config.fetchImpl ?? null;
+    if (!fetchFn) {
+      const nativeFetch = (globalThis as { fetch?: typeof fetch }).fetch;
+      if (typeof nativeFetch === 'function') {
+        /* `fetch` desacoplado del objeto global lanza «Illegal invocation» en
+         * algunos navegadores: se envuelve para conservar el `this`. */
+        fetchFn = (input, init) => nativeFetch(input, init);
+      }
+    }
+    if (!fetchFn) {
+      this.diskSync = null;
+      return;
+    }
+
+    this.diskSync = {
+      endpoint,
+      send: async (payload: string) => {
+        const response = await fetchFn(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: payload,
+        });
+        if (!response.ok) throw new Error(`POST ${endpoint} respondió ${response.status}`);
+      },
+    };
+
+    /* El estado actual aún no está en disco: se vuelca de inmediato. */
+    this.scheduleDiskPush();
+  }
+
+  /**
+   * Sustituye el estado en memoria por la biblioteca leída de disco.
+   *
+   * `GET /api/library` entrega `{ library }` o el documento plano; ambas formas
+   * valen. Solo se adopta si tiene forma de `ports.json` (objeto con `games`):
+   * así un fichero corrupto, un `[]` o un `null` dejan intacto lo que hubiera.
+   *
+   * Lo hidratado se copia también a `localStorage` para que un arranque
+   * posterior sin backend no vuelva a un estado viejo.
+   *
+   * @returns `true` si el estado se sustituyó.
+   */
+  hydrateFromDisk(raw: unknown): boolean {
+    let parsed: unknown = raw;
+    if (typeof raw === 'string') {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return false;
+      }
+    }
+    if (!isLibraryPayload(parsed)) return false;
+
+    const file = parseLibrary(parsed);
+    if (!file) return false;
+
+    this.file = file;
+    try {
+      this.store.setItem(LIBRARY_STORAGE_KEY, JSON.stringify(this.file));
+      this.persistent = true;
+    } catch {
+      /* Sin sitio en `localStorage`: la verdad sigue en disco. */
+      this.persistent = false;
+    }
+    this.emit({ type: 'hydrate', file: this.file });
+    return true;
+  }
+
+  /** Desactiva el volcado a disco (los tests y el modo sin backend lo usan). */
+  disableDiskSync(): void {
+    this.diskSync = null;
+    this.diskDirty = false;
+  }
+
+  isDiskSyncEnabled(): boolean {
+    return this.diskSync !== null;
+  }
+
+  /** Fuerza el volcado del estado actual a disco. */
+  pushToDisk(): void {
+    this.scheduleDiskPush();
+  }
+
+  /**
+   * Espera a que la cola de escrituras se vacíe.
+   *
+   * Útil para tests y para cerrar la app con la seguridad de que `ports.json`
+   * ya refleja el último cambio. No lanza: el fallo de red ya se ignora dentro
+   * del bucle (el estado sigue a salvo en `localStorage`).
+   */
+  async flushDiskSync(): Promise<void> {
+    for (let round = 0; round < 5; round += 1) {
+      await this.diskQueue;
+      if (!this.diskDirty) return;
+    }
+  }
+
+  private scheduleDiskPush(): void {
+    if (!this.diskSync) return;
+    this.diskDirty = true;
+    this.diskQueue = this.diskQueue
+      .then(() => this.drainDiskPush())
+      .catch(() => {
+        /* Un fallo inesperado de la cola no debe romper la siguiente escritura. */
+      });
+  }
+
+  /**
+   * Bucle de volcado: reenvía siempre el estado más reciente.
+   *
+   * Si durante el `await` llega otra escritura, `diskDirty` vuelve a `true` y el
+   * bucle repite con los datos nuevos, de modo que se envía como mucho una
+   * petición por vuelta y nunca una versión obsoleta al final.
+   */
+  private async drainDiskPush(): Promise<void> {
+    while (this.diskDirty && this.diskSync) {
+      this.diskDirty = false;
+      const target = this.diskSync;
+      const payload = JSON.stringify(this.file);
+      try {
+        await target.send(payload);
+      } catch {
+        /* Backend ausente (build sin API) o error de escritura: el estado sigue
+         * en `localStorage` y el siguiente `write()` reintenta. */
+      }
     }
   }
 
@@ -792,6 +996,9 @@ export class LibraryService {
     } catch {
       // Ignorado: el estado en memoria ya está limpio.
     }
+    /* El vaciado también viaja a disco: si no, el siguiente arranque volvería a
+     * hidratar la biblioteca anterior desde `ports.json`. */
+    this.scheduleDiskPush();
     this.emit({ type: 'reset', file: this.file });
   }
 
@@ -816,6 +1023,8 @@ export class LibraryService {
       return false;
     }
     this.reload();
+    /* Lo importado es la nueva verdad: se persiste en `ports.json`. */
+    this.scheduleDiskPush();
     return true;
   }
 }

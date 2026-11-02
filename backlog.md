@@ -42,3 +42,24 @@
 - **Criterios de Aceptación:**
   1. `grep -i -E "quiver|gamewave" README.md` devuelve 0 resultados.
   2. La redacción y tablas mantienen coherencia técnica.
+
+## HU-07: Addon Vimm's Vault para Provisión de ROMs (Opción A Asistida)
+- **Objetivo:** Construir desde cero el addon `vimm-vault` en `~/PortsLauncher/plugins/vimm-vault/` conforme a `docs/PLUGINS.md`. Debe permitir buscar ROMs exactas en Vimm (por nombre, región como USA y versión como 1.0) y coordinar el aprovisionamiento hacia el directorio del port correspondiente.
+- **Capa:** Addon / Plugins (`~/PortsLauncher/plugins/vimm-vault/`).
+- **Criterios de Aceptación:**
+  1. `plugin.json` estructurado con `$schema`, `type: "asset-provider"` y capacidades `["search", "provision"]`.
+  2. `python3 main.py check` responde JSON con estado operativo sin dependencias externas complejas.
+  3. `python3 main.py search "<titulo>" --platform <plataforma>` devuelve JSON estructurado con títulos, versiones (ej. 1.0), regiones (USA, Europa, Japón) y Vault IDs.
+  4. Soporta filtrado de versión y región exacta.
+  5. `provision` coordina la apertura en navegador para resolución de Turnstile y monitoreo/colocación en `--output`.
+  6. Suite de pruebas ejecutada con 5-10 casos de test reales y limpieza total de archivos temporales.
+
+## HU-08: Sincronización Bidireccional de Biblioteca y Persistencia en ports.json
+- **Objetivo:** Persistir la biblioteca real en disco en `~/PortsLauncher/ports.json` de forma bidireccional y elevar la versión del paquete a 0.1.6. Al iniciar, el launcher hidrata la biblioteca leyendo `ports.json` para que los ports existentes y los instalados manualmente aparezcan en la interfaz sin depender únicamente del localStorage.
+- **Capa:** Backend (`launcher/electron/api.cjs`) y Frontend/Servicio (`launcher/src/services/libraryService.ts`, `launcher/src/main.ts`, `launcher/package.json`).
+- **Criterios de Aceptación:**
+  1. `package.json` declara versión `0.1.6`.
+  2. `GET /api/library` lee `~/PortsLauncher/ports.json` y `POST /api/library` guarda cambios.
+  3. Al iniciar, `init()` hidrata `libraryService` desde disco.
+  4. Los ports instalados manualmente en disco con sus PIDs reales se visualizan en la interfaz como instalados y listos.
+

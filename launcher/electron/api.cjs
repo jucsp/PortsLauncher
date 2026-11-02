@@ -12,6 +12,8 @@
  *   POST /api/report-error               → escribe un reporte técnico en `~/PortsLauncher/logs`.
  *   POST /api/open-path                  → abre un reporte `.log` o la carpeta de plugins en el SO.
  *   POST /api/launcher/self-update       → guarda el instalador de una versión nueva en ~/Downloads.
+ *   GET  /api/library                    → lee la biblioteca de `~/PortsLauncher/ports.json`.
+ *   POST /api/library                    → guarda la biblioteca en `~/PortsLauncher/ports.json`.
  *   GET  /api/steamgrid/<api>            → proxy con la clave del usuario o del servidor.
  *
  * Es CommonJS a propósito: Electron lo carga con `require()` y Vite lo hace
@@ -66,14 +68,21 @@ function sendJSON(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-/** Lee y parsea el cuerpo JSON de la petición (máx. 64 KiB). */
-function readJSON(req) {
+/**
+ * Lee y parsea el cuerpo JSON de la petición.
+ *
+ * El tope por defecto son 64 KiB (suficiente para cualquier cuerpo de control).
+ * `maxBytes` permite subirlo en las rutas que reciben documentos completos: la
+ * biblioteca (`ports.json`) crece con cada port instalado y con 64 KiB se
+ * rechazaría una biblioteca grande destruyendo la petición a mitad de envío.
+ */
+function readJSON(req, maxBytes = 65536) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > 65536) {
+      if (size > maxBytes) {
         reject(new Error('Cuerpo demasiado grande.'));
         req.destroy();
         return;
@@ -934,6 +943,161 @@ function ensureDir(dir) {
   return dir;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Biblioteca del usuario: `~/PortsLauncher/ports.json`                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Fichero de biblioteca del usuario: `~/PortsLauncher/ports.json`.
+ *
+ * Es la fuente de verdad de la biblioteca (qué ports hay instalados, su ROM,
+ * el arte personalizado y los ajustes). El frontend lo lee al arrancar con
+ * `GET /api/library` y lo reescribe con `POST /api/library` en cada cambio; el
+ * `localStorage` queda como caché para cuando el backend no está disponible
+ * (por ejemplo un `dist` servido sin la API).
+ */
+const LIBRARY_FILE = path.join(LAUNCHER_HOME, 'ports.json');
+
+/** Tope del cuerpo de `POST /api/library` (una biblioteca puede ser grande). */
+const LIBRARY_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Forma mínima de un `ports.json` aceptable: objeto con `games` como objeto.
+ *
+ * El saneado fino (estados válidos, ajustes dentro de rango, arte correcto) lo
+ * hace `libraryService` en el renderer; aquí solo se rechaza lo que no es una
+ * biblioteca, para no escribir basura encima de la del usuario.
+ */
+function isLibraryPayload(value) {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    !!value.games &&
+    typeof value.games === 'object' &&
+    !Array.isArray(value.games)
+  );
+}
+
+/**
+ * Lee `~/PortsLauncher/ports.json`.
+ *
+ * @returns La biblioteca ya parseada, o `null` si el fichero no existe, está
+ *          vacío, no es JSON o no tiene forma de biblioteca.
+ */
+function readLibraryFile() {
+  let raw;
+  try {
+    raw = fs.readFileSync(LIBRARY_FILE, 'utf8');
+  } catch {
+    return null;
+  }
+  if (!raw || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return isLibraryPayload(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Escribe la biblioteca de forma atómica (`tmp` + `rename`).
+ *
+ * Un `writeFileSync` directo sobre `ports.json` deja el fichero truncado si el
+ * proceso muere a mitad: el arranque siguiente leería una biblioteca corrupta y
+ * la daría por perdida. Con `rename` el reemplazo es atómico en el mismo
+ * sistema de ficheros.
+ *
+ * @returns Número de bytes escritos.
+ */
+function writeLibraryFile(library) {
+  ensureDir(LAUNCHER_HOME);
+  const body = JSON.stringify(library, null, 2);
+  const tmp = path.join(
+    LAUNCHER_HOME,
+    `.ports.json.${process.pid}.${Date.now().toString(36)}.tmp`
+  );
+  try {
+    fs.writeFileSync(tmp, body, 'utf8');
+    fs.renameSync(tmp, LIBRARY_FILE);
+  } catch (error) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* El temporal pudo no llegar a crearse: nada que limpiar. */
+    }
+    throw error;
+  }
+  return Buffer.byteLength(body, 'utf8');
+}
+
+/**
+ * `GET /api/library`  → biblioteca leída de `~/PortsLauncher/ports.json`.
+ * `POST /api/library` → guarda la biblioteca recibida en ese mismo fichero.
+ *
+ * El GET responde 200 siempre que la ruta sea válida, incluso sin fichero
+ * (`exists: false`, `library: null`): el frontend distingue «no hay nada
+ * todavía» de «el backend falló» por el código de estado, no por el cuerpo.
+ *
+ * El POST acepta el documento plano o envuelto en `{ library: … }`.
+ */
+async function handleLibrary(req, res) {
+  if (req.method === 'GET') {
+    try {
+      const library = readLibraryFile();
+      sendJSON(res, 200, {
+        ok: true,
+        path: LIBRARY_FILE,
+        exists: library !== null,
+        library,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      sendJSON(res, 500, { ok: false, error: detail });
+    }
+    return;
+  }
+
+  if (req.method === 'POST') {
+    let body;
+    try {
+      body = await readJSON(req, LIBRARY_MAX_BYTES);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      sendJSON(res, 400, { ok: false, error: detail });
+      return;
+    }
+
+    /* Se admite el documento plano y la forma envuelta para no atar el
+     * contrato del frontend a una sola representación. */
+    const library =
+      body && typeof body.library === 'object' && body.library && !Array.isArray(body.library)
+        ? body.library
+        : body;
+
+    if (!isLibraryPayload(library)) {
+      sendJSON(res, 400, {
+        ok: false,
+        error: 'ports.json no válido: se esperaba un objeto con `games`.',
+      });
+      return;
+    }
+
+    try {
+      const bytes = writeLibraryFile(library);
+      sendJSON(res, 200, { ok: true, path: LIBRARY_FILE, bytes });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error('[library] no se pudo escribir ports.json:', detail);
+      sendJSON(res, 500, { ok: false, error: detail });
+    }
+    return;
+  }
+
+  sendJSON(res, 405, { ok: false, error: 'Usa GET o POST.' });
+}
+
 /** Versión del launcher (la del `package.json` del paquete, cacheada). */
 let launcherVersionCache = null;
 
@@ -1617,6 +1781,10 @@ async function handleApiRequest(req, res) {
     await handleLaunch(req, res);
     return true;
   }
+  if (url === '/api/library') {
+    await handleLibrary(req, res);
+    return true;
+  }
   if (url === '/api/plugins') {
     await handlePlugins(req, res);
     return true;
@@ -1651,6 +1819,7 @@ function createApiMiddleware() {
       url === '/api/report-error' ||
       url === '/api/open-path' ||
       url === '/api/launch' ||
+      url === '/api/library' ||
       url === '/api/plugins' ||
       url === '/api/plugins/dir' ||
       url === '/api/health' ||
@@ -1673,6 +1842,7 @@ function createApiMiddleware() {
 module.exports = {
   LAUNCHER_HOME,
   LEGACY_PLUGINS_DIR,
+  LIBRARY_FILE,
   LOGS_DIR,
   PLUGINS_DIR,
   PORTS_DIR,
@@ -1683,6 +1853,7 @@ module.exports = {
   findMainExecutable,
   handleApiRequest,
   handleLaunch,
+  handleLibrary,
   handleOpenPath,
   handlePlugins,
   handlePluginsDir,

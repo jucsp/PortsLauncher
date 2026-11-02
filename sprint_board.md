@@ -8,3 +8,7 @@
 | HU-04 | Manejo de Errores, Reporte Técnico y Notificación | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.4 |
 | HU-05 | Sistema de Plugins Real y Sin Mockups | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.5 |
 | HU-06 | Saneamiento de Documentación README | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.6 |
+| HU-07 | Addon Vimm's Vault para Provisión de ROMs | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.7 |
+| HU-08 | Sincronización Bidireccional de Biblioteca y Persistencia en ports.json | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.6 |
+
+

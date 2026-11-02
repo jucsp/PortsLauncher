@@ -39,3 +39,6 @@ tools/
 *.env
 .env*
 data/cache/
+data/*.log
+dist-electron/
+launcher/dist-electron/

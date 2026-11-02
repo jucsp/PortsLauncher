@@ -33,7 +33,7 @@ RED   := \033[31m
 RST   := \033[0m
 
 .PHONY: help setup extract-fixtures test-fixtures test-builder test-launcher test \
-        build-index build-launcher build dev preview
+        build-index build-launcher build sync-catalog dev preview
 
 # ----------------------------------------------------------------------------
 #  Ayuda
@@ -147,6 +147,14 @@ build: build-index build-launcher ## Construye el índice y el launcher (build c
 	@printf '   índice : %s $(DIM)(%s bytes)$(RST)\n' '$(PUBLIC_INDEX)' "$$(wc -c < '$(PUBLIC_INDEX)' | tr -d ' ')"
 	@printf '   bundle : %s\n\n' '$(LAUNCHER_DIR)/dist'
 	@printf ' $(DIM)sirve el resultado con:$(RST) make preview\n\n'
+
+# ----------------------------------------------------------------------------
+#  Sincronización de catálogo
+# ----------------------------------------------------------------------------
+sync-catalog: ## Sincroniza el catálogo en un comando (builder + publicación del índice)
+	@printf '\n $(CYAN)$(BOLD)▶ sync-catalog$(RST) $(DIM)tools/sync_catalog.sh$(RST)\n\n'
+	@bash tools/sync_catalog.sh $(ARGS)
+	@printf '\n $(GREEN)✔$(RST) catálogo sincronizado $(DIM)(log: $(DATA_DIR)/sync.log)$(RST)\n\n'
 
 # ----------------------------------------------------------------------------
 #  Desarrollo

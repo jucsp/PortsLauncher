@@ -1524,6 +1524,60 @@ async function syncPluginsFromDisk(): Promise<void> {
   if (JSON.stringify(addons) !== before) draw();
 }
 
+/* -------------------------------------------------------------------------- */
+/* Biblioteca persistida en disco (`~/PortsLauncher/ports.json`)              */
+/* -------------------------------------------------------------------------- */
+
+/** Respuesta de `GET /api/library`. */
+interface LibraryResponse {
+  ok?: boolean;
+  path?: string;
+  exists?: boolean;
+  library?: unknown;
+}
+
+/**
+ * Hidrata la biblioteca desde `~/PortsLauncher/ports.json`.
+ *
+ * El fichero en disco es la fuente de verdad: si existe y es válido, sustituye
+ * al estado guardado en `localStorage` (que queda como caché para los arranques
+ * sin backend). Si no existe, o el backend no responde, se conserva lo local.
+ *
+ * En ambos casos se activa la persistencia en disco a partir de ese momento, de
+ * modo que cualquier escritura posterior (instalar, ROM, arte, ajustes, addons)
+ * se refleja en `ports.json`. Sin fichero previo, el estado actual se vuelca de
+ * inmediato: el fichero existe desde el primer arranque.
+ *
+ * Nunca lanza: un backend caído no debe impedir que el launcher arranque.
+ *
+ * @returns `true` si la biblioteca se hidrató desde el fichero.
+ */
+async function hydrateLibraryFromDisk(): Promise<boolean> {
+  let payload: LibraryResponse | null = null;
+  try {
+    const res = await fetch('/api/library', {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    if (res.ok) payload = (await res.json()) as LibraryResponse | null;
+  } catch {
+    /* Servidor local caído (o build servido sin la API): se sigue con la caché. */
+  }
+
+  /* Se aceptan las dos formas: `{ library }` y el documento plano. */
+  const raw =
+    payload && payload.ok !== false
+      ? payload.library !== undefined
+        ? payload.library
+        : payload
+      : null;
+  const fromDisk = raw ? libraryService.hydrateFromDisk(raw) : false;
+
+  libraryService.enableDiskSync();
+  if (!fromDisk) libraryService.pushToDisk();
+  return fromDisk;
+}
+
 /**
  * Sonda `/api/steamgrid/__status`: ¿tiene clave el servidor de desarrollo?
  *
@@ -2483,6 +2537,13 @@ async function init(): Promise<void> {
 
   // Cargar índice real y biblioteca
   const catalog = await catalogService.loadCatalog();
+
+  /* El fichero en disco (`~/PortsLauncher/ports.json`) es la fuente de verdad:
+   * se hidrata ANTES de leer el estado para que `libraryService` refleje lo
+   * persistido y no la caché de `localStorage`. Nunca lanza: si el backend no
+   * responde se conserva el estado local. */
+  await hydrateLibraryFromDisk();
+
   const library = libraryService.getState();
 
   const games: Game[] = catalog.ports.map((port: PortItem) => toGame(port, library.games, settings));
