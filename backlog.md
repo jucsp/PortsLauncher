@@ -63,3 +63,12 @@
   3. Al iniciar, `init()` hidrata `libraryService` desde disco.
   4. Los ports instalados manualmente en disco con sus PIDs reales se visualizan en la interfaz como instalados y listos.
 
+## HU-09: Persistencia de Ajustes (SteamGrid API Key, Onboarding) y Progreso de Descarga de Arte
+- **Objetivo:** Persistir `onboardingDone` y la API Key de SteamGridDB de forma permanente en `~/PortsLauncher/ports.json` y en `~/.steamgrid_credentials.env`. Evitar que el asistente inicial vuelva a pedir la clave en cada arranque si ya se completó o si la clave ya existe en disco. Persistir además el progreso del motor de sincronización de carátulas (`autoSyncTried`) y priorizar los ports instalados en la biblioteca.
+- **Capa:** Backend (`launcher/electron/api.cjs`) y Frontend (`launcher/src/main.ts`, `launcher/src/services/libraryService.ts`).
+- **Criterios de Aceptación:**
+  1. `saveState()` sincroniza siempre los ajustes con `libraryService` y disco (`ports.json`).
+  2. `init()` fusiona los ajustes de disco (`onboardingDone`, `steamgridApiKey`, `steamgridAutoSync`) y no vuelve a mostrar el asistente tras completarse.
+  3. La clave se sincroniza y almacena también en `~/.steamgrid_credentials.env` vía `POST /api/steamgrid/__save-key`.
+  4. El progreso de descarga de imágenes persiste los juegos intentados en almacenamiento local y atiende primero los ports instalados de la biblioteca.
+

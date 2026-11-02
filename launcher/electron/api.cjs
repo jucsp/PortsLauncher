@@ -14,6 +14,8 @@
  *   POST /api/launcher/self-update       → guarda el instalador de una versión nueva en ~/Downloads.
  *   GET  /api/library                    → lee la biblioteca de `~/PortsLauncher/ports.json`.
  *   POST /api/library                    → guarda la biblioteca en `~/PortsLauncher/ports.json`.
+ *   GET  /api/steamgrid/__status         → informa de la clave disponible y la devuelve.
+ *   POST /api/steamgrid/__save-key       → guarda la clave en ~/.steamgrid_credentials.env.
  *   GET  /api/steamgrid/<api>            → proxy con la clave del usuario o del servidor.
  *
  * Es CommonJS a propósito: Electron lo carga con `require()` y Vite lo hace
@@ -141,6 +143,96 @@ function headerKey(value) {
   return trimmed ? trimmed : null;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Credenciales: guardado de la clave personal                                */
+/* -------------------------------------------------------------------------- */
+
+/** Tope del cuerpo de `__save-key` (la clave ronda las decenas de bytes). */
+const STEAMGRID_KEY_BODY_LIMIT = 8 * 1024;
+
+/** Caracteres prohibidos en la clave: romperían el `.env` y las cabeceras. */
+const UNSAFE_KEY_CHARS = /[\r\n\x00]/;
+
+/**
+ * Escribe `STEAMGRID_API_KEY` en `~/.steamgrid_credentials.env`.
+ *
+ * Conserva el resto del fichero (comentarios y otras variables) y sustituye
+ * solo las líneas de la clave, de modo que el fichero sigue siendo un `.env`
+ * válido para el usuario. Una clave vacía **borra** la línea: así se puede
+ * limpiar la credencial desde Ajustes.
+ *
+ * La escritura es atómica (temporal + `rename`) para que un corte a mitad no
+ * deje el `.env` truncado, y el fichero queda con permisos `0600` porque es un
+ * secreto. Devuelve la clave realmente almacenada (`''` si se borró).
+ */
+function writeSteamgridKey(key) {
+  const value = String(key || '').trim();
+  if (UNSAFE_KEY_CHARS.test(value)) {
+    throw new Error('La clave contiene caracteres no válidos.');
+  }
+
+  let lines = [];
+  try {
+    lines = fs.readFileSync(STEAMGRID_CREDENTIALS, 'utf8').split(/\r?\n/);
+  } catch {
+    /* Sin fichero previo: se crea desde cero. */
+  }
+
+  const kept = lines.filter((line) => !/^\s*(?:export\s+)?STEAMGRID_API_KEY\s*=/.test(line));
+  if (value) kept.push(`${STEAMGRID_KEY_NAME}=${value}`);
+  const body = `${kept.join('\n').replace(/\n+$/, '')}\n`;
+
+  fs.mkdirSync(path.dirname(STEAMGRID_CREDENTIALS), { recursive: true });
+  const tmp = `${STEAMGRID_CREDENTIALS}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, body, { mode: 0o600 });
+  fs.renameSync(tmp, STEAMGRID_CREDENTIALS);
+  try {
+    fs.chmodSync(STEAMGRID_CREDENTIALS, 0o600);
+  } catch {
+    /* Windows no entiende permisos POSIX: se ignora. */
+  }
+  return value;
+}
+
+/**
+ * `POST /api/steamgrid/__save-key` — persiste la clave del usuario en disco.
+ *
+ * El frontend lo llama al editar la clave en Ajustes y al terminar el
+ * asistente, para que la credencial sobreviva en `~/.steamgrid_credentials.env`
+ * y no dependa solo de `ports.json`. Responde `{ ok, path, configured }`; el
+ * `key` nunca se devuelve (no hace falta y evita filtrarlo en un log).
+ */
+async function handleSteamgridSaveKey(req, res) {
+  let body;
+  try {
+    body = await readJSON(req, STEAMGRID_KEY_BODY_LIMIT);
+  } catch (error) {
+    sendJSON(res, 400, {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+
+  const raw = body && typeof body === 'object' ? body.key : '';
+  if (raw !== undefined && raw !== null && typeof raw !== 'string') {
+    sendJSON(res, 400, { ok: false, error: '`key` debe ser una cadena.' });
+    return;
+  }
+
+  try {
+    const stored = writeSteamgridKey(typeof raw === 'string' ? raw : '');
+    sendJSON(res, 200, {
+      ok: true,
+      path: STEAMGRID_CREDENTIALS,
+      configured: !!stored,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    sendJSON(res, 500, { ok: false, error: `No se pudo guardar la clave: ${detail}` });
+  }
+}
+
 /**
  * Reenvía `/api/steamgrid/<endpoint>[?query]` a
  * `https://www.steamgriddb.com/api/v2/<endpoint>[?query]` con la cabecera
@@ -164,13 +256,28 @@ async function steamgridProxy(req, res) {
   const header = headerKey(req.headers['x-steamgrid-key']);
   const serverKey = steamgridKey();
 
-  /* Sonda de configuración: no necesita clave, solo informa de si existe. */
+  /* Sonda de configuración: no necesita clave, solo informa de si existe.
+   * Devuelve también la clave (`key`) para que el frontend pueda
+   * autodetectarla y rellenar los ajustes cuando aún no la tenía guardada. */
   if (endpoint === '__status') {
     sendJSON(res, 200, {
       success: true,
       configured: !!serverKey,
       client: !!header,
+      key: serverKey || '',
     });
+    return;
+  }
+
+  /* Persistencia de la clave personal en `~/.steamgrid_credentials.env`.
+   * Va antes del 503 para que se pueda guardar la clave cuando todavía no hay
+   * ninguna configurada (que es justo el caso en el que se llama). */
+  if (endpoint === '__save-key') {
+    if (req.method !== 'POST') {
+      sendJSON(res, 405, { ok: false, error: 'Usa POST para guardar la clave.' });
+      return;
+    }
+    await handleSteamgridSaveKey(req, res);
     return;
   }
 
@@ -1859,6 +1966,7 @@ module.exports = {
   handlePluginsDir,
   handleReportError,
   handleSelfUpdate,
+  handleSteamgridSaveKey,
   installPort,
   listPlugins,
   looksExecutable,

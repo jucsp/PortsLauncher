@@ -1375,6 +1375,9 @@ function openWizard(): void {
 function finishWizard(): void {
   S.settings.onboardingDone = true;
   saveState();
+  /* La clave que se haya escrito en el paso 2 del asistente se guarda también
+   * en `~/.steamgrid_credentials.env` (sin esperar al rebote del teclado). */
+  scheduleSaveSteamgridKey(S.settings.steamgridApiKey ?? '', true);
   const root = $('#modal-root');
   if (root) root.innerHTML = '';
   document.body.style.overflow = '';
@@ -1579,11 +1582,78 @@ async function hydrateLibraryFromDisk(): Promise<boolean> {
 }
 
 /**
+ * Espera antes de guardar la clave en disco mientras se escribe.
+ *
+ * El campo se edita tecla a tecla: sin este retardo cada pulsación escribiría
+ * `~/.steamgrid_credentials.env`.
+ */
+const STEAMGRID_KEY_SAVE_DEBOUNCE_MS = 700;
+
+/** `setTimeout` del guardado pendiente de la clave, o `null`. */
+let steamgridKeySaveTimer: number | null = null;
+
+/**
+ * `POST /api/steamgrid/__save-key` — guarda la clave en
+ * `~/.steamgrid_credentials.env`.
+ *
+ * Es un extra sobre `ports.json`: la clave viaja igual en los ajustes de la
+ * biblioteca, pero el fichero de credenciales es lo que lee el proxy cuando el
+ * frontend no manda la cabecera `x-steamgrid-key`, y así sobrevive incluso si
+ * se restablece la biblioteca. Nunca lanza: en la build estática (sin backend)
+ * el ajuste se queda solo en `ports.json`.
+ */
+async function persistSteamgridKey(key: string): Promise<void> {
+  try {
+    const res = await fetch('/api/steamgrid/__save-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ key }),
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      const message =
+        detail && typeof detail === 'object' && typeof (detail as { error?: unknown }).error === 'string'
+          ? (detail as { error: string }).error
+          : `HTTP ${res.status}`;
+      console.warn('[PortsLauncher] No se pudo guardar la clave de SteamGridDB:', message);
+    }
+  } catch (error) {
+    /* Sin backend local: la clave ya está en los ajustes de `ports.json`. */
+    console.warn('[PortsLauncher] No se pudo guardar la clave de SteamGridDB:', error);
+  }
+}
+
+/**
+ * Programa el guardado de la clave.
+ *
+ * @param immediate `true` en acciones explícitas (terminar el asistente,
+ *                  limpiar la clave) para no esperar al rebote del teclado.
+ */
+function scheduleSaveSteamgridKey(key: string, immediate = false): void {
+  if (steamgridKeySaveTimer !== null) {
+    clearTimeout(steamgridKeySaveTimer);
+    steamgridKeySaveTimer = null;
+  }
+  const value = key.trim();
+  if (immediate) {
+    void persistSteamgridKey(value);
+    return;
+  }
+  steamgridKeySaveTimer = window.setTimeout(() => {
+    steamgridKeySaveTimer = null;
+    void persistSteamgridKey(value);
+  }, STEAMGRID_KEY_SAVE_DEBOUNCE_MS);
+}
+
+/**
  * Sonda `/api/steamgrid/__status`: ¿tiene clave el servidor de desarrollo?
  *
  * No llama a la API de SteamGridDB; solo informa de si existe
  * `STEAMGRID_API_KEY` en el entorno del proceso o en
- * `~/.steamgrid_credentials.env`. Se lanza sin bloquear el arranque.
+ * `~/.steamgrid_credentials.env`, y devuelve la clave (`key`) para que se pueda
+ * autodetectar: si el usuario aún no tiene ninguna en los ajustes, se
+ * prerrellena y se persiste, de modo que deja de pedírsela en cada arranque.
+ * Se lanza sin bloquear el arranque.
  */
 async function probeSteamgridStatus(): Promise<void> {
   try {
@@ -1591,8 +1661,16 @@ async function probeSteamgridStatus(): Promise<void> {
       headers: { Accept: 'application/json' },
     });
     if (!response.ok) return;
-    const payload = (await response.json()) as { configured?: boolean } | null;
+    const payload = (await response.json()) as { configured?: boolean; key?: string } | null;
     setSteamgridServerReady(!!payload?.configured);
+
+    /* Autodetección: solo si el usuario no tiene ya una clave propia. */
+    const detected = typeof payload?.key === 'string' ? payload.key.trim() : '';
+    if (detected && !(S.settings.steamgridApiKey ?? '').trim()) {
+      S.settings.steamgridApiKey = detected;
+      saveState();
+    }
+
     /* La sección de Ajustes pinta el estado: repintar si está a la vista. */
     if (R.name === 'settings') renderSettings();
   } catch {
@@ -1660,13 +1738,78 @@ let autoSyncTimer: number | null = null;
 let autoSyncProgress = { completed: 0, total: 0, current: '', status: '' };
 
 /**
- * Juegos ya intentados en este recorrido (con o sin arte encontrado).
+ * Clave de `localStorage` donde se recuerdan los juegos ya intentados.
+ *
+ * El registro vivía solo en memoria: al reiniciar el launcher se perdía y el
+ * motor volvía a empezar por el primer juego del catálogo, repitiendo
+ * indefinidamente los mismos títulos (incluidos los que SteamGridDB no
+ * conoce). Persistirlo hace que el progreso de descarga de arte sobreviva a
+ * cada arranque.
+ */
+const AUTO_SYNC_TRIED_STORAGE_KEY = 'portshub-autosync-tried';
+
+/** Tope de ids guardados (evita crecer sin límite con catálogos enormes). */
+const AUTO_SYNC_TRIED_LIMIT = 5000;
+
+/**
+ * Lee los juegos ya intentados de `localStorage`.
+ *
+ * Acepta tanto un array de `pid` como `{ ids: [...] }`; cualquier entrada que
+ * no sea una cadena con contenido se descarta (un `localStorage` manipulado no
+ * debe romper el motor).
+ */
+function loadAutoSyncTried(): Set<string> {
+  const out = new Set<string>();
+  try {
+    const raw = localStorage.getItem(AUTO_SYNC_TRIED_STORAGE_KEY);
+    if (!raw) return out;
+    const parsed: unknown = JSON.parse(raw);
+    const list = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray((parsed as { ids?: unknown } | null)?.ids)
+        ? ((parsed as { ids: unknown[] }).ids as unknown[])
+        : [];
+    for (const value of list) {
+      if (typeof value === 'string' && value.trim()) out.add(value);
+    }
+  } catch {
+    /* Sin almacenamiento o JSON corrupto: se arranca con el registro vacío. */
+  }
+  return out;
+}
+
+/**
+ * Juegos ya intentados (con o sin arte encontrado).
  *
  * Sin este registro, un juego que SteamGridDB no conoce se reintentaría para
- * siempre y el bucle nunca avanzaría al siguiente. Se vacía en cada arranque
- * del recorrido, así que reactivar el interruptor reintenta los fallidos.
+ * siempre y el bucle nunca avanzaría al siguiente. Se siembra de disco para
+ * que reiniciar el launcher no reinicie la descarga desde cero.
  */
-const autoSyncTried = new Set<string>();
+const autoSyncTried = loadAutoSyncTried();
+
+/** Volca el registro en `localStorage` (recortando por la cola si es enorme). */
+function persistAutoSyncTried(): void {
+  try {
+    const ids = [...autoSyncTried];
+    const trimmed =
+      ids.length > AUTO_SYNC_TRIED_LIMIT ? ids.slice(ids.length - AUTO_SYNC_TRIED_LIMIT) : ids;
+    localStorage.setItem(AUTO_SYNC_TRIED_STORAGE_KEY, JSON.stringify(trimmed));
+  } catch {
+    /* Cuota llena: el registro sigue en memoria durante esta sesión. */
+  }
+}
+
+/** Marca un juego como intentado y lo persiste. */
+function markAutoSyncTried(pid: string): void {
+  autoSyncTried.add(pid);
+  persistAutoSyncTried();
+}
+
+/** Retira un juego del registro (reintento tras un 429) y lo persiste. */
+function unmarkAutoSyncTried(pid: string): void {
+  autoSyncTried.delete(pid);
+  persistAutoSyncTried();
+}
 
 /** Título con el que buscar en SteamGridDB (sin subtítulos ni paréntesis). */
 function baseGameTitle(game: Game): string {
@@ -1753,18 +1896,28 @@ function scheduleAutoSync(delay: number): void {
   }, delay);
 }
 
-/** Arranca (o reinicia) un recorrido completo del catálogo. */
+/**
+ * Arranca (o reanuda) un recorrido del catálogo.
+ *
+ * **No** vacía `autoSyncTried`: el registro vive en `localStorage` y es lo que
+ * hace que apagar y encender el launcher (o el interruptor) no vuelva a
+ * descargar el mismo arte ni reintente en bucle los juegos que SteamGridDB no
+ * reconoce. El progreso mostrado se deriva del estado real (arte ya guardado +
+ * ids ya intentados), no de un contador que empezaba en 0.
+ */
 function startAutoSync(): void {
   /* Ya hay un recorrido vivo (p. ej. el del arranque): no se duplica. */
   if (autoSyncRunning) return;
   stopAutoSync();
-  autoSyncTried.clear();
   autoSyncRunning = true;
+  const done = S.games.filter(
+    (game) => !!libraryService.getCustomArt(game.id)?.coverUrl || autoSyncTried.has(game.id)
+  ).length;
   autoSyncProgress = {
-    completed: 0,
+    completed: done,
     total: S.games.length,
     current: '',
-    status: 'Preparando la sincronización…',
+    status: done >= S.games.length ? '✓ Catálogo sincronizado al 100%' : 'Preparando la sincronización…',
   };
   updateSyncProgressUI();
   void runAutoSyncLoop();
@@ -1826,9 +1979,12 @@ async function runAutoSyncLoop(): Promise<void> {
   }
 
   autoSyncRunning = true;
-  const pending = S.games.filter(
-    (game) => !libraryService.getCustomArt(game.id)?.coverUrl && !autoSyncTried.has(game.id)
-  );
+  /* Los ports **instalados** se atienden primero: son los que el usuario ve en
+   * su biblioteca y los que dan valor inmediato a la carátula. `sort` es
+   * estable, así que dentro de cada grupo se conserva el orden del catálogo. */
+  const pending = S.games
+    .filter((game) => !libraryService.getCustomArt(game.id)?.coverUrl && !autoSyncTried.has(game.id))
+    .sort((a, b) => Number(b.inst) - Number(a.inst));
   autoSyncProgress.total = S.games.length;
   autoSyncProgress.completed = S.games.length - pending.length;
 
@@ -1842,7 +1998,7 @@ async function runAutoSyncLoop(): Promise<void> {
   }
 
   const game = pending[0];
-  autoSyncTried.add(game.id);
+  markAutoSyncTried(game.id);
   autoSyncProgress.current = game.t;
   autoSyncProgress.status = `Buscando arte de ${game.t}…`;
   updateSyncProgressUI();
@@ -1857,7 +2013,7 @@ async function runAutoSyncLoop(): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     if (/\b429\b/.test(message)) {
       /* Límite de peticiones: se reintenta el MISMO juego 10 s después. */
-      autoSyncTried.delete(game.id);
+      unmarkAutoSyncTried(game.id);
       autoSyncProgress.status = 'SteamGridDB ha limitado las peticiones: reintentando en 10 s';
       updateSyncProgressUI();
       scheduleAutoSync(AUTO_SYNC_RATE_LIMIT_MS);
@@ -2314,6 +2470,9 @@ document.addEventListener('input', (e) => {
   if (t.dataset.set) {
     (S.settings as any)[t.dataset.set] = t.value;
     saveState();
+    /* La clave de SteamGridDB se guarda además en
+     * `~/.steamgrid_credentials.env` (con rebote: se escribe tecla a tecla). */
+    if (t.dataset.set === 'steamgridApiKey') scheduleSaveSteamgridKey(t.value);
   }
   if (t.dataset.g && L && L.type === 'gear') {
     const game = S.byId.get(L.id);
@@ -2502,6 +2661,25 @@ export function draw(fresh = false): void {
   updateSyncProgressUI();
 }
 
+/**
+ * Última firma de `S.settings` volcada a `libraryService`.
+ *
+ * `saveState()` se llama en cada pulsación de tecla de los ajustes; sin este
+ * registro se reescribiría `ports.json` con el mismo contenido decenas de
+ * veces por segundo.
+ */
+let persistedSettingsSignature = '';
+
+/**
+ * Persiste los ajustes en los dos destinos.
+ *
+ * `localStorage` es la caché rápida del arranque, pero la fuente de verdad es
+ * `~/PortsLauncher/ports.json`: `init()` hidrata desde ahí, así que un ajuste
+ * que solo viva en `localStorage` se pierde en cuanto una escritura de la
+ * biblioteca vuelca su propio `settings` al fichero. Por eso todo cambio de
+ * ajustes viaja también a `libraryService` (`onboardingDone`,
+ * `steamgridApiKey`, `steamgridAutoSync`, vista, carpetas…).
+ */
 function saveState(): void {
   try {
     const data = {
@@ -2510,11 +2688,50 @@ function saveState(): void {
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch {}
+
+  try {
+    const signature = JSON.stringify(S.settings);
+    if (signature === persistedSettingsSignature) return;
+    persistedSettingsSignature = signature;
+    libraryService.updateSettings(S.settings);
+  } catch (error) {
+    /* Cuota llena o servicio sin almacén: la copia de `localStorage` sigue. */
+    console.warn('[PortsLauncher] No se pudieron persistir los ajustes:', error);
+  }
 }
 
 /* -------------------------------------------------------------------------- */
 /* Inicialización de la aplicación                                            */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Fusiona los ajustes del arranque con los hidratados de `ports.json`.
+ *
+ * La copia de `localStorage` aporta apariencia y carpetas, pero hay decisiones
+ * que viven en el fichero de disco y que antes se perdían al arrancar (y por
+ * eso el launcher volvía a pedir la clave en cada inicio):
+ *
+ *   · `onboardingDone`: si el asistente ya se completó, no se repite.
+ *   · `steamgridApiKey`: la clave guardada se respeta sobre la local.
+ *   · `steamgridAutoSync`: la sincronización opt-in se conserva.
+ */
+function mergePersistedSettings(
+  local: Settings,
+  persisted: Settings | null | undefined
+): Settings {
+  const merged: Settings = { ...local };
+  if (!persisted) return merged;
+
+  if (persisted.onboardingDone === true) merged.onboardingDone = true;
+
+  const storedKey =
+    typeof persisted.steamgridApiKey === 'string' ? persisted.steamgridApiKey.trim() : '';
+  if (storedKey) merged.steamgridApiKey = storedKey;
+
+  if (persisted.steamgridAutoSync === true) merged.steamgridAutoSync = true;
+
+  return merged;
+}
 
 async function init(): Promise<void> {
   let settings = { ...DEFAULT_SETTINGS };
@@ -2546,6 +2763,11 @@ async function init(): Promise<void> {
 
   const library = libraryService.getState();
 
+  /* El fichero manda también en los ajustes: si `ports.json` dice que el
+   * asistente ya se completó o trae la clave de SteamGridDB, se respeta aunque
+   * la copia de `localStorage` sea vieja o no exista. */
+  settings = mergePersistedSettings(settings, library.settings);
+
   const games: Game[] = catalog.ports.map((port: PortItem) => toGame(port, library.games, settings));
 
   /* Sin siembra ni estado simulado: el estado instalado proviene únicamente de
@@ -2565,6 +2787,11 @@ async function init(): Promise<void> {
     catalog.generatedAt,
     Array.isArray(library.addons) ? library.addons : S.addons
   );
+
+  /* Los ajustes fusionados se escriben de vuelta: así `ports.json` conserva
+   * `onboardingDone` y la clave aunque vinieran de `localStorage`, y el
+   * siguiente arranque los hidrata sin volver a preguntar nada. */
+  saveState();
 
   window.addEventListener('hashchange', () => {
     if (!hashBusy) route();
