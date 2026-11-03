@@ -167,3 +167,40 @@
   2. Al pulsar 'Actualizar', no se abre el navegador; se inicia la descarga directa con barra de progreso visible.
   3. Al terminar la descarga, se inicia la instalación automática solicitando contraseña de administrador si se requiere.
   4. make test supera el 100% de las pruebas existentes y nuevas.
+
+## HU-17: Normalización de launch y enriquecimiento de romProfile en catalog-builder
+- **Contexto de Negocio:**
+  Al ingestar datos de catálogos comunitarios (como Quiver o Recomp.fyi), campos como `launch.preferredExecutables` a veces se serializaban como cadenas erróneas de Python (ej: `["{'windows': ['...']}"]`) y `romProfile` quedaba con arrays de extensiones vacíos `[]` a pesar de tratarse de consolas con formatos de disco bien conocidos (PS1, N64) o ports de recompilación que exigen versiones específicas de ROM y volcados de BIOS. El catalog builder debe sanitizar la estructura de ejecución y enriquecer automáticamente el perfil de ROM para guiar con precisión al usuario.
+- **Objetivo:**
+  1. En `catalog-builder/adapters/quiver.py`:
+     - Sanitizar `preferredExecutables`: si los elementos son diccionarios o strings que representan diccionarios Python/JSON, desempaquetar y normalizar a nombres de archivo limpios o mapas de plataforma válidos, evitando serializaciones corruptas como `str(dict)`.
+  2. En `catalog-builder/` (adaptadores y deduplicador):
+     - Enriquecer `romProfile`: si el port pertenece a una plataforma conocida (PS1, N64, etc.) o framework conocido (PSXRecomp, N64Recomp) y no declara extensiones:
+       - Poblar extensiones válidas de la plataforma (ej. PS1: `.cue`, `.bin`, `.chd`, `.iso`, `.pbp`).
+       - Indicar notas claras en `romProfile.notes` señalando la necesidad de ROM específica según la documentación del autor y BIOS requerida.
+  3. Tests unitarios en `catalog-builder/tests/` validando la sanitización de `launch` y el enriquecimiento de `romProfile`.
+- **Capa:** Catalog Builder (`catalog-builder/adapters/quiver.py`, `catalog-builder/models.py`, `catalog-builder/tests/`).
+- **Criterios de Aceptación:**
+  1. Ningún puerto en `ports.index.json` contiene strings de diccionarios Python en `preferredExecutables`.
+  2. Ports de consolas reconocidas sin extensiones declaradas reciben las extensiones estándar de su plataforma.
+  3. Tests unitarios de catalog-builder pasando al 100%.
+
+## HU-18: Disclaimer de Compatibilidad, Enlace a Documentación y Gestión de Ejecutables en Launcher
+- **Contexto de Negocio:**
+  Cada source port empaqueta sus ejecutables, dependencias y argumentos de ROM de manera única según el criterio del autor de GitHub. El usuario necesita un aviso claro (disclaimer) en el launcher explicando que el ejecutable y los parámetros pueden variar y que se debe consultar la documentación oficial, acompañado de un acceso directo al repositorio del autor. Además, la selección de ROM debe persistir en `ports.json` de manera infalible y el launcher debe reconocer binarios compilados en carpetas de build (como `build-release/`).
+- **Objetivo:**
+  1. **Disclaimer Informativo y Enlace a Documentación:**
+     - En `launcher/src/components/DetailModal.ts` (sección de Requisitos / Instalación): incorporar un bloque de aviso destacado indicando que el ejecutable y los parámetros de ROM pueden variar según el repositorio y recomendando revisar la documentación del autor, con un botón interactivo para abrir el repositorio o documentación oficial.
+     - En `launcher/src/components/RomAssistantModal.ts` y en el modal de ROMs de `launcher/src/main.ts`: mostrar el mismo aviso de compatibilidad con botón directo a la documentación del autor.
+  2. **Persistencia de ROM en `ports.json`:**
+     - En `launcher/src/main.ts` (`saveRom`), sincronizar explícitamente con `libraryService.setRom(id, romPath, romMode, true)` para que la ROM seleccionada quede persistida en `~/PortsLauncher/ports.json` y no se borre al actualizar o recargar.
+  3. **Detección Avanzada de Ejecutables en `api.cjs`:**
+     - En `launcher/electron/api.cjs` (`findMainExecutable`), contemplar ejecutables generados en subcarpetas de compilación como `build-release/` priorizándolos frente a asistentes de setup ya finalizados.
+  4. **Bump de versión:**
+     - Incrementar versión a `0.1.14` en `launcher/package.json`.
+- **Capa:** Frontend (`launcher/src/components/DetailModal.ts`, `launcher/src/components/RomAssistantModal.ts`, `launcher/src/main.ts`, `launcher/package.json`) y Backend (`launcher/electron/api.cjs`).
+- **Criterios de Aceptación:**
+  1. El disclaimer y botón a la documentación del autor aparecen visibles y funcionales en el detalle del port y en el asistente de ROM.
+  2. La ROM guardada se persiste en `~/PortsLauncher/ports.json`.
+  3. `make test` supera el 100% de las pruebas (fixtures + indexador + launcher).
+

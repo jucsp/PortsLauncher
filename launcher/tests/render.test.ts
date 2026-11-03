@@ -9,9 +9,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_SETTINGS } from '../src/services/types';
-import type { Settings } from '../src/services/types';
+import type { PortItem, Settings } from '../src/services/types';
 import { launcherUpdateBodyHTML, setLauncherUpdate, wizardModalHTML } from '../src/ui/render';
 import type { UpdateCheckResult } from '../src/services/updateService';
+import { disclaimerMarkup, resolveAuthorDocUrl } from '../src/components/DetailModal';
+import { renderRomAssistant } from '../src/components/RomAssistantModal';
 
 /** Ajustes base con la clave vacía (copia: `DEFAULT_SETTINGS` es compartido). */
 function settingsWith(patch: Partial<Settings> = {}): Settings {
@@ -139,3 +141,79 @@ describe('launcherUpdateBodyHTML (consulta fallida)', () => {
     expect(html).toContain('estado: network_error');
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* Disclaimer de compatibilidad y enlace a documentación (HU-18)              */
+/* -------------------------------------------------------------------------- */
+
+describe('Disclaimer de compatibilidad y enlace a documentación (HU-18)', () => {
+  function makeTestPort(over: Partial<PortItem> = {}): PortItem {
+    return {
+      pid: 'test-port',
+      name: 'Test Port',
+      project: null,
+      sourcePlatform: 'ps1',
+      targetPlatforms: ['linux'],
+      distribution: 'github',
+      repository: 'author/repo',
+      repositorySource: null,
+      folderName: null,
+      iconUrl: null,
+      coverUrl: null,
+      requiresUserFiles: {},
+      gameData: null,
+      installRecipe: null,
+      modSupport: null,
+      preserve: [],
+      linux: {},
+      android: {},
+      maturity: null,
+      verification: {},
+      visible: true,
+      quarantinedLinkFields: [],
+      relations: {},
+      gameRef: {},
+      setupFiles: [],
+      aiLevel: 'none',
+      playerFeedback: null,
+      supportedOS: ['linux'],
+      verifiedRelease: null,
+      launch: {},
+      installStrategy: 'external',
+      romProfile: { binding: 'in-app', extensions: [], accepted: [] },
+      sources: [],
+      status: null,
+      tags: [],
+      gameNames: [],
+      searchAliases: [],
+      raw: {},
+      ...over,
+    };
+  }
+
+  it('resuelve la documentación del autor desde projectUrl o repository', () => {
+    const portWithProject = makeTestPort({ raw: { projectUrl: 'https://example.com/project' } });
+    expect(resolveAuthorDocUrl(portWithProject)).toBe('https://example.com/project');
+
+    const portWithRepo = makeTestPort({ repository: 'user/game-port' });
+    expect(resolveAuthorDocUrl(portWithRepo)).toBe('https://github.com/user/game-port');
+  });
+
+  it('disclaimerMarkup incluye el texto de disclaimer y el enlace al autor', () => {
+    const port = makeTestPort({ repository: 'author/myport' });
+    const markup = disclaimerMarkup(port);
+
+    expect(markup).toContain('El ejecutable y los parámetros necesarios para iniciar este juego (o cargar la ROM/BIOS) pueden variar según la versión y las decisiones del autor del repositorio. Por favor, consulta la documentación oficial entregada por el autor.');
+    expect(markup).toContain('📖 Ver documentación del autor');
+    expect(markup).toContain('https://github.com/author/myport');
+  });
+
+  it('renderRomAssistant incluye el bloque visual de disclaimer', () => {
+    const port = makeTestPort({ repository: 'author/myport' });
+    const assistantHtml = renderRomAssistant(port);
+
+    expect(assistantHtml).toContain('El ejecutable y los parámetros necesarios para iniciar este juego (o cargar la ROM/BIOS) pueden variar según la versión y las decisiones del autor del repositorio. Por favor, consulta la documentación oficial entregada por el autor.');
+    expect(assistantHtml).toContain('📖 Ver documentación del autor');
+  });
+});
+

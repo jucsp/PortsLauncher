@@ -18,3 +18,7 @@
 | HU-14 | Instalación y Actualización Real del Launcher con Soporte de Elevación (pkexec/UAC) y Reinicio Limpio | Completado | DeepSeek (Dev) / Gemini (PO) | v0.1.11 |
 | HU-15 | Soporte de Provisión Multi-archivo y Carpetas para ROMs (.cue + .bin, .gdi, directorios) | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.12 |
 | HU-16 | Actualizador Nativo con Detección de Distro (.rpm/.deb), Progreso Visual y Auto-instalación | Completado | DeepSeek (Dev) / Gemini (PO) | v0.1.13 |
+| HU-17 | Normalización de launch y Enriquecimiento de romProfile en catalog-builder | Completado | Argón (Dev) / Gemini (PO) | v0.1.14 |
+| HU-18 | Disclaimer Informativo de Compatibilidad, Enlace a Documentación y Gestión de Ejecutables | Completado | Argón (Dev) / Gemini (PO) | v0.1.14 |
+
+

@@ -2727,6 +2727,8 @@ function launchScore(file, base, hint) {
   if (process.platform === 'win32' && ext === '.exe') score += 30;
   if (process.platform !== 'win32' && ext === '.exe') score -= 20;
   if (baseName.replace(/\.[^.]+$/, '') === folderName) score += 12;
+  const relLower = relative.toLowerCase().replace(/\\/g, '/');
+  if (relLower.split('/').includes('build-release')) score += 25;
   score -= depth * 4;
   return score;
 }
@@ -2739,6 +2741,21 @@ function launchScore(file, base, hint) {
 function findMainExecutable(dir, hint) {
   const files = [];
   collectFiles(dir, 2, files);
+
+  // Buscar también dentro de carpetas de build secundarias como build-release o build
+  const secondaryBuildDirs = ['build-release', 'build', 'Build-Release', 'Build'];
+  for (const b of secondaryBuildDirs) {
+    const sub = path.join(dir, b);
+    try {
+      if (fs.existsSync(sub) && fs.statSync(sub).isDirectory()) {
+        const buildFiles = [];
+        collectFiles(sub, 2, buildFiles);
+        for (const bf of buildFiles) {
+          if (!files.includes(bf)) files.push(bf);
+        }
+      }
+    } catch {}
+  }
 
   let best = null;
   for (const file of files) {
@@ -4533,6 +4550,7 @@ module.exports = {
   downloadTo,
   extractZip,
   findMainExecutable,
+  launchScore,
   firstUsefulLine,
   formatSseEvent,
   handleSystemInfo,

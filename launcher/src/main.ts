@@ -572,6 +572,24 @@ function errorLayerHTML(layer: LayerError): string {
     <div class="mfoot"><button class="btn" data-act="closeL">Cerrar</button><button class="btn pri" data-act="openReport" data-path="${esc(layer.logPath)}">Abrir reporte</button></div></div>`;
 }
 
+function romDisclaimerHTML(game: Game): string {
+  const raw = (game.port?.raw ?? {}) as Record<string, unknown>;
+  const projectUrl = (raw.projectUrl || raw.officialUrl || raw.homepage) as string | undefined;
+  const docUrl = (projectUrl && /^https?:\/\//i.test(projectUrl)) ? projectUrl : repoUrl(game.repo || game.port?.repository);
+  const buttonHtml = docUrl
+    ? `<div style="margin-top:8px"><button type="button" class="btn sm" data-act="openRepo" data-repo="${esc(docUrl)}" style="display:inline-flex;align-items:center;gap:6px">📖 Ver documentación del autor</button></div>`
+    : '';
+
+  return (
+    `<div class="sbox disclaimer-box" style="border-left:3px solid var(--accent, #646cff);background:rgba(255,255,255,0.03);padding:10px 12px;margin-top:10px;border-radius:4px">` +
+    `<p style="margin:0;font-size:12px;line-height:1.45;color:var(--muted)">` +
+    `El ejecutable y los parámetros necesarios para iniciar este juego (o cargar la ROM/BIOS) pueden variar según la versión y las decisiones del autor del repositorio. Por favor, consulta la documentación oficial entregada por el autor.` +
+    `</p>` +
+    buttonHtml +
+    `</div>`
+  );
+}
+
 function renderLayer(): void {
   const el = $('#layer');
   if (!el) return;
@@ -605,7 +623,9 @@ function renderLayer(): void {
      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button class="btn" data-act="pick">Elegir archivo…</button><button class="btn" data-act="pickDir">Elegir carpeta…</button><button class="btn" data-act="sample">Usar ROM de ejemplo</button></div><input type="file" id="fpick" hidden multiple accept="${esc(romAccept(game))}"><input type="file" id="fpickdir" hidden multiple webkitdirectory directory><div class="muted" style="font-size:12px">Puedes soltar el <span class="mono">.cue</span> y sus pistas <span class="mono">.bin</span> a la vez, o la carpeta del disco entera.</div></div>
     ${providerSectionHTML(game)}
     ${W.checks.length ? `<div style="display:flex;flex-direction:column;gap:8px"><div class="lbl" style="padding:0">VALIDACIÓN</div>${W.checks.map((c) => `<div class="chk ${c.ok ? '' : 'bad'}"><i>${c.ok ? '✓' : '✕'}</i><span style="flex:1">${c.t}</span><span class="mono muted" style="font-size:12px">${esc(c.v)}</span></div>`).join('')}</div>` : ''}
-    <div><div class="lbl" style="padding:0;margin-bottom:10px">¿CÓMO LA USAMOS?</div><div style="display:flex;flex-wrap:wrap;gap:12px"><button class="opt" role="radio" aria-checked="${W.mode === 'link'}" data-act="wmode" data-k="link"><b>Usarla desde donde está</b><span class="muted">Se enlaza a <span class="mono" style="font-size:12px">${esc(W.file ? '~/Descargas/' + W.file.name : '~/Descargas/…')}</span>. No se mueve nada.</span></button><button class="opt" role="radio" aria-checked="${W.mode === 'copy'}" data-act="wmode" data-k="copy"><b>Copiarla a la carpeta del port</b><span class="muted">Se copia a <span class="mono" style="font-size:12px">${esc(S.settings.romDir)}/…</span></span></button></div><div class="muted" style="font-size:12px;margin-top:8px">El archivo original nunca se mueve ni se borra. Puedes cambiarlo luego en el engranaje ⚙.</div></div></div>
+    <div><div class="lbl" style="padding:0;margin-bottom:10px">¿CÓMO LA USAMOS?</div><div style="display:flex;flex-wrap:wrap;gap:12px"><button class="opt" role="radio" aria-checked="${W.mode === 'link'}" data-act="wmode" data-k="link"><b>Usarla desde donde está</b><span class="muted">Se enlaza a <span class="mono" style="font-size:12px">${esc(W.file ? '~/Descargas/' + W.file.name : '~/Descargas/…')}</span>. No se mueve nada.</span></button><button class="opt" role="radio" aria-checked="${W.mode === 'copy'}" data-act="wmode" data-k="copy"><b>Copiarla a la carpeta del port</b><span class="muted">Se copia a <span class="mono" style="font-size:12px">${esc(S.settings.romDir)}/…</span></span></button></div><div class="muted" style="font-size:12px;margin-top:8px">El archivo original nunca se mueve ni se borra. Puedes cambiarlo luego en el engranaje ⚙.</div></div>
+    ${romDisclaimerHTML(game)}
+    </div>
     <div class="mfoot"><button class="btn" data-act="closeL">${W.fromInstall ? 'Hacerlo después' : 'Cancelar'}</button><button class="btn pri" data-act="saveRom" ${W.ok ? '' : 'disabled style="opacity:.45;cursor:not-allowed"'}>${W.fromInstall ? 'Guardar y jugar' : 'Guardar'}</button></div></div>`;
   } else if (L.type === 'unins') {
     h = `<div class="scrim" data-act="closeL"></div><div class="modal" style="width:min(460px,calc(100vw - 24px))" role="alertdialog" aria-modal="true"><div class="mbody"><h2 style="font-size:22px">¿Desinstalar ${esc(game.t)}?</h2><div class="muted">Se borra la carpeta del port. Tu ROM original no se toca.</div><label style="display:flex;gap:10px;align-items:center"><input type="checkbox" id="keep" checked> Conservar mis partidas guardadas</label></div><div class="mfoot"><button class="btn" data-act="closeL">Cancelar</button><button class="btn dng" data-act="doUnins">Desinstalar</button></div></div>`;
@@ -2761,6 +2781,7 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
     game.romOk = true;
     game.romMode = W.mode;
     game.romPath = romDest(game);
+    libraryService.setRom(id, game.romPath, game.romMode, true);
     saveState();
     L = null;
     renderLayer();

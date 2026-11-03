@@ -21,10 +21,10 @@ import type { PortItem, RomMode, SetupFile } from '../services/types';
 import { ROM_BINDING_LABELS } from '../services/types';
 import { catalogService } from '../services/catalogService';
 import { libraryService } from '../services/libraryService';
-import { installerService } from '../services/installerService';
-import type { RomValidation } from '../services/installerService';
+import { installerService, type RomValidation } from '../services/installerService';
 import { describeRomFileSet } from '../ui/model';
 import { esc, icon } from './Icons';
+import { disclaimerMarkup, resolveAuthorDocUrl } from './DetailModal';
 
 /* -------------------------------------------------------------------------- */
 /* Tipos                                                                      */
@@ -295,6 +295,7 @@ function assistantInner(port: PortItem, state: AssistantState): string {
     'El archivo original nunca se mueve ni se borra.' +
     '</p>' +
     requirementsBox(port) +
+    disclaimerMarkup(port) +
     '</div>' +
     '<div class="mfoot">' +
     `<button type="button" class="btn sm" data-act="later">${esc(state.secondaryLabel)}</button>` +
@@ -612,6 +613,15 @@ export function mountRomAssistant(options: RomAssistantOptions = {}): RomAssista
     if (act === 'save') {
       event.preventDefault();
       save();
+      return;
+    }
+    if (act === 'doc') {
+      event.preventDefault();
+      const current = port();
+      if (!current) return;
+      const url = resolveAuthorDocUrl(current);
+      if (url) window.open(url, '_blank', 'noopener,noreferrer');
+      return;
     }
   }
 

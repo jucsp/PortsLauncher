@@ -486,6 +486,37 @@ function sourcesTab(port: PortItem): string {
 /* Resumen                                                                    */
 /* -------------------------------------------------------------------------- */
 
+export function resolveAuthorDocUrl(port: PortItem): string | null {
+  const raw = (port.raw ?? {}) as Record<string, unknown>;
+  const projectUrl = str(raw['projectUrl']) || str(raw['officialUrl']) || str(raw['homepage']);
+  if (projectUrl && /^https?:\/\//i.test(projectUrl)) {
+    return projectUrl;
+  }
+  const repository = str(port.repository);
+  if (repository) {
+    if (/^https?:\/\//i.test(repository)) return repository;
+    if (/^(?:www\.)?github\.com\//i.test(repository)) return 'https://' + repository.replace(/^www\./i, '');
+    return `https://github.com/${repository.replace(/^\/+/, '')}`;
+  }
+  return null;
+}
+
+export function disclaimerMarkup(port: PortItem): string {
+  const docUrl = resolveAuthorDocUrl(port);
+  const linkHtml = docUrl
+    ? `<div style="margin-top:8px"><a class="btn sm" href="${esc(docUrl)}" target="_blank" rel="noopener noreferrer nofollow" style="display:inline-flex;align-items:center;gap:6px">📖 Ver documentación del autor</a></div>`
+    : '';
+
+  return (
+    '<div class="sbox disclaimer-box" style="border-left:3px solid var(--accent, #646cff);background:rgba(255,255,255,0.03);padding:10px 12px;margin-top:10px;border-radius:4px">' +
+    '<p style="margin:0;font-size:var(--fs-2xs, 12px);line-height:1.45;color:var(--muted, #94a3b8)">' +
+    'El ejecutable y los parámetros necesarios para iniciar este juego (o cargar la ROM/BIOS) pueden variar según la versión y las decisiones del autor del repositorio. Por favor, consulta la documentación oficial entregada por el autor.' +
+    '</p>' +
+    linkHtml +
+    '</div>'
+  );
+}
+
 function requirementsMarkup(port: PortItem): string {
   const targets = (port.targetPlatforms ?? []).map((t) => TARGET_LABELS[t] ?? t);
   const ruf = port.requiresUserFiles ?? {};
@@ -526,6 +557,7 @@ function requirementsMarkup(port: PortItem): string {
     '<h3>Requisitos</h3>' +
     (rufText ? `<p style="margin:0;font-size:var(--fs-s)">${esc(rufText)}</p>` : '') +
     `<dl class="kv">${rows.join('')}</dl>` +
+    disclaimerMarkup(port) +
     '</div>'
   );
 }

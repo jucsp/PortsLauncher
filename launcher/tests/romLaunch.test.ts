@@ -14,6 +14,7 @@
 
 import { createRequire } from 'node:module';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -41,6 +42,8 @@ interface RomLaunchModule {
   parseDiscReferences(text: string, ext: string): string[];
   pickMainRomFile(entries: RomEntry[]): RomEntry | null;
   linkRomForLaunch(rawRomPath: unknown, installDir: string, mode?: 'link' | 'copy'): string | null;
+  findMainExecutable(dir: string, hint?: string): { file: string; relative: string } | null;
+  launchScore?(file: string, base: string, hint?: string): number;
 }
 
 const requireCjs = createRequire(import.meta.url) as (id: string) => RomLaunchModule;
@@ -278,5 +281,50 @@ describe('linkRomForLaunch', () => {
     expect(api.linkRomForLaunch('', installDir)).toBeNull();
     expect(api.linkRomForLaunch(null, installDir)).toBeNull();
     expect(api.linkRomForLaunch(join(root, 'no-existe.cue'), installDir)).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* findMainExecutable (HU-18)                                                 */
+/* -------------------------------------------------------------------------- */
+
+describe('findMainExecutable', () => {
+  it('localiza ejecutables en carpetas de build secundarias como build-release y build', () => {
+    const installDir = makeInstallDir();
+    const buildReleaseDir = join(installDir, 'build-release');
+    mkdirSync(buildReleaseDir, { recursive: true });
+
+    const exePath = join(buildReleaseDir, 'Zelda64Recompiled.AppImage');
+    writeFileSync(exePath, '#!/bin/sh\necho ok\n', 'utf8');
+    chmodSync(exePath, 0o755);
+
+    const found = api.findMainExecutable(installDir);
+    expect(found).not.toBeNull();
+    expect(found?.file).toBe(exePath);
+    expect(found?.relative).toBe(join('build-release', 'Zelda64Recompiled.AppImage'));
+  });
+
+  it('asigna puntuación positiva (+25) si el ejecutable está en build-release', () => {
+    const installDir = makeInstallDir();
+    const buildReleaseDir = join(installDir, 'build-release');
+    const normalSubDir = join(installDir, 'other-dir');
+    mkdirSync(buildReleaseDir, { recursive: true });
+    mkdirSync(normalSubDir, { recursive: true });
+
+    const recompExe = join(buildReleaseDir, 'game.AppImage');
+    const otherExe = join(normalSubDir, 'game.AppImage');
+    writeFileSync(recompExe, '#!/bin/sh\necho ok\n', 'utf8');
+    chmodSync(recompExe, 0o755);
+    writeFileSync(otherExe, '#!/bin/sh\necho ok\n', 'utf8');
+    chmodSync(otherExe, 0o755);
+
+    if (typeof api.launchScore === 'function') {
+      const scoreRecomp = api.launchScore(recompExe, installDir);
+      const scoreOther = api.launchScore(otherExe, installDir);
+      expect(scoreRecomp).toBe(scoreOther + 25);
+    }
+
+    const found = api.findMainExecutable(installDir);
+    expect(found?.file).toBe(recompExe);
   });
 });
