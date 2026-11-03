@@ -62,6 +62,8 @@ import {
   setLauncherUpdate,
   getLauncherUpdate,
   launcherUpdateBodyHTML,
+  setUpdateProgress,
+  getUpdateProgress,
   RT,
   RT_INV,
   bgOf,
@@ -1200,18 +1202,118 @@ async function checkLauncherUpdates(silent = false): Promise<void> {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Actualizador: descarga en streaming (HU-16)                                */
+/* -------------------------------------------------------------------------- */
+
+/** Evento del stream `text/event-stream` de `/api/launcher/self-update`. */
+interface SelfUpdateEvent {
+  type?: string;
+  ok?: boolean;
+  error?: string;
+  phase?: string;
+  percent?: number;
+  transferred?: number;
+  total?: number;
+  message?: string;
+  mode?: string;
+  path?: string;
+  scheduled?: boolean;
+  willRestart?: boolean;
+  requiresElevation?: boolean;
+  packageFormat?: string;
+  installerTool?: string;
+}
+
 /**
- * Descarga el instalador del release y lo aplica con `/api/launcher/self-update`.
+ * `data:` de un bloque SSE → evento JSON.
  *
- * El backend (HU-14) identifica cómo está instalado el launcher y prepara un
- * script desacoplado que espera al cierre de la app, reemplaza los binarios y
- * relanza la versión nueva. La UI refleja el estado REAL que devuelve el
- * servidor: si hay que elevar privilegios lo dice antes de que aparezca el
- * diálogo del sistema, y nunca anuncia «instalado» cuando sólo se descargó.
+ * Un evento puede traer varias líneas `data:` (el formato las concatena con
+ * `\n`), así que se unen antes de parsear. Devuelve `null` si el bloque no
+ * contiene JSON válido, de modo que un comentario de keep-alive o una línea
+ * corrupta no rompe la lectura.
+ */
+function parseSseEvent(block: string): SelfUpdateEvent | null {
+  const payload = block
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).replace(/^ /, ''))
+    .join('\n');
+  if (!payload) return null;
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as SelfUpdateEvent) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Consume el stream SSE completo, evento a evento.
  *
- * Si no hay backend (build servida desde otro origen) o la petición falla, se
- * recurre a la descarga directa del release: `window.open` pasa por
- * `setWindowOpenHandler` en Electron, que delega en `shell.openExternal`.
+ * El texto se acumula y se parte por el separador de eventos (`\n\n`) porque un
+ * chunk del socket puede cortar un `data: {...}` por la mitad. Al terminar se
+ * procesa el resto del buffer (el último evento puede venir sin el `\n\n`
+ * final).
+ */
+async function readSelfUpdateStream(
+  body: ReadableStream<Uint8Array> | null,
+  onEvent: (event: SelfUpdateEvent) => void
+): Promise<void> {
+  if (!body || typeof body.getReader !== 'function') return;
+  const reader = body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const blocks = buffer.split('\n\n');
+    buffer = blocks.pop() ?? '';
+    for (const block of blocks) {
+      const event = parseSseEvent(block);
+      if (event) onEvent(event);
+    }
+  }
+  buffer += decoder.decode();
+  const tail = parseSseEvent(buffer);
+  if (tail) onEvent(tail);
+}
+
+/** Repinta SÓLO el bloque de Ajustes (el progreso llega en ráfaga). */
+function refreshUpdateBox(): void {
+  const box = document.getElementById('launcher-update-box');
+  if (box) box.innerHTML = launcherUpdateBodyHTML();
+}
+
+/** Texto del desenlace, a partir de lo que respondió el backend. */
+function updateDoneMessage(event: SelfUpdateEvent, version: string): string {
+  if (event.ok === false) {
+    return 'No se pudo aplicar la actualización: ' + (event.error || 'error del servidor.');
+  }
+  const target = event.packageFormat
+    ? 'El paquete ' + event.packageFormat.toUpperCase()
+    : 'La actualización';
+  if (event.willRestart) {
+    return event.requiresElevation
+      ? `${target} está listo: confirma la contraseña de administrador cuando el sistema la pida; la app se reiniciará al cerrarse.`
+      : `${target} se instalará al cerrarse la app, que se reiniciará con la versión v${version}.`;
+  }
+  if (event.path) return 'Actualización descargada en: ' + event.path;
+  return event.message || 'Actualización v' + version + ' descargada.';
+}
+
+/**
+ * Aplica la actualización del release descargándola en el proceso principal.
+ *
+ * Consume `/api/launcher/self-update` como `text/event-stream`: el backend
+ * descarga el asset, informa del avance (`downloading` con bytes y porcentaje),
+ * avisa al pasar a `installing` (pkcon/pkexec pedirá la contraseña de
+ * administrador), y termina con `done`.
+ *
+ * Nunca se abre el navegador: ni `window.open` ni `location.href`. Si el backend
+ * no está (build servida desde otro origen), el stream falla o responde un
+ * error, la propia UI muestra el mensaje y el toast correspondiente.
  */
 async function openUpdateDownload(): Promise<void> {
   const state = getLauncherUpdate();
@@ -1219,67 +1321,118 @@ async function openUpdateDownload(): Promise<void> {
     toast('No hay descarga disponible para esta versión');
     return;
   }
-  const url = state.result.downloadUrl;
-  const version = state.result.latestVersion;
-  toast('Descargando actualización v' + version + '…');
 
-  try {
-    const res = await fetch('/api/launcher/self-update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        downloadUrl: url,
-        assetName: state.result.assetName,
-        version,
-        /* El backend descarga, aplica y reinicia (si está empaquetado). */
-        apply: true,
-      }),
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      mode?: string;
-      path?: string;
-      scheduled?: boolean;
-      requiresElevation?: boolean;
-      willRestart?: boolean;
-      error?: string;
-      message?: string;
-    };
+  const result = state.result;
+  const url = result.downloadUrl;
+  const version = result.latestVersion;
+  const assetName = result.assetName;
 
-    if (!res.ok || data.ok === false) {
-      throw new Error(data.error || `El servidor devolvió un error ${res.status}.`);
-    }
-
-    if (data.scheduled && data.willRestart) {
-      /* Con elevación, el diálogo nativo aparece tras el cierre: se avisa antes
-       * para que el usuario sepa qué hacer con la ventana de contraseña. */
-      toast(
-        data.requiresElevation
-          ? 'Confirma la autorización de administrador en el sistema para instalar la actualización…'
-          : 'Instalando actualización y reiniciando…'
-      );
-      return;
-    }
-
-    if (data.path) {
-      toast('✓ Actualización guardada en: ' + data.path);
-      return;
-    }
-
-    toast(data.message || 'La actualización no se pudo aplicar automáticamente');
+  /* Sin asset para este SO, `downloadUrl` apunta a la página HTML del release:
+   * descargarla instalaría el HTML, así que aquí no se hace nada. */
+  if (!assetName) {
+    toast('El release v' + version + ' no publica un instalador para este sistema.');
     return;
-  } catch (error) {
-    /* Error del servidor (HTTP != 2xx): se avisa. Un fallo de red se deja pasar
-     * en silencio y se cae a la descarga directa, que es el comportamiento
-     * anterior y sigue funcionando sin backend. */
-    const detail = error instanceof Error ? error.message : String(error);
-    if (/^El servidor devolvió|^No se pudo|downloadUrl/.test(detail)) {
-      toast('No se pudo aplicar la actualización: ' + detail);
-    }
+  }
+  if (getUpdateProgress()) {
+    toast('Ya hay una actualización en curso');
+    return;
   }
 
-  const opened = window.open(url, '_blank', 'noopener,noreferrer');
-  if (!opened) location.href = url;
+  setUpdateProgress({
+    phase: 'downloading',
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    message: 'Descargando actualización…',
+    version,
+  });
+  refreshLauncherUpdateUI();
+
+  /** Cierra el flujo: limpia la barra, repinta y avisa (sin abrir nada). */
+  const stop = (message: string): void => {
+    setUpdateProgress(null);
+    refreshLauncherUpdateUI();
+    toast(message);
+  };
+
+  let res: Response;
+  try {
+    res = await fetch('/api/launcher/self-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({ downloadUrl: url, assetName, version, apply: true, stream: true }),
+    });
+  } catch (error) {
+    /* Sin backend o red caída: se informa en la UI, no se abre el navegador. */
+    const detail = error instanceof Error ? error.message : String(error);
+    stop('No se pudo aplicar la actualización: ' + detail);
+    return;
+  }
+
+  const contentType = String(res.headers?.get?.('content-type') || '');
+
+  /* Respuesta sin stream: error HTTP en JSON (400/405/500) o backend antiguo. */
+  if (!contentType.includes('text/event-stream')) {
+    let data: SelfUpdateEvent = {};
+    try {
+      data = (await res.json()) as SelfUpdateEvent;
+    } catch {
+      data = {};
+    }
+    if (!res.ok || data.ok === false) {
+      const detail = data.error || 'el servidor devolvió un error ' + res.status + '.';
+      stop('No se pudo aplicar la actualización: ' + detail);
+      return;
+    }
+    const message = updateDoneMessage(data, version);
+    setLauncherUpdate({ state: 'done', result, notice: message });
+    stop(message);
+    return;
+  }
+
+  /* Eventos `done` vistos en el stream (se guardan en un array para que el
+   * callback no dependa del análisis de flujo de TypeScript). */
+  const doneEvents: SelfUpdateEvent[] = [];
+
+  try {
+    await readSelfUpdateStream(res.body, (event) => {
+      if (event.type === 'progress') {
+        const installing = event.phase === 'installing';
+        setUpdateProgress({
+          phase: installing ? 'installing' : 'downloading',
+          percent: Number(event.percent) || 0,
+          transferred: Number(event.transferred) || 0,
+          total: Number(event.total) || 0,
+          message: String(event.message || ''),
+          version,
+        });
+        refreshUpdateBox();
+        return;
+      }
+      if (event.type === 'done') {
+        doneEvents.push(event);
+        return;
+      }
+      if (event.type === 'error') {
+        throw new Error(String(event.error || 'La actualización falló.'));
+      }
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    stop('No se pudo aplicar la actualización: ' + detail);
+    return;
+  }
+
+  if (doneEvents.length === 0) {
+    stop('La actualización no devolvió confirmación del servidor.');
+    return;
+  }
+
+  /* El aviso se queda en la tarjeta (no sólo en el toast): el usuario puede
+   * volver a Ajustes y seguir viendo qué pasó. */
+  const message = updateDoneMessage(doneEvents[0], version);
+  setLauncherUpdate({ state: 'done', result, notice: message });
+  stop(message);
 }
 
 /* -------------------------------------------------------------------------- */

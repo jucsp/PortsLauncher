@@ -17,5 +17,4 @@
 | HU-13 | Soporte Universal de ROMs, Búsqueda Limpia de Addons y Ejecución Fiable de Ports | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.10 |
 | HU-14 | Instalación y Actualización Real del Launcher con Soporte de Elevación (pkexec/UAC) y Reinicio Limpio | Completado | DeepSeek (Dev) / Gemini (PO) | v0.1.11 |
 | HU-15 | Soporte de Provisión Multi-archivo y Carpetas para ROMs (.cue + .bin, .gdi, directorios) | Completado | DeepSeek (Dev) / Claude (QA) | v0.1.12 |
-
-
+| HU-16 | Actualizador Nativo con Detección de Distro (.rpm/.deb), Progreso Visual y Auto-instalación | Completado | DeepSeek (Dev) / Gemini (PO) | v0.1.13 |

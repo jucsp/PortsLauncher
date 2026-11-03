@@ -33,7 +33,7 @@ const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { execFile, spawn } = require('node:child_process');
-const { Readable } = require('node:stream');
+const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { promisify } = require('node:util');
 
@@ -372,16 +372,52 @@ function scoreAsset(asset) {
 }
 
 /**
- * Descarga `url` a `file` siguiendo redirecciones.
+ * Descarga `url` a `file` siguiendo redirecciones, informando del progreso.
  *
  * Se escribe en streaming: con `arrayBuffer()` un asset de port de cientos de
  * MB (o más) quedaba entero en memoria antes de tocar el disco, que es el mismo
  * vector de OOM que sufría la extracción.
+ *
+ * HU-16: el contador va en un `Transform` intermedio (no con un listener
+ * `data`), así el `pipeline` conserva la contrapresión exacta y aun así se
+ * pueden emitir eventos de avance hacia el renderer.
+ *
+ * @param onProgress `(p) => void` con `{ transferred, total, percent }`.
+ *        `percent` es `null` cuando el servidor no manda `Content-Length`.
  */
-async function downloadTo(url, file) {
+async function downloadTo(url, file, onProgress) {
   const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
   if (!res.ok || !res.body) throw new Error(`Descarga fallida (${res.status}).`);
-  await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(file));
+
+  const reports = typeof onProgress === 'function';
+  const header =
+    res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-length') : null;
+  const total = Math.max(0, Number.parseInt(String(header === null || header === undefined ? '' : header), 10) || 0);
+
+  let transferred = 0;
+  let lastAt = 0;
+  const emit = (force) => {
+    if (!reports) return;
+    const now = Date.now();
+    /* Un evento cada ~120 ms: con `fetch` local llegaban miles por segundo y el
+     * renderer se pasaba el rato repintando la barra. */
+    if (!force && now - lastAt < 120) return;
+    lastAt = now;
+    const percent = total > 0 ? Math.min(100, Math.round((transferred / total) * 100)) : null;
+    onProgress({ transferred, total, percent });
+  };
+
+  const counter = new Transform({
+    transform(chunk, _encoding, done) {
+      transferred += chunk.length;
+      emit(false);
+      done(null, chunk);
+    },
+  });
+
+  await pipeline(Readable.fromWeb(res.body), counter, fs.createWriteStream(file));
+  /* Cierre garantizado al 100 % aunque el último tramo cayera en el throttle. */
+  emit(true);
 }
 
 /** Valida el `folderName` (sin rutas, sin ocultos, sin `..`). */
@@ -1010,6 +1046,304 @@ function requestAppQuit(delayMs = 500) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Sistema anfitrión: distro y formato de paquete nativo                      */
+/* -------------------------------------------------------------------------- */
+
+/** Ficheros donde las distros publican su identidad (el segundo es el de systemd). */
+const OS_RELEASE_PATHS = ['/etc/os-release', '/usr/lib/os-release'];
+
+/**
+ * Distros cuya familia de paquetes es RPM.
+ *
+ * La lista es deliberadamente amplia: cualquier derivada de Fedora/RHEL
+ * (`nobara`, `ultramarine`, `bazzite`…) declara `ID_LIKE=fedora` y se resuelve
+ * por ahí, pero las que ya se conocen entran directas.
+ */
+const RPM_DISTROS = [
+  'fedora',
+  'rhel',
+  'centos',
+  'rocky',
+  'almalinux',
+  'amzn',
+  'ol',
+  'oracle',
+  'opensuse',
+  'opensuse-leap',
+  'opensuse-tumbleweed',
+  'suse',
+  'sles',
+  'sles_sap',
+  'mageia',
+  'nobara',
+  'ultramarine',
+  'bazzite',
+];
+
+/** Distros cuya familia de paquetes es DEB. */
+const DEB_DISTROS = [
+  'debian',
+  'ubuntu',
+  'linuxmint',
+  'pop',
+  'pop_os',
+  'elementary',
+  'zorin',
+  'kali',
+  'raspbian',
+  'neon',
+  'kdeneon',
+  'mx',
+  'parrot',
+  'devuan',
+  'deepin',
+  'trisquel',
+];
+
+/**
+ * Parsea un `os-release` (`CLAVE=valor`, con comillas opcionales y comentarios).
+ *
+ * @returns Objeto con las claves en MAYÚSCULAS (`ID`, `ID_LIKE`, `NAME`…).
+ */
+function parseOsRelease(text) {
+  const result = {};
+  const lines = String(text === null || text === undefined ? '' : text).split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const match = trimmed.match(/^([A-Za-z0-9_]+)\s*=\s*(.*)$/);
+    if (!match) continue;
+    let value = match[2].trim();
+    if (value.length >= 2) {
+      const first = value[0];
+      const last = value[value.length - 1];
+      if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+        value = value.slice(1, -1);
+      }
+    }
+    result[match[1].toUpperCase()] = value;
+  }
+  return result;
+}
+
+/** Familia de paquetes de un identificador de distro (`''` si no se reconoce). */
+function familyById(id) {
+  const value = String(id === null || id === undefined ? '' : id).trim().toLowerCase();
+  if (!value) return '';
+  for (const name of RPM_DISTROS) {
+    if (value === name || value.startsWith(name + '-') || value.startsWith(name + '_')) return 'rpm';
+  }
+  for (const name of DEB_DISTROS) {
+    if (value === name || value.startsWith(name + '-') || value.startsWith(name + '_')) return 'deb';
+  }
+  return '';
+}
+
+/**
+ * Familia de paquetes de una distro a partir de los campos de `os-release`.
+ *
+ * `ID` manda; `ID_LIKE` (lista separada por espacios) resuelve las derivadas
+ * (`ID=linuxmint`, `ID_LIKE=ubuntu debian`). Arch, Manjaro, Gentoo, Void o Slack
+ * no pertenecen a ninguna de las dos familias y devuelven `''`, lo que el
+ * llamante traduce a AppImage.
+ */
+function distroFamily(fields) {
+  const data = fields || {};
+  const direct = familyById(data.ID);
+  if (direct) return direct;
+  const like = String(data.ID_LIKE === null || data.ID_LIKE === undefined ? '' : data.ID_LIKE);
+  for (const token of like.toLowerCase().split(/\s+/)) {
+    const family = familyById(token);
+    if (family) return family;
+  }
+  return '';
+}
+
+/** Texto del `os-release` del sistema, o `''` si no se puede leer. */
+function readOsRelease() {
+  for (const file of OS_RELEASE_PATHS) {
+    try {
+      const text = fs.readFileSync(file, 'utf8');
+      if (String(text).trim()) return text;
+    } catch {
+      /* Siguiente candidato. */
+    }
+  }
+  return '';
+}
+
+/**
+ * Formato de paquete nativo del sistema.
+ *
+ * - `win32`  → `exe`
+ * - `darwin` → `dmg`
+ * - `linux`  → `rpm` (Fedora/RHEL/openSUSE…), `deb` (Debian/Ubuntu…) o
+ *              `appimage` para el resto de distros y para lo desconocido.
+ *
+ * @param input `{ platform?, osRelease? }`; `osRelease` permite probarlo sin FS.
+ */
+function detectPackageFormat(input) {
+  const options = input || {};
+  const platform = String(options.platform || process.platform);
+  if (platform === 'win32') return 'exe';
+  if (platform === 'darwin') return 'dmg';
+  if (platform !== 'linux') return 'appimage';
+  const text = typeof options.osRelease === 'string' ? options.osRelease : readOsRelease();
+  const family = distroFamily(parseOsRelease(text));
+  if (family === 'rpm') return 'rpm';
+  if (family === 'deb') return 'deb';
+  return 'appimage';
+}
+
+/** Directorios donde buscar binarios del sistema (además del `PATH`). */
+const BIN_DIRS = ['/usr/bin', '/bin', '/usr/local/bin', '/usr/sbin', '/sbin'];
+
+/**
+ * Resuelve un binario del sistema por nombre.
+ *
+ * @param name Nombre sin ruta (`pkcon`, `pkexec`…).
+ * @returns Ruta absoluta del primero encontrado, o `''`.
+ */
+function whichLinuxBinary(name) {
+  const binary = String(name || '').trim();
+  if (!binary || binary.includes('/')) return '';
+  const extra = String(process.env.PATH || '')
+    .split(':')
+    .filter(Boolean);
+  for (const dir of extra.concat(BIN_DIRS)) {
+    const candidate = path.join(dir, binary);
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      /* Directorio ilegible: siguiente. */
+    }
+  }
+  return '';
+}
+
+/**
+ * Comando que instala un paquete local (función pura).
+ *
+ * - `pkcon`  → `pkcon install-local --plain --allow-untrusted <ruta>`: en KDE y
+ *   GNOME el demonio de PackageKit abre el diálogo de Polkit por sí solo, así
+ *   que no hace falta terminal ni `pkexec`.
+ * - `pkexec` → RPM con `rpm -Uvh --replacepkgs`; DEB con `apt-get install -y`
+ *   (apt resuelve las dependencias de un `.deb` local, `dpkg -i` no).
+ *
+ * @returns `{ tool, command, args }`.
+ */
+function resolveInstallerCommand(input) {
+  const options = input || {};
+  const format = String(options.format || '').trim().toLowerCase();
+  const tool = String(options.tool || '').trim().toLowerCase() === 'pkcon' ? 'pkcon' : 'pkexec';
+  const target = String(options.targetPath || '');
+
+  if (tool === 'pkcon') {
+    return {
+      tool: 'pkcon',
+      command: 'pkcon',
+      args: ['install-local', '--plain', '--allow-untrusted', target],
+    };
+  }
+  if (format === 'deb') {
+    return { tool: 'pkexec', command: 'pkexec', args: ['apt-get', 'install', '-y', target] };
+  }
+  return { tool: 'pkexec', command: 'pkexec', args: ['rpm', '-Uvh', '--replacepkgs', target] };
+}
+
+/**
+ * Herramienta de instalación disponible en el sistema.
+ *
+ * Se prefiere `pkcon` (diálogo gráfico integrado y sin necesidad de `pkexec`,
+ * que exigiría un agente de Polkit en la sesión) y se cae a `pkexec`.
+ */
+function pickInstallerTool(probe) {
+  const has = typeof probe === 'function' ? probe : whichLinuxBinary;
+  try {
+    if (has('pkcon')) return 'pkcon';
+  } catch {
+    /* Sonda rota: se intenta con pkexec. */
+  }
+  return 'pkexec';
+}
+
+/** `GET /api/launcher/system-info` → plataforma y formato nativo del host. */
+function handleSystemInfo(req, res) {
+  if (req.method !== 'GET') {
+    sendJSON(res, 405, { ok: false, error: 'Usa GET.' });
+    return;
+  }
+  const release = parseOsRelease(readOsRelease());
+  sendJSON(res, 200, {
+    ok: true,
+    platform: process.platform,
+    packageFormat: detectPackageFormat({ platform: process.platform }),
+    distro: String(release.ID || ''),
+    arch: process.arch,
+  });
+}
+
+/**
+ * Serializa un evento SSE (`data: {...}\n\n`).
+ *
+ * Exportado para poder probar el formato sin abrir un socket.
+ */
+function formatSseEvent(payload) {
+  return 'data: ' + JSON.stringify(payload) + '\n\n';
+}
+
+/**
+ * Abre un canal `text/event-stream` sobre `res`.
+ *
+ * Compatible con `http.ServerResponse` y con el `res` de connect/Vite. Si el
+ * objeto no sabe escribir (por ejemplo un mock de test), `send` devuelve
+ * `false` y nada revienta.
+ */
+function openEventStream(res) {
+  const headers = {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store, no-transform',
+    Connection: 'keep-alive',
+    /* Nginx y compañía bufferean por defecto: se les dice que no. */
+    'X-Accel-Buffering': 'no',
+  };
+  if (typeof res.writeHead === 'function') {
+    res.writeHead(200, headers);
+  } else {
+    res.statusCode = 200;
+    for (const key of Object.keys(headers)) {
+      if (typeof res.setHeader === 'function') res.setHeader(key, headers[key]);
+    }
+  }
+
+  let open = true;
+  return {
+    get open() {
+      return open;
+    },
+    send(payload) {
+      if (!open || typeof res.write !== 'function') return false;
+      try {
+        res.write(formatSseEvent(payload));
+        return true;
+      } catch {
+        open = false;
+        return false;
+      }
+    },
+    close() {
+      if (!open) return;
+      open = false;
+      try {
+        if (typeof res.end === 'function') res.end();
+      } catch {
+        /* Ya cerrado por el cliente. */
+      }
+    },
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /* Actualización del launcher: detección de la instalación                    */
 /* -------------------------------------------------------------------------- */
 
@@ -1236,6 +1570,20 @@ function buildPosixWaitScript(plan) {
           ' else log "update: no se pudo reemplazar el AppImage"; fi'
       );
     }
+  } else if (plan.mode === 'package') {
+    /* Instalador nativo (.rpm/.deb): `pkcon` abre el diálogo de Polkit por sí
+     * solo; con `pkexec` lo abre el propio agente del escritorio al ejecutarse.
+     * Toda la línea va entrecomillada porque la ruta del paquete llega de
+     * `~/Downloads` y puede tener espacios. */
+    const argv = [plan.installCommand || 'pkexec']
+      .concat(Array.isArray(plan.installArgs) ? plan.installArgs : [])
+      .map((part) => q(part))
+      .join(' ');
+    lines.push(
+      'log "update: instalando el paquete ' + String(plan.packageKind || '') + ' con ' +
+        String(plan.installerTool || 'pkexec') + '"'
+    );
+    lines.push(argv + ' || log "update: la instalación del paquete falló o se canceló"');
   } else if (plan.mode === 'folder') {
     if (plan.needsElevation) {
       lines.push('log "update: copiando squashfs-root con elevación (pkexec)"');
@@ -1354,6 +1702,10 @@ function buildWindowsScript(plan) {
  *
  * No toca el disco: recibe ya resuelto si hace falta elevación, de modo que se
  * puede probar sin FS ni Electron.
+ *
+ * Modos: `appimage` (reemplazar el AppImage), `folder` (copiar el
+ * `squashfs-root` extraído), `installer` (ejecutar el .exe de Windows),
+ * `package` (instalar un .rpm/.deb con pkcon/pkexec) y `manual`.
  */
 function buildSelfUpdatePlan(input) {
   const options = input || {};
@@ -1399,23 +1751,29 @@ function buildSelfUpdatePlan(input) {
   const isAppImageAsset = /\.appimage$/i.test(assetName);
   const isInstallerAsset = /\.(exe|msi)$/i.test(assetName);
   const isArchiveAsset = /\.zip$/i.test(assetName);
+  /* Paquete nativo de Linux: se instala con el gestor del sistema. */
+  const isPackageAsset = /\.(rpm|deb)$/i.test(assetName);
+  const packageKind = isPackageAsset ? (/\.deb$/i.test(assetName) ? 'deb' : 'rpm') : '';
 
   let mode = 'manual';
   let reason = '';
-  if (install.kind === 'appimage') {
-    if (platform === 'win32') {
+  if (platform === 'win32') {
+    if (install.kind === 'appimage') {
       mode = 'manual';
       reason = 'appimage-on-windows';
-    } else {
-      mode = 'appimage';
-    }
-  } else if (platform === 'win32') {
-    if (isInstallerAsset) mode = 'installer';
+    } else if (isInstallerAsset) mode = 'installer';
     else if (isArchiveAsset) mode = 'folder';
     else {
       mode = 'manual';
       reason = 'unsupported-asset';
     }
+  } else if (isPackageAsset) {
+    /* HU-16: en Fedora/Debian el asset nativo se instala solo. Va antes que la
+     * detección de AppImage porque instalar el paquete del sistema es lo
+     * correcto aunque el launcher se esté ejecutando desde un AppImage. */
+    mode = 'package';
+  } else if (install.kind === 'appimage') {
+    mode = 'appimage';
   } else if (isAppImageAsset) {
     mode = 'folder';
   } else {
@@ -1423,7 +1781,19 @@ function buildSelfUpdatePlan(input) {
     reason = 'unsupported-asset';
   }
 
-  const plan = Object.assign(base, { mode, reason });
+  const plan = Object.assign(base, { mode, reason, packageKind });
+
+  /* Comando concreto de instalación: sólo tiene sentido en modo `package`. */
+  if (mode === 'package') {
+    const command = resolveInstallerCommand({
+      format: packageKind,
+      tool: options.installerTool,
+      targetPath: downloadPath,
+    });
+    plan.installerTool = command.tool;
+    plan.installCommand = command.command;
+    plan.installArgs = command.args;
+  }
 
   /* Ejecutar el propio fichero que se acaba de descargar no actualiza nada. */
   if (
@@ -1443,7 +1813,9 @@ function buildSelfUpdatePlan(input) {
     plan.waitScript = buildWindowsScript(plan);
   } else {
     plan.waitScript = buildPosixWaitScript(plan);
-    if (needsElevation) plan.elevatedScript = buildPosixElevatedScript(plan);
+    /* En modo `package` la elevación ya va dentro del propio script (pkcon o
+     * pkexec), así que no hace falta un segundo script privilegiado. */
+    if (needsElevation && mode !== 'package') plan.elevatedScript = buildPosixElevatedScript(plan);
   }
   return plan;
 }
@@ -1509,10 +1881,14 @@ async function extractAppImage(appImagePath, stagingDir) {
  * Aplica la actualización ya descargada: prepara el script desacoplado.
  *
  * Nunca sobrescribe nada mientras la app corre: deja un script que espera al
- * cierre de este PID y hace el reemplazo/copia. Devuelve el cuerpo que se
- * enviará al renderer.
+ * cierre de este PID y hace el reemplazo/copia/instalación. Devuelve el cuerpo
+ * que se enviará al renderer.
  *
- * @param options `{ targetPath, fileName, version }`.
+ * HU-16: si el asset es un paquete nativo (`.rpm`/`.deb`) no se toca la
+ * instalación actual: el script instala el paquete con `pkcon` (diálogo de
+ * Polkit del escritorio) o, si no existe, con `pkexec`, y relanza la app.
+ *
+ * @param options `{ targetPath, fileName, version, installerTool? }`.
  */
 async function applySelfUpdate(options) {
   const targetPath = String((options && options.targetPath) || '');
@@ -1528,10 +1904,19 @@ async function applySelfUpdate(options) {
     desktopExec: desktop ? desktop.command : '',
   });
 
+  /* Un paquete nativo siempre necesita privilegios, se instale donde se
+   * instale: eso decide qué herramienta usa el script. */
+  const isPackage = /\.(rpm|deb)$/i.test(fileName);
+
   /* Se comprueba ANTES de generar el script: la UI necesita saber si va a
    * aparecer un diálogo de administrador. */
   const writableTarget = install.kind === 'appimage' ? install.target : install.installDir;
-  const needsElevation = !isWritable(writableTarget);
+  const needsElevation = isPackage ? true : !isWritable(writableTarget);
+
+  /* `pkcon` (PackageKit) es lo que usan Fedora KDE y GNOME para el diálogo
+   * gráfico de contraseña; sin él se cae a `pkexec`. */
+  const installerTool =
+    options && options.installerTool ? String(options.installerTool) : pickInstallerTool(whichLinuxBinary);
 
   const stamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
   const stagingDir = path.join(
@@ -1551,6 +1936,7 @@ async function applySelfUpdate(options) {
     assetName: fileName,
     stagingDir,
     needsElevation,
+    installerTool,
   });
 
   if (plan.mode === 'manual') {
@@ -1624,10 +2010,17 @@ async function applySelfUpdate(options) {
     requiresElevation: plan.needsElevation,
     willRestart: scheduled,
     version,
+    /* HU-16: la UI muestra qué se ha instalado y con qué herramienta. */
+    packageFormat: plan.mode === 'package' ? plan.packageKind : '',
+    installerTool: plan.mode === 'package' ? plan.installerTool : '',
     message: scheduled
-      ? needsElevation
-        ? 'Actualización preparada: confirma la autorización de administrador cuando se cierre la app.'
-        : 'Actualización preparada: se aplicará al cerrar la aplicación.'
+      ? plan.mode === 'package'
+        ? plan.installerTool === 'pkcon'
+          ? 'Actualización preparada: al cerrarse la app se instalará el paquete y el sistema pedirá la contraseña de administrador.'
+          : 'Actualización preparada: al cerrarse la app se pedirá la contraseña de administrador para instalar el paquete.'
+        : needsElevation
+          ? 'Actualización preparada: confirma la autorización de administrador cuando se cierre la app.'
+          : 'Actualización preparada: se aplicará al cerrar la aplicación.'
       : 'No se pudo lanzar el script de actualización.',
   };
 }
@@ -1652,42 +2045,122 @@ async function applySelfUpdate(options) {
  * proceso, aplica el reemplazo y relanza la app actualizada. La respuesta
  * añade `scheduled`, `requiresElevation` y `willRestart` para que la UI diga la
  * verdad al usuario.
+ *
+ * HU-16 — dos formas de responder, mismo trabajo:
+ *   · **SSE** si el cliente manda `Accept: text/event-stream` o `stream: true`:
+ *     `progress` (descarga con bytes/porcentaje), `progress` de fase
+ *     `installing` y un `done` final con el mismo cuerpo que el JSON.
+ *   · **JSON** clásico (un solo objeto al terminar) cuando no se pide stream.
  */
 async function handleSelfUpdate(req, res) {
   if (req.method !== 'POST') {
     sendJSON(res, 405, { ok: false, error: 'Usa POST.' });
     return;
   }
+
+  /* El cuerpo se lee ANTES de abrir el canal: `stream:true` viaja dentro y el
+   * cliente puede pedir SSE también por cabecera. */
+  let body = null;
   try {
-    const body = await readJSON(req);
+    body = await readJSON(req);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    sendJSON(res, 400, { ok: false, error: detail });
+    return;
+  }
+
+  const headers = (req && req.headers) || {};
+  const accept = String(headers.accept || headers.Accept || '');
+  const wantsStream = /text\/event-stream/i.test(accept) || Boolean(body && body.stream === true);
+
+  const stream = wantsStream ? openEventStream(res) : null;
+
+  /**
+   * Responde el resultado final: por SSE como evento `done` o, si el cliente no
+   * pidió streaming, con el JSON de siempre (compatibilidad).
+   */
+  const finish = (payload) => {
+    if (stream) {
+      stream.send(Object.assign({ type: 'done', ok: true }, payload));
+      stream.close();
+      return;
+    }
+    sendJSON(res, 200, Object.assign({ ok: true }, payload));
+  };
+
+  /** Emite un avance. Silencioso cuando no hay canal abierto. */
+  const progress = (payload) => {
+    if (!stream) return;
+    stream.send(Object.assign({ type: 'progress' }, payload));
+  };
+
+  /** Cierra con error: evento `error` por SSE o 500 + JSON. */
+  const fail = (message) => {
+    if (stream) {
+      if (stream.open) {
+        stream.send({ type: 'error', ok: false, error: message });
+        stream.close();
+      }
+      return;
+    }
+    sendJSON(res, 500, { ok: false, error: message });
+  };
+
+  try {
     const downloadUrl = String((body && body.downloadUrl) || '').trim();
     if (!/^https:\/\/(github\.com|objects\.githubusercontent\.com)\//i.test(downloadUrl)) {
-      throw new Error(
+      fail(
         'downloadUrl no válido: sólo se admiten enlaces de github.com u objects.githubusercontent.com.'
       );
+      return;
     }
 
     const downloadsDir = path.join(os.homedir(), 'Downloads');
     fs.mkdirSync(downloadsDir, { recursive: true });
 
     const version = body && body.version ? String(body.version).trim() : '';
-    const fallback = `PortsLauncher-${version || 'update'}${
-      process.platform === 'win32' ? '.exe' : '.AppImage'
-    }`;
+    /* El respaldo usa el formato NATIVO del sistema: antes se asumía AppImage
+     * incluso en Fedora, donde lo correcto es un .rpm. */
+    const nativeFormat = detectPackageFormat({ platform: process.platform });
+    const nativeExt =
+      {
+        exe: '.exe',
+        dmg: '.dmg',
+        rpm: '.rpm',
+        deb: '.deb',
+        appimage: '.AppImage',
+      }[nativeFormat] || '.AppImage';
+    const fallback = `PortsLauncher-${version || 'update'}${nativeExt}`;
     const requested = body && body.assetName ? path.basename(String(body.assetName)) : '';
     /* `basename` puede devolver '' o '.' si el asset venía mal formado. */
     const fileName = requested && requested !== '.' && requested !== '..' ? requested : fallback;
     const targetPath = path.join(downloadsDir, fileName);
 
     /* `apply` (o el heredado `execute`) pide aplicar la actualización de verdad.
-     * Por defecto se aplica: pulsar «Descargar vX» en la UI debe instalar, no
+     * Por defecto se aplica: pulsar «Actualizar a vX» en la UI debe instalar, no
      * dejar el fichero en `~/Downloads` sin avisar de nada. */
     const apply =
       body && typeof body.apply === 'boolean'
         ? body.apply
         : !(body && body.execute === false);
 
-    await downloadTo(downloadUrl, targetPath);
+    progress({
+      phase: 'downloading',
+      percent: 0,
+      transferred: 0,
+      total: 0,
+      message: 'Descargando actualización…',
+    });
+
+    await downloadTo(downloadUrl, targetPath, (tick) => {
+      progress({
+        phase: 'downloading',
+        percent: tick.percent,
+        transferred: tick.transferred,
+        total: tick.total,
+        message: 'Descargando actualización…',
+      });
+    });
 
     /* Un AppImage sin permiso de ejecución no arranca tras la descarga. */
     if (process.platform === 'linux' && fileName.toLowerCase().endsWith('.appimage')) {
@@ -1695,8 +2168,7 @@ async function handleSelfUpdate(req, res) {
     }
 
     if (!apply) {
-      sendJSON(res, 200, {
-        ok: true,
+      finish({
         mode: 'download-only',
         path: targetPath,
         fileName,
@@ -1704,20 +2176,27 @@ async function handleSelfUpdate(req, res) {
         installed: false,
         requiresElevation: false,
         willRestart: false,
+        version,
         message: 'Actualización descargada en ' + targetPath,
       });
       return;
     }
 
+    progress({
+      phase: 'installing',
+      percent: 100,
+      message: 'Instalando actualización…',
+    });
+
     const result = await applySelfUpdate({ targetPath, fileName, version });
-    sendJSON(res, 200, Object.assign({ ok: true }, result));
+    finish(result);
     /* Cierre limpio DESPUÉS de responder: el script desacoplado espera a que
      * muera este PID, así que la app sólo se cierra cuando la UI ya sabe qué
      * está pasando. */
     if (result.willRestart) requestAppQuit();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    sendJSON(res, 500, { ok: false, error: detail });
+    fail(detail);
   }
 }
 
@@ -3946,6 +4425,10 @@ async function handleApiRequest(req, res) {
     await handleSelfUpdate(req, res);
     return true;
   }
+  if (url === '/api/launcher/system-info') {
+    handleSystemInfo(req, res);
+    return true;
+  }
   if (url === '/api/report-error') {
     await handleReportError(req, res);
     return true;
@@ -4001,6 +4484,7 @@ function createApiMiddleware() {
     const isApi =
       url === '/api/install' ||
       url === '/api/launcher/self-update' ||
+      url === '/api/launcher/system-info' ||
       url === '/api/report-error' ||
       url === '/api/open-path' ||
       url === '/api/launch' ||
@@ -4044,9 +4528,19 @@ module.exports = {
   buildWindowsScript,
   chmodExecutables,
   createApiMiddleware,
+  detectPackageFormat,
+  distroFamily,
+  downloadTo,
   extractZip,
   findMainExecutable,
   firstUsefulLine,
+  formatSseEvent,
+  handleSystemInfo,
+  openEventStream,
+  parseOsRelease,
+  pickInstallerTool,
+  resolveInstallerCommand,
+  whichLinuxBinary,
   buildLaunchArgs,
   linkRomForLaunch,
   linkSingleRomFile,

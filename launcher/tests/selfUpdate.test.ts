@@ -37,10 +37,22 @@ interface SelfUpdateModule {
   withDesktopVersion(text: string, version: string): string;
   buildSelfUpdatePlan(input: Record<string, unknown>): SelfUpdatePlan;
   handleSelfUpdate(req: unknown, res: unknown): Promise<void>;
+  /* HU-16 · detección del paquete nativo del host */
+  parseOsRelease(text: unknown): Record<string, string>;
+  distroFamily(fields: Record<string, unknown>): string;
+  detectPackageFormat(input?: Record<string, unknown>): string;
+  pickInstallerTool(probe?: unknown): string;
+  resolveInstallerCommand(input: Record<string, unknown>): {
+    tool: string;
+    command: string;
+    args: string[];
+  };
+  handleSystemInfo(req: unknown, res: unknown): void;
+  formatSseEvent(payload: unknown): string;
 }
 
 interface SelfUpdatePlan {
-  mode: 'appimage' | 'folder' | 'installer' | 'manual';
+  mode: 'appimage' | 'folder' | 'installer' | 'manual' | 'package';
   reason?: string;
   platform: string;
   pid: number;
@@ -56,6 +68,11 @@ interface SelfUpdatePlan {
   elevatedScriptPath: string;
   waitScript: string;
   elevatedScript: string | null;
+  /* HU-16 · sólo en `mode === 'package'` */
+  packageKind?: string;
+  installerTool?: string;
+  installCommand?: string;
+  installArgs?: string[];
 }
 
 const requireCjs = createRequire(import.meta.url) as (id: string) => SelfUpdateModule;
@@ -389,15 +406,31 @@ describe('buildSelfUpdatePlan', () => {
     expect(plan.elevatedScript).toContain("'/opt/PortsLauncher/'");
   });
 
-  it('un asset no soportado (.deb) se queda en descarga manual', () => {
+  /* HU-16: en Linux un .rpm/.deb ya NO es «no soportado»: se instala con el
+   * gestor de paquetes del sistema (`mode: 'package'`). Para un asset que de
+   * verdad no se sabe aplicar se usa un formato ajeno a todos los flujos. */
+  it('un asset no soportado (.pkg) se queda en descarga manual', () => {
     const plan = api.buildSelfUpdatePlan(
       basePlan({
-        assetName: 'PortsLauncher-0.1.10.deb',
-        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.10.deb',
+        assetName: 'PortsLauncher-0.1.11.pkg',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.11.pkg',
       })
     );
     expect(plan.mode).toBe('manual');
     expect(plan.reason).toBe('unsupported-asset');
+  });
+
+  it('tampoco intenta ejecutar un .apk ni un .rar', () => {
+    for (const ext of ['.apk', '.rar']) {
+      const plan = api.buildSelfUpdatePlan(
+        basePlan({
+          assetName: `PortsLauncher-0.1.11${ext}`,
+          downloadPath: `/home/tester/Downloads/PortsLauncher-0.1.11${ext}`,
+        })
+      );
+      expect(plan.mode).toBe('manual');
+      expect(plan.reason).toBe('unsupported-asset');
+    }
   });
 
   it('no intenta reemplazar el fichero que está en ejecución', () => {
@@ -456,6 +489,99 @@ describe('buildSelfUpdatePlan', () => {
     expect(plan.waitScriptPath).toBe(plan.stagingDir + '/apply-update.sh');
     expect(plan.elevatedScriptPath).toBe(plan.stagingDir + '/apply-elevated.sh');
     expect(plan.logPath.endsWith('self-update.log')).toBe(true);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* HU-16 · paquete nativo (.rpm / .deb)                                       */
+/* -------------------------------------------------------------------------- */
+
+describe('buildSelfUpdatePlan · modo package', () => {
+  it('un .rpm se instala con pkexec + rpm -Uvh', () => {
+    const plan = api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: 'PortsLauncher-0.1.11.x86_64.rpm',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+      })
+    );
+
+    expect(plan.mode).toBe('package');
+    expect(plan.packageKind).toBe('rpm');
+    expect(plan.installerTool).toBe('pkexec');
+    expect(plan.installCommand).toBe('pkexec');
+    expect(plan.installArgs).toEqual([
+      'rpm',
+      '-Uvh',
+      '--replacepkgs',
+      '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+    ]);
+    /* `buildPosixWaitScript` entrecomilla cada argumento con comillas simples. */
+    expect(plan.waitScript).toContain("'pkexec' 'rpm' '-Uvh' '--replacepkgs'");
+    expect(plan.waitScript).toContain('instalando el paquete rpm con pkexec');
+  });
+
+  it('un .deb se instala con apt-get (dpkg no resuelve dependencias)', () => {
+    const plan = api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: 'portslauncher_0.1.11_amd64.deb',
+        downloadPath: '/home/tester/Downloads/portslauncher_0.1.11_amd64.deb',
+      })
+    );
+
+    expect(plan.mode).toBe('package');
+    expect(plan.packageKind).toBe('deb');
+    expect(plan.installArgs).toEqual([
+      'apt-get',
+      'install',
+      '-y',
+      '/home/tester/Downloads/portslauncher_0.1.11_amd64.deb',
+    ]);
+    expect(plan.waitScript).toContain("'pkexec' 'apt-get' 'install' '-y'");
+  });
+
+  it('con pkcon disponible se instala con pkcon install-local', () => {
+    const plan = api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: 'PortsLauncher-0.1.11.x86_64.rpm',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+        installerTool: 'pkcon',
+      })
+    );
+
+    expect(plan.mode).toBe('package');
+    expect(plan.installerTool).toBe('pkcon');
+    expect(plan.installCommand).toBe('pkcon');
+    expect(plan.installArgs).toEqual([
+      'install-local',
+      '--plain',
+      '--allow-untrusted',
+      '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+    ]);
+    expect(plan.waitScript).toContain("'pkcon' 'install-local' '--plain' '--allow-untrusted'");
+  });
+
+  it('el paquete manda aunque el launcher corra desde un AppImage', () => {
+    const plan = api.buildSelfUpdatePlan(
+      basePlan({
+        appImage: '/home/tester/Apps/PortsLauncher-0.1.10.AppImage',
+        assetName: 'PortsLauncher-0.1.11.x86_64.rpm',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+      })
+    );
+    expect(plan.mode).toBe('package');
+    expect(plan.packageKind).toBe('rpm');
+  });
+
+  it('no genera un segundo script elevado: la elevación va dentro del comando', () => {
+    const plan = api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: 'PortsLauncher-0.1.11.x86_64.rpm',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+        needsElevation: true,
+      })
+    );
+    expect(plan.mode).toBe('package');
+    expect(plan.elevatedScript).toBeNull();
   });
 });
 

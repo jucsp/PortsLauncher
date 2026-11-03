@@ -146,4 +146,24 @@
   2. Al lanzar un port con `.cue`, tanto el `.cue` como sus archivos `.bin` asociados quedan enlazados o disponibles en el directorio de ejecución del port.
   3. `make test` supera todas las pruebas (100% verde).
 
-
+## HU-16: Actualizador Nativo con Detección de Distro (.rpm/.deb), Progreso Visual y Auto-instalación con Polkit
+- **Contexto de Negocio:**
+  En lugar de redirigir al navegador para descargar manualmente un archivo AppImage genérico, el lanzador debe permitir la actualización integral desde la propia app. Debe detectar si el sistema anfitrión es Fedora/RHEL (.rpm), Debian/Ubuntu (.deb) o Windows (.exe) (usando AppImage solo como fallback en distros no soportadas o no paquetizadas), descargar el instalador adecuado mostrando una barra de progreso visual interactiva en tiempo real, e iniciar automáticamente la instalación solicitando la contraseña del usuario mediante el agente gráfico de PolicyKit (PackageKit pkcon o pkexec) de ser necesario.
+- **Objetivo:**
+  1. Backend (api.cjs):
+     - Detección de plataforma y distro Linux (/etc/os-release) para determinar formato preferente: Fedora/RHEL/CentOS/openSUSE -> 'rpm'; Ubuntu/Debian/Mint/Pop -> 'deb'; Windows -> 'exe'; Otros -> 'appimage'.
+     - Exponer endpoint o información de formato nativo (o detección integrada).
+     - Soporte de streaming o reporte de progreso de descarga hacia el frontend (SSE o polling/stream de bytes descargados y totales).
+     - Instalador nativo para paquetes RPM (mediante pkcon install-local --plain --allow-untrusted o pkexec rpm/dnf) y DEB (pkcon o pkexec apt/dpkg).
+  2. Frontend (updateService.ts, render.ts, main.ts):
+     - El botón debe decir 'Actualizar a vX.Y.Z' en lugar de 'Descargar...'.
+     - Selección de asset nativo (.rpm para Fedora, etc.) en lugar de asumir .appimage por defecto.
+     - Barra de progreso visual con porcentaje y estado ('Descargando 45%...', 'Instalando actualización...', 'Solicitando credenciales...').
+     - Eliminar cualquier redirección o window.open al navegador.
+  3. Bump de versión: Actualizar a v0.1.13 en launcher/package.json.
+- **Capa:** Backend (launcher/electron/api.cjs) y Frontend (launcher/src/services/updateService.ts, launcher/src/ui/render.ts, launcher/src/main.ts).
+- **Criterios de Aceptación:**
+  1. La comprobación de actualización identifica el instalador .rpm en Fedora/KDE.
+  2. Al pulsar 'Actualizar', no se abre el navegador; se inicia la descarga directa con barra de progreso visible.
+  3. Al terminar la descarga, se inicia la instalación automática solicitando contraseña de administrador si se requiere.
+  4. make test supera el 100% de las pruebas existentes y nuevas.

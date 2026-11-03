@@ -158,6 +158,62 @@ describe('findPlatformAsset', () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* findPlatformAsset · paquete nativo (HU-16)                                 */
+/* -------------------------------------------------------------------------- */
+
+describe('findPlatformAsset · paquete nativo', () => {
+  /**
+   * Release que publica los cuatro formatos de Linux a la vez: es el escenario
+   * real de PortsLauncher (`linux.target = ["AppImage", "deb", "rpm"]`), donde
+   * el orden de preferencia decide qué instala el usuario.
+   */
+  const multi = [
+    { name: 'PortsLauncher-0.2.0.AppImage', browser_download_url: 'https://x/appimage' },
+    { name: 'portslauncher_0.2.0_amd64.deb', browser_download_url: 'https://x/deb' },
+    { name: 'portslauncher-0.2.0.x86_64.rpm', browser_download_url: 'https://x/rpm' },
+    { name: 'PortsLauncher-0.2.0.tar.gz', browser_download_url: 'https://x/targz' },
+  ];
+
+  it('con packageFormat "rpm" prioriza el .rpm frente al .AppImage', () => {
+    expect(findPlatformAsset(multi, 'linux', 'rpm')).toEqual({
+      name: 'portslauncher-0.2.0.x86_64.rpm',
+      url: 'https://x/rpm',
+    });
+  });
+
+  it('con packageFormat "deb" prioriza el .deb frente al .AppImage', () => {
+    expect(findPlatformAsset(multi, 'linux', 'deb')).toEqual({
+      name: 'portslauncher_0.2.0_amd64.deb',
+      url: 'https://x/deb',
+    });
+  });
+
+  it('sin packageFormat mantiene el AppImage como primera opción', () => {
+    expect(findPlatformAsset(multi, 'linux')?.name).toBe('PortsLauncher-0.2.0.AppImage');
+    expect(findPlatformAsset(multi, 'linux', null)?.name).toBe('PortsLauncher-0.2.0.AppImage');
+  });
+
+  it('con packageFormat "appimage" mantiene el AppImage como primera opción', () => {
+    expect(findPlatformAsset(multi, 'linux', 'appimage')?.name).toBe(
+      'PortsLauncher-0.2.0.AppImage'
+    );
+  });
+
+  it('si el paquete nativo no está publicado, cae al AppImage', () => {
+    const noRpm = multi.filter((asset) => !asset.name.endsWith('.rpm'));
+    expect(findPlatformAsset(noRpm, 'linux', 'rpm')?.name).toBe('PortsLauncher-0.2.0.AppImage');
+
+    const noDeb = multi.filter((asset) => !asset.name.endsWith('.deb'));
+    expect(findPlatformAsset(noDeb, 'linux', 'deb')?.name).toBe('PortsLauncher-0.2.0.AppImage');
+  });
+
+  it('los paquetes nativos de Linux no se cuelan en Windows ni en macOS', () => {
+    expect(findPlatformAsset(multi, 'win32', 'rpm')).toBeNull();
+    expect(findPlatformAsset(multi, 'darwin', 'deb')).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* checkForUpdates                                                            */
 /* -------------------------------------------------------------------------- */
 

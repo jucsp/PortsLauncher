@@ -256,3 +256,69 @@ pre.code{margin:0;padding:14px 16px;border-radius:12px;background:var(--bg);bord
   padding: 12px 14px;
   font-size: 13px;
 }
+
+/* Progreso de la actualización (HU-16). Usa los mismos tokens del tema que el
+ * resto de barras (`.bar`) para que se vea igual en claro y en oscuro. */
+.update-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.update-progress .upd-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.update-progress .upd-label {
+  font-weight: 600;
+}
+
+.update-progress .upd-pct {
+  color: var(--accent2);
+  font-weight: 700;
+}
+
+.upd-bar,
+.progress-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.upd-fill,
+.progress-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent2), var(--accent));
+  transition: width 0.35s ease;
+}
+
+.update-progress .upd-detail {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* Instalación: la barra ya está al 100 %, así que late para indicar «trabajando» */
+.update-progress.installing .upd-fill {
+  animation: upd-pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes upd-pulse {
+  0% { opacity: 0.55; }
+  100% { opacity: 1; }
+}

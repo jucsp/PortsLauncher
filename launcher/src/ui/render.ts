@@ -144,7 +144,7 @@ function browseScope(kind: Route): 'library' | 'catalog' {
 export type LauncherUpdateState =
   | { state: 'idle' }
   | { state: 'checking' }
-  | { state: 'done'; result: UpdateCheckResult }
+  | { state: 'done'; result: UpdateCheckResult; notice?: string }
   | { state: 'error'; message: string };
 
 let launcherUpdate: LauncherUpdateState = { state: 'idle' };
@@ -157,6 +157,101 @@ export function setLauncherUpdate(next: LauncherUpdateState): void {
 /** Estado actual (lo usa `main.ts` para no repetir consultas). */
 export function getLauncherUpdate(): LauncherUpdateState {
   return launcherUpdate;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Progreso de la actualización (HU-16)                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Progreso de la descarga/instalación en curso.
+ *
+ * Lo alimenta `main.ts` con los eventos SSE de `/api/launcher/self-update`. Es
+ * estado aparte (y no una variante de {@link LauncherUpdateState}) para no
+ * perder el resultado de la comprobación mientras se descarga: la tarjeta sigue
+ * mostrando la versión y las notas del release.
+ */
+export interface UpdateProgress {
+  phase: 'downloading' | 'installing';
+  /** 0–100. Se recorta al rango al pintar. */
+  percent: number;
+  /** Bytes descargados (0 si el servidor no informa del total). */
+  transferred: number;
+  /** Tamaño total del asset en bytes (0 si se desconoce). */
+  total: number;
+  /** Texto de respaldo cuando no hay bytes que mostrar. */
+  message: string;
+  /** Versión destino, para la etiqueta «Descargando vX.Y.Z (NN%)». */
+  version?: string;
+}
+
+let updateProgress: UpdateProgress | null = null;
+
+/** Guarda (o limpia con `null`) el progreso de la actualización en curso. */
+export function setUpdateProgress(next: UpdateProgress | null): void {
+  updateProgress = next;
+}
+
+/** Progreso actual, o `null` si no hay ninguna actualización en curso. */
+export function getUpdateProgress(): UpdateProgress | null {
+  return updateProgress;
+}
+
+/** Porcentaje saneado a un entero 0–100. */
+export function clampPercent(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.min(100, Math.max(0, Math.round(parsed)));
+}
+
+/** Tamaño legible (`1.4 MB`, `820 KB`, `1.20 GB`). */
+export function formatBytes(bytes: unknown): string {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${Math.round(value)} B`;
+}
+
+/**
+ * Bloque de progreso de la tarjeta de actualización.
+ *
+ * Devuelve `''` cuando no hay descarga en curso, de modo que el llamante lo
+ * interpola sin condicionales. La barra usa `.upd-bar`/`.upd-fill` (mismos
+ * colores del tema que el resto de barras) y expone el porcentaje tanto en
+ * texto como en `aria-valuenow`.
+ */
+export function updateProgressHTML(): string {
+  const progress = updateProgress;
+  if (!progress) return '';
+
+  const percent = clampPercent(progress.percent);
+  const installing = progress.phase === 'installing';
+  const label = installing
+    ? 'Instalando actualización'
+    : progress.version
+      ? `Descargando v${progress.version} (${percent}%)`
+      : `Descargando actualización (${percent}%)`;
+  const detail = installing
+    ? 'Instalando actualización… confirma la contraseña de administrador si el sistema lo solicita'
+    : progress.total > 0
+      ? `${formatBytes(progress.transferred)} de ${formatBytes(progress.total)} · ${percent}%`
+      : progress.message || 'Descargando actualización…';
+
+  return (
+    `<div class="update-progress${installing ? ' installing' : ''}" role="status" aria-live="polite">` +
+    '<div class="upd-head">' +
+    `<span class="upd-label">${esc(label)}</span>` +
+    `<span class="upd-pct mono">${percent}%</span>` +
+    '</div>' +
+    `<div class="upd-bar progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" ` +
+    `aria-valuenow="${percent}" aria-label="${esc(label)}">` +
+    `<i class="upd-fill" style="width:${percent}%"></i>` +
+    '</div>' +
+    `<div class="upd-detail">${esc(detail)}</div>` +
+    '</div>'
+  );
 }
 
 /** `true` sólo si hay una versión superior confirmada. */
@@ -238,9 +333,19 @@ export function launcherUpdateBodyHTML(): string {
   const notes = result.releaseNotes.trim()
     ? `<div class="update-notes readme-body">${markdownToHtml(result.releaseNotes, getUpdateRepo())}</div>`
     : '';
+
+  /* HU-16: mientras hay una descarga/instalación en curso la tarjeta muestra la
+   * barra de progreso y el botón queda bloqueado (evita dos descargas a la vez). */
+  const busy = updateProgress !== null;
   const action = result.assetName
-    ? `Descargar v${esc(result.latestVersion)}`
+    ? busy
+      ? 'Actualizando…'
+      : `Actualizar a v${esc(result.latestVersion)}`
     : `Ver el release v${esc(result.latestVersion)}`;
+  /* Aviso persistente del resultado (`main.ts` lo rellena al recibir `done`). */
+  const notice = launcherUpdate.notice
+    ? `<div class="update-note ok" role="status">${esc(launcherUpdate.notice)}</div>`
+    : '';
 
   return (
     '<div class="update-card">' +
@@ -251,10 +356,12 @@ export function launcherUpdateBodyHTML(): string {
     (result.publishedAt
       ? `<div class="muted mono" style="font-size:11.5px">publicada ${esc(result.publishedAt.slice(0, 10))}</div>`
       : '') +
+    updateProgressHTML() +
+    notice +
     notes +
     '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:2px">' +
     `<button type="button" class="btn pri sm" data-act="download-update" ${
-      result.downloadUrl ? '' : 'disabled'
+      result.downloadUrl && !busy ? '' : 'disabled'
     }>${action}</button>` +
     (result.htmlUrl
       ? `<a class="btn sm" href="${esc(result.htmlUrl)}" target="_blank" rel="noreferrer noopener">` +

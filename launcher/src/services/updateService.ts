@@ -133,6 +133,12 @@ export interface UpdateCheckResult {
   downloadUrl: string | null;
   assetName: string | null;
   htmlUrl: string;
+  /**
+   * Formato de paquete con el que se eligió el asset (`rpm`, `deb`, `appimage`…),
+   * o `null` si no se pudo determinar. Sólo informativo: la UI lo muestra como
+   * diagnóstico y el backend vuelve a detectarlo por su cuenta.
+   */
+  packageFormat?: PackageFormat | null;
 }
 
 /** `true` sólo cuando GitHub confirmó que no hay versión superior. */
@@ -192,14 +198,66 @@ export function cleanVersion(value: string): string {
 /* Assets                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** Prioridad de extensiones por sistema operativo. */
+/**
+ * Formato de paquete nativo del host.
+ *
+ * Lo publica el backend en `GET /api/launcher/system-info` (detecta la distro
+ * con `/etc/os-release`): `rpm` en Fedora/RHEL/openSUSE, `deb` en
+ * Debian/Ubuntu, `appimage` en el resto y en lo desconocido, `exe` en Windows y
+ * `dmg` en macOS.
+ */
+export type PackageFormat = 'rpm' | 'deb' | 'appimage' | 'exe' | 'dmg';
+
+/** Formatos aceptados; cualquier otro valor se ignora. */
+const PACKAGE_FORMATS: readonly string[] = ['rpm', 'deb', 'appimage', 'exe', 'dmg'];
+
+/** `true` si `value` es un formato de paquete conocido. */
+export function isPackageFormat(value: unknown): value is PackageFormat {
+  return typeof value === 'string' && PACKAGE_FORMATS.includes(value);
+}
+
+/** Prioridad de extensiones por sistema operativo (orden general). */
 const PREFERENCE: Record<UpdatePlatform, string[]> = {
-  linux: ['.appimage', '.deb', '.tar.gz', '.tgz'],
+  linux: ['.appimage', '.deb', '.rpm', '.tar.gz', '.tgz'],
   win32: ['.exe', '.zip'],
   darwin: ['.dmg', '.zip'],
 };
 
-/** Un asset de otro SO no debe colarse como candidato. */
+/**
+ * Prioridad en Linux cuando el host usa un gestor de paquetes concreto.
+ *
+ * Instalar el paquete nativo es lo correcto en Fedora/Debian: el gestor del
+ * sistema resuelve dependencias, registra el paquete y lo actualiza después.
+ * El AppImage queda como respaldo (y como primera opción en Arch, Gentoo, etc.,
+ * donde no hay ninguno de los dos).
+ */
+const LINUX_BY_FORMAT: Record<'rpm' | 'deb' | 'appimage', string[]> = {
+  rpm: ['.rpm', '.appimage', '.tar.gz', '.tgz'],
+  deb: ['.deb', '.appimage', '.tar.gz', '.tgz'],
+  appimage: ['.appimage', '.deb', '.rpm', '.tar.gz', '.tgz'],
+};
+
+/** Orden de preferencia para una plataforma y, en Linux, un formato nativo. */
+function preferenceOrder(
+  platform: UpdatePlatform,
+  packageFormat?: PackageFormat | null
+): string[] {
+  if (platform === 'linux') {
+    if (packageFormat === 'rpm') return LINUX_BY_FORMAT.rpm;
+    if (packageFormat === 'deb') return LINUX_BY_FORMAT.deb;
+    /* `appimage` (y `exe`/`dmg`, que no aplican aquí) usan el orden general. */
+    return LINUX_BY_FORMAT.appimage;
+  }
+  return PREFERENCE[platform];
+}
+
+/**
+ * Un asset de otro SO no debe colarse como candidato.
+ *
+ * Importante: en Linux NO se excluyen `.rpm` ni `.deb`. Son justamente los
+ * paquetes nativos que hay que instalar en Fedora/Debian, así que el filtro de
+ * Linux sólo descarta binarios de macOS y Windows.
+ */
 const FOREIGN: Record<UpdatePlatform, RegExp> = {
   linux: /(?:mac|darwin|osx|windows|win32|win64|\.exe$|\.msi$)/i,
   win32: /(?:mac|darwin|osx|linux|appimage|\.deb$|\.rpm$)/i,
@@ -209,15 +267,18 @@ const FOREIGN: Record<UpdatePlatform, RegExp> = {
 /**
  * Elige el asset descargable más adecuado para `platform`.
  *
- * Orden por sistema: Linux `AppImage → deb → tar.gz`; Windows `exe → zip`;
- * macOS `dmg → zip`. Ignora los assets de otros sistemas y los ficheros que no
- * son instaladores (checksums, firmas, manifiestos).
+ * Orden por sistema: Linux `AppImage → deb → rpm → tar.gz` por defecto, o el
+ * paquete nativo primero cuando `packageFormat` lo indica (ver
+ * {@link LINUX_BY_FORMAT}); Windows `exe → zip`; macOS `dmg → zip`. Ignora los
+ * assets de otros sistemas y los ficheros que no son instaladores (checksums,
+ * firmas, manifiestos).
  */
 export function findPlatformAsset(
   assets: readonly GithubReleaseAsset[],
-  platform: UpdatePlatform
+  platform: UpdatePlatform,
+  packageFormat?: PackageFormat | null
 ): { name: string; url: string } | null {
-  const order = PREFERENCE[platform];
+  const order = preferenceOrder(platform, packageFormat);
   const foreign = FOREIGN[platform];
 
   const usable = assets.filter((asset) => {
@@ -280,6 +341,48 @@ export function setUpdateRepo(repo: string): string {
     /* Sin almacenamiento: el valor vive sólo en memoria durante la sesión. */
   }
   return value || DEFAULT_UPDATE_REPO;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Formato nativo del host                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** Endpoint del backend que informa del SO y del paquete nativo. */
+export const SYSTEM_INFO_URL = '/api/launcher/system-info';
+
+/**
+ * ¿Tiene sentido sondear la API local?
+ *
+ * La URL es relativa, así que sólo se puede resolver cuando hay un documento
+ * del que tomar la base (renderer de Electron, `vite dev`/`preview`). En Node
+ * puro (Vitest) `fetch('/api/...')` lanzaría `TypeError: Failed to parse URL`,
+ * de modo que la sonda se omite y se usa el orden general de assets.
+ */
+function canProbeHost(): boolean {
+  return typeof document !== 'undefined' && typeof fetch === 'function';
+}
+
+/**
+ * Pregunta al backend qué paquete nativo corresponde a esta máquina.
+ *
+ * Nunca lanza ni bloquea: si no hay backend (build servida desde otro origen),
+ * la respuesta no es JSON o el campo no es un formato conocido, devuelve
+ * `null` y `checkForUpdates` sigue con el orden general de assets.
+ */
+export async function detectHostPackageFormat(): Promise<PackageFormat | null> {
+  if (!canProbeHost()) return null;
+  try {
+    const response = await fetch(SYSTEM_INFO_URL, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response || !response.ok) return null;
+    const data = (await response.json()) as unknown;
+    const format = (data as { packageFormat?: unknown } | null)?.packageFormat;
+    return isPackageFormat(format) ? format : null;
+  } catch {
+    /* Backend ausente o respuesta ilegible: fallback silencioso. */
+    return null;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -350,14 +453,24 @@ function networkMessage(error: unknown): string {
  * releases, 403 por rate limit, JSON inválido) devuelve un resultado con
  * `status` distinto de `ok` y un `error` legible. La UI debe usar ese campo para
  * NO anunciar «estás al día» cuando en realidad no se pudo comprobar.
+ *
+ * `packageFormat` decide qué asset se prefiere en Linux (`.rpm` en Fedora,
+ * `.deb` en Debian). Si no se indica, se pregunta al backend
+ * (`/api/launcher/system-info`) y, si no responde, se usa el orden general.
  */
 export async function checkForUpdates(
   repo?: string,
-  platform: UpdatePlatform = detectPlatform()
+  platform: UpdatePlatform = detectPlatform(),
+  packageFormat?: PackageFormat | null
 ): Promise<UpdateCheckResult> {
   const target = String(repo ?? '').trim() || getUpdateRepo();
   if (!isValidRepo(target)) return neutralResult('invalid_repo', MSG_INVALID_REPO);
   if (typeof fetch !== 'function') return neutralResult('unsupported', MSG_UNSUPPORTED);
+
+  /* El formato nativo sólo importa en Linux y, si el llamante ya lo sabe, no se
+   * gasta ninguna petición extra. */
+  let format: PackageFormat | null = isPackageFormat(packageFormat) ? packageFormat : null;
+  if (!format && platform === 'linux') format = await detectHostPackageFormat();
 
   try {
     const response = await fetch(`https://api.github.com/repos/${target}/releases/latest`, {
@@ -381,7 +494,7 @@ export async function checkForUpdates(
     const latestVersion = cleanVersion(rawTag);
     if (!latestVersion) return neutralResult('no_release', MSG_NO_RELEASE);
 
-    const asset = findPlatformAsset(release.assets ?? [], platform);
+    const asset = findPlatformAsset(release.assets ?? [], platform, format);
     const hasUpdate = compareSemver(latestVersion, CURRENT_VERSION) > 0;
 
     return {
@@ -398,6 +511,7 @@ export async function checkForUpdates(
       downloadUrl: hasUpdate ? (asset?.url ?? (release.html_url ? String(release.html_url) : null)) : null,
       assetName: asset?.name ?? null,
       htmlUrl: String(release.html_url ?? ''),
+      packageFormat: format,
     };
   } catch (error) {
     /* Offline, CORS, DNS, timeout, JSON inválido… se reporta, no se disimula. */
