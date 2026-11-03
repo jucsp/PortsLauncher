@@ -390,6 +390,114 @@ export function resolveLaunchArgs(raw: string, romPath: string): string[] {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Selección múltiple de ROM (HU-15)                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Descriptores de disco: el fichero que el emulador abre de verdad.
+ *
+ * Un juego de PlayStation o Saturn no es un fichero, es un `.cue`/`.gdi` que
+ * declara sus pistas `.bin`. Cuando el usuario arrastra la carpeta entera hay
+ * que saber cuál de los ficheros es «la ROM» que recibe `{rom}`.
+ */
+export const ROM_DESCRIPTOR_EXTS: readonly string[] = ['.cue', '.gdi', '.m3u'];
+
+/** Forma mínima que necesitan los helpers: sirve para `File` y para `{name,size}`. */
+export interface RomFileLike {
+  name: string;
+  size?: number;
+  /** Ruta relativa cuando se elige una carpeta (`webkitdirectory`). */
+  webkitRelativePath?: string;
+}
+
+/** Resultado de analizar una selección múltiple de ficheros de ROM. */
+export interface RomSelection<T extends RomFileLike = RomFileLike> {
+  /** Índice del fichero principal dentro de la lista original (`-1` si vacía). */
+  index: number;
+  /** El fichero que debe recibir `{rom}`. */
+  main: T | null;
+  /** Tamaño del principal en bytes. */
+  size: number;
+  /** Pistas y asociados que acompañan al principal. */
+  companions: T[];
+  /** Texto listo para la UI: `Dino Crisis 2.cue (+2 archivos de pistas)`. */
+  label: string;
+}
+
+/** `juego.CUE` → `cue`. */
+export function romExtensionOf(name: string): string {
+  const value = String(name ?? '');
+  const dot = value.lastIndexOf('.');
+  const slash = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+  if (dot <= slash || dot === value.length - 1) return '';
+  return value.slice(dot + 1).toLowerCase();
+}
+
+/** ¿El nombre corresponde a un descriptor de disco (`.cue`, `.gdi`, `.m3u`)? */
+export function isRomDescriptor(name: string): boolean {
+  return ROM_DESCRIPTOR_EXTS.includes('.' + romExtensionOf(name));
+}
+
+/** Nombre visible: la ruta relativa si el usuario eligió una carpeta. */
+export function romDisplayName(file: RomFileLike): string {
+  const relative = typeof file.webkitRelativePath === 'string' ? file.webkitRelativePath.trim() : '';
+  return relative || String(file.name ?? '');
+}
+
+/**
+ * Peso de un descriptor: a igualdad de tamaño, gana el más específico.
+ *
+ * `.cue` > `.gdi` > `.m3u` > cualquier otro fichero, porque los dos primeros
+ * identifican un disco concreto y el `.m3u` sólo agrupa varios.
+ */
+function descriptorWeight(name: string): number {
+  const ext = '.' + romExtensionOf(name);
+  if (ext === '.cue') return 4;
+  if (ext === '.gdi') return 3;
+  if (ext === '.m3u') return 2;
+  return ROM_DESCRIPTOR_EXTS.includes(ext) ? 1 : 0;
+}
+
+/**
+ * Elige el fichero que debe recibir `{rom}` entre una selección múltiple.
+ *
+ * Prioridad: descriptor de disco y, si no hay ninguno, **el de mayor tamaño**
+ * (la pista de datos es la grande; un `.sbi` de 100 bytes nunca es el juego).
+ * Empate → el primero que aparece, para que el resultado sea determinista.
+ */
+export function describeRomFileSet<T extends RomFileLike>(
+  files: readonly T[] | null | undefined
+): RomSelection<T> {
+  const list = (files ?? []).filter((file): file is T => !!file && !!String(file.name ?? ''));
+  if (list.length === 0) {
+    return { index: -1, main: null, size: 0, companions: [], label: '' };
+  }
+
+  let index = 0;
+  for (let i = 1; i < list.length; i += 1) {
+    const candidate = list[i];
+    const best = list[index];
+    const candidateWeight = descriptorWeight(candidate.name);
+    const bestWeight = descriptorWeight(best.name);
+    if (candidateWeight > bestWeight) {
+      index = i;
+    } else if (candidateWeight === bestWeight && (candidate.size ?? 0) > (best.size ?? 0)) {
+      index = i;
+    }
+  }
+
+  const main = list[index];
+  const companions = list.filter((_, position) => position !== index);
+  const name = romDisplayName(main);
+  const label =
+    companions.length === 0
+      ? name
+      : `${name} (+${companions.length} ${companions.length === 1 ? 'archivo de pistas' : 'archivos de pistas'})`;
+
+  return { index, main, size: main.size ?? 0, companions, label };
+}
+
+/* -------------------------------------------------------------------------- */
 /* Carátula generativa (`art` del prototipo, línea 243)                       */
 /* -------------------------------------------------------------------------- */
 

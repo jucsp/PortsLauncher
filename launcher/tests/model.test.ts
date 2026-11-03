@@ -7,6 +7,8 @@
  *   · La query de búsqueda en addons usa el título real del juego.
  *   · Los argumentos de lanzamiento resuelven `{rom}` sin romper espacios.
  *   · `toGame` refleja la ROM ya guardada en la biblioteca.
+ *   · `describeRomFileSet` elige el fichero que recibe `{rom}` en discos
+ *     multifichero (`.cue` + pistas `.bin`) o en selecciones sin descriptor.
  *
  * `model.ts` consulta `catalogService` (etiqueta de desarrollo) y
  * `libraryService` (arte personalizado), así que ambos se sustituyen por dobles
@@ -19,6 +21,7 @@ import { DEFAULT_SETTINGS } from '../src/services/types';
 import type { LibraryGame, PortItem } from '../src/services/types';
 import {
   ROM_EXTENSIONS_FALLBACK,
+  describeRomFileSet,
   inferRomExtensions,
   projectOf,
   providerQuery,
@@ -27,6 +30,7 @@ import {
   splitArgs,
   toGame,
 } from '../src/ui/model';
+import type { RomFileLike } from '../src/ui/model';
 
 vi.mock('../src/services/catalogService', () => ({
   catalogService: {
@@ -246,5 +250,137 @@ describe('toGame', () => {
 
     expect(game.pr).toBe('Harbour Masters');
     expect(game.pr).not.toContain('{');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Selección de ROM multifichero (HU-15)                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Ficheros de una selección: sólo importan `name` y `size` (lo mismo que ve el
+ * `<input type="file">`), así que se construyen sin `File`.
+ */
+function fileSet(entries: ReadonlyArray<[string, number]>): RomFileLike[] {
+  return entries.map(([name, size]) => ({ name, size }));
+}
+
+describe('describeRomFileSet', () => {
+  it('devuelve una selección vacía cuando no hay ficheros', () => {
+    const empty = describeRomFileSet([]);
+
+    expect(empty.index).toBe(-1);
+    expect(empty.main).toBeNull();
+    expect(empty.size).toBe(0);
+    expect(empty.companions).toEqual([]);
+    expect(empty.label).toBe('');
+  });
+
+  it('trata `null`/`undefined` y las entradas sin nombre como selección vacía', () => {
+    expect(describeRomFileSet(null).main).toBeNull();
+    expect(describeRomFileSet(undefined).main).toBeNull();
+    /* Un `File` sin nombre no puede usarse como ROM: se descarta. */
+    expect(describeRomFileSet([{ name: '' }]).main).toBeNull();
+    expect(describeRomFileSet([{ name: '' }]).label).toBe('');
+  });
+
+  it('con un solo archivo (.z64) lo elige como principal sin acompañantes', () => {
+    const selection = describeRomFileSet(fileSet([['zelda.z64', 33554432]]));
+
+    expect(selection.index).toBe(0);
+    expect(selection.main?.name).toBe('zelda.z64');
+    expect(selection.size).toBe(33554432);
+    expect(selection.companions).toEqual([]);
+    /* Sin acompañantes la etiqueta es el nombre pelado, sin sufijo. */
+    expect(selection.label).toBe('zelda.z64');
+  });
+
+  it('elige el .cue como principal y agrupa los .bin como pistas', () => {
+    const selection = describeRomFileSet(
+      fileSet([
+        ['Dino Crisis 2.cue', 120],
+        ['Dino Crisis 2 (Track 1).bin', 4000],
+        ['Dino Crisis 2 (Track 2).bin', 3000],
+        ['Dino Crisis 2 (Track 3).bin', 2000],
+      ])
+    );
+
+    expect(selection.main?.name).toBe('Dino Crisis 2.cue');
+    expect(selection.index).toBe(0);
+    /* El descriptor pesa más que el tamaño: las pistas son mayores y aun así
+     * no ganan, porque el emulador abre el `.cue`, no el `.bin`. */
+    expect(selection.size).toBe(120);
+    expect(selection.companions.map((file) => file.name)).toEqual([
+      'Dino Crisis 2 (Track 1).bin',
+      'Dino Crisis 2 (Track 2).bin',
+      'Dino Crisis 2 (Track 3).bin',
+    ]);
+    expect(selection.label).toBe('Dino Crisis 2.cue (+3 archivos de pistas)');
+  });
+
+  it('usa el singular cuando el disco sólo trae una pista', () => {
+    const selection = describeRomFileSet(
+      fileSet([
+        ['Silent Hill.cue', 90],
+        ['Silent Hill (Track 1).bin', 700000],
+      ])
+    );
+
+    expect(selection.main?.name).toBe('Silent Hill.cue');
+    expect(selection.companions).toHaveLength(1);
+    expect(selection.label).toBe('Silent Hill.cue (+1 archivo de pistas)');
+  });
+
+  it('sin descriptor elige el de mayor tamaño', () => {
+    const selection = describeRomFileSet(
+      fileSet([
+        ['juego.sbi', 100],
+        ['juego.z64', 33554432],
+        ['leeme.txt', 4096],
+      ])
+    );
+
+    /* La pista de datos es la grande; un `.sbi` de 100 bytes nunca es el juego. */
+    expect(selection.main?.name).toBe('juego.z64');
+    expect(selection.index).toBe(1);
+    expect(selection.size).toBe(33554432);
+    expect(selection.companions.map((file) => file.name)).toEqual(['juego.sbi', 'leeme.txt']);
+    expect(selection.label).toBe('juego.z64 (+2 archivos de pistas)');
+  });
+
+  it('en empate de tamaño gana el primero, para que el resultado sea determinista', () => {
+    const selection = describeRomFileSet(
+      fileSet([
+        ['disco-b.bin', 1024],
+        ['disco-a.bin', 1024],
+      ])
+    );
+
+    expect(selection.main?.name).toBe('disco-b.bin');
+    expect(selection.index).toBe(0);
+  });
+
+  it('prefiere `.cue` sobre `.gdi` y `.m3u` cuando conviven', () => {
+    const selection = describeRomFileSet(
+      fileSet([
+        ['Saga.m3u', 300],
+        ['Disco 2.gdi', 200],
+        ['Disco 1.cue', 100],
+      ])
+    );
+
+    expect(selection.main?.name).toBe('Disco 1.cue');
+    expect(selection.index).toBe(2);
+    expect(selection.label).toBe('Disco 1.cue (+2 archivos de pistas)');
+  });
+
+  it('usa la ruta relativa de la carpeta como etiqueta legible', () => {
+    const selection = describeRomFileSet([
+      { name: 'Disco 1.cue', size: 100, webkitRelativePath: 'Dino Crisis 2/Disco 1.cue' },
+      { name: 'pista1.bin', size: 4000, webkitRelativePath: 'Dino Crisis 2/pista1.bin' },
+    ]);
+
+    expect(selection.main?.webkitRelativePath).toBe('Dino Crisis 2/Disco 1.cue');
+    expect(selection.label).toBe('Dino Crisis 2/Disco 1.cue (+1 archivo de pistas)');
   });
 });

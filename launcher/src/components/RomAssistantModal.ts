@@ -23,6 +23,7 @@ import { catalogService } from '../services/catalogService';
 import { libraryService } from '../services/libraryService';
 import { installerService } from '../services/installerService';
 import type { RomValidation } from '../services/installerService';
+import { describeRomFileSet } from '../ui/model';
 import { esc, icon } from './Icons';
 
 /* -------------------------------------------------------------------------- */
@@ -67,6 +68,16 @@ interface AssistantState {
   fileName: string;
   /** `File` real (permite hashear) o `null` si es un ejemplo/ruta. */
   file: File | null;
+  /**
+   * Selección completa (HU-15). Un disco de PlayStation/Saturn es un `.cue` más
+   * sus pistas `.bin`, así que se conservan **todos** los ficheros soltados y no
+   * sólo el primero (que en una carpeta suele ser una pista, no el descriptor).
+   */
+  files: File[];
+  /** Cuántas pistas acompañan al fichero principal. */
+  companions: number;
+  /** Etiqueta legible: `Dino Crisis 2.cue (+2 archivos de pistas)`. */
+  label: string;
   validation: RomValidation | null;
   busy: boolean;
   /** Mensaje de error de lectura del fichero. */
@@ -223,7 +234,18 @@ function validationMarkup(state: AssistantState): string {
 function assistantInner(port: PortItem, state: AssistantState): string {
   const exts = acceptedExtensions(port);
   const dropClass = 'drop' + (state.busy ? ' is-busy' : '');
-  const fileName = state.fileName ? baseName(state.fileName) : '';
+  /* El label del conjunto manda: `Dino Crisis 2.cue (+2 archivos de pistas)`
+   * dice mucho más que el nombre suelto del descriptor. */
+  const fileName = state.label || (state.fileName ? baseName(state.fileName) : '');
+  /* Los descriptores de disco se aceptan siempre: sin `.cue`/`.gdi` en el
+   * diálogo el usuario no podría elegir el fichero que el emulador abre. */
+  const accept = [...new Set([...exts, 'cue', 'gdi', 'm3u'])];
+  const companionHint =
+    state.companions > 0
+      ? `<span class="dh">${state.companions} ${
+          state.companions === 1 ? 'archivo de pistas asociado' : 'archivos de pistas asociados'
+        }</span>`
+      : '';
 
   return (
     '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="rom-title">' +
@@ -238,20 +260,23 @@ function assistantInner(port: PortItem, state: AssistantState): string {
     'PortsHub no descarga ROMs ni contenido con copyright: sólo enlaza el archivo que ya tienes.' +
     '</p>' +
     `<div class="${dropClass}" data-drop="rom" tabindex="0" role="button" ` +
-    'aria-label="Suelta aquí tu archivo de ROM o pulsa para elegirlo">' +
+    'aria-label="Suelta aquí tus archivos de ROM o pulsa para elegirlos">' +
     `<span class="dbig" aria-hidden="true">${icon('rom', { size: 30 })}</span>` +
     `<span class="dt">${fileName ? esc(fileName) : 'Suelta aquí tu archivo de ROM'}</span>` +
     `<span class="dh">${esc(
       exts.length ? `Formatos admitidos: ${exts.map((ext) => `.${ext}`).join(', ')}` : 'Cualquier formato declarado por el port'
     )}</span>` +
-    '<span class="dh">o pulsa para elegir un archivo</span>' +
-    `<input id="rom-file" type="file" hidden` +
-    (exts.length ? ` accept="${esc(exts.map((ext) => `.${ext}`).join(','))}"` : '') +
-    '>' +
+    companionHint +
+    '<span class="dh">o suelta el .cue con sus .bin, o pulsa para elegir</span>' +
+    `<input id="rom-file" type="file" hidden multiple accept="${esc(accept.map((ext) => `.${ext}`).join(','))}">` +
+    '<input id="rom-dir" type="file" hidden multiple webkitdirectory directory>' +
     '</div>' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
     `<button type="button" class="btn sm pri" data-act="pick" ${state.busy ? 'disabled' : ''}>` +
     `${icon('folder', { size: 15 })}<span>Elegir archivo…</span></button>` +
+    `<button type="button" class="btn sm" data-act="pick-dir" ${state.busy ? 'disabled' : ''} ` +
+    'title="Elige la carpeta del disco para traer el .cue y todas sus pistas">' +
+    `${icon('folder', { size: 15 })}<span>Carpeta del disco…</span></button>` +
     `<button type="button" class="btn sm" data-act="sample" ${state.busy ? 'disabled' : ''} ` +
     'title="Usa un nombre de ejemplo para probar el flujo sin fichero real">' +
     `${icon('dot', { size: 15 })}<span>Usar ROM de ejemplo</span></button>` +
@@ -291,6 +316,9 @@ export function renderRomAssistant(port: PortItem, options: RomAssistantOpenOpti
     mode: options.mode ?? settings.romMode,
     fileName: '',
     file: null,
+    files: [],
+    companions: 0,
+    label: '',
     validation: null,
     busy: false,
     error: null,
@@ -320,6 +348,9 @@ export function mountRomAssistant(options: RomAssistantOptions = {}): RomAssista
     mode: options.defaultMode ?? settings.romMode,
     fileName: '',
     file: null,
+    files: [],
+    companions: 0,
+    label: '',
     validation: null,
     busy: false,
     error: null,
@@ -343,6 +374,10 @@ export function mountRomAssistant(options: RomAssistantOptions = {}): RomAssista
     return el.querySelector<HTMLInputElement>('#rom-file');
   }
 
+  function dirInput(): HTMLInputElement | null {
+    return el.querySelector<HTMLInputElement>('#rom-dir');
+  }
+
   function open(pid: string, openOpts: RomAssistantOpenOptions = {}): void {
     const current = catalogService.getPortByPid(pid);
     if (!current) {
@@ -354,6 +389,9 @@ export function mountRomAssistant(options: RomAssistantOptions = {}): RomAssista
     state.mode = openOpts.mode ?? libraryService.getSettings().romMode;
     state.fileName = '';
     state.file = null;
+    state.files = [];
+    state.companions = 0;
+    state.label = '';
     state.validation = null;
     state.busy = false;
     state.error = null;
@@ -412,18 +450,41 @@ export function mountRomAssistant(options: RomAssistantOptions = {}): RomAssista
     }
   }
 
-  function chooseFile(file: File): void {
+  /**
+   * Registra la selección del usuario (HU-15).
+   *
+   * Un disco de PlayStation/Saturn no es un fichero: es un `.cue` más sus
+   * pistas `.bin`. Se analiza la **lista completa** con `describeRomFileSet`
+   * para quedarse con el descriptor como principal y contar los acompañantes;
+   * antes se tomaba `files[0]`, que al arrastrar una carpeta suele ser una
+   * pista y dejaba el disco inutilizable.
+   */
+  function chooseFiles(list: readonly File[]): void {
     const current = port();
     if (!current) return;
+    const files = (list ?? []).filter((file) => !!file && !!str(file.name));
+    if (files.length === 0) return;
+
+    const selection = describeRomFileSet(files);
+    const main = selection.main;
+    if (!main) return;
+
     const exts = acceptedExtensions(current);
-    const name = file.name.toLowerCase();
+    const name = main.name.toLowerCase();
     const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : '';
-    if (exts.length > 0 && ext && !exts.includes(ext)) {
-      state.fileName = file.name;
-      state.file = file;
+    state.files = files.slice();
+    state.companions = selection.companions.length;
+    state.label = selection.label;
+    state.fileName = main.name;
+    state.file = main;
+
+    /* Los descriptores de disco se aceptan aunque el perfil sólo declare la
+     * extensión de las pistas: es justo el fichero que el emulador abre. */
+    const isDescriptor = /^(cue|gdi|m3u)$/.test(ext);
+    if (!isDescriptor && exts.length > 0 && ext && !exts.includes(ext)) {
       state.validation = {
         ok: false,
-        romPath: file.name,
+        romPath: main.name,
         romMode: state.mode,
         validatedAt: null,
         destination: str(current.romProfile?.destination) || '.',
@@ -436,8 +497,6 @@ export function mountRomAssistant(options: RomAssistantOptions = {}): RomAssista
       paint();
       return;
     }
-    state.fileName = file.name;
-    state.file = file;
     void validate();
   }
 
@@ -471,12 +530,27 @@ export function mountRomAssistant(options: RomAssistantOptions = {}): RomAssista
     input.click();
   }
 
+  /** Abre el selector de carpeta (`webkitdirectory`). */
+  function onPickDir(): void {
+    const input = dirInput();
+    if (!input) return;
+    input.value = '';
+    input.click();
+  }
+
+  /**
+   * `change` de cualquiera de los dos inputs.
+   *
+   * Se recogen **todos** los ficheros (`multiple` o el árbol de una carpeta),
+   * no sólo el primero: un `.cue` suelto sin sus `.bin` no arranca el juego.
+   */
   function onChange(event: Event): void {
     const target = event.target;
-    if (!(target instanceof HTMLInputElement) || target.id !== 'rom-file') return;
-    const file = target.files && target.files.length > 0 ? target.files[0] : null;
-    if (!file) return;
-    chooseFile(file);
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.id !== 'rom-file' && target.id !== 'rom-dir') return;
+    const files = target.files ? Array.from(target.files) : [];
+    if (files.length === 0) return;
+    chooseFiles(files);
   }
 
   function onModeChange(event: Event): void {
@@ -518,11 +592,19 @@ export function mountRomAssistant(options: RomAssistantOptions = {}): RomAssista
       onPick();
       return;
     }
+    if (act === 'pick-dir') {
+      event.preventDefault();
+      onPickDir();
+      return;
+    }
     if (act === 'sample') {
       event.preventDefault();
       const current = port();
       if (!current) return;
       state.file = null;
+      state.files = [];
+      state.companions = 0;
+      state.label = '';
       state.fileName = sampleName(current);
       void validate();
       return;
@@ -570,9 +652,12 @@ export function mountRomAssistant(options: RomAssistantOptions = {}): RomAssista
     event.preventDefault();
     dragDepth = 0;
     zone.classList.remove('over');
-    const files = event.dataTransfer?.files;
-    const file = files && files.length > 0 ? files[0] : null;
-    if (file) chooseFile(file);
+    /* Todos los ficheros soltados, no el primero: al arrastrar la carpeta de un
+     * disco el navegador entrega el `.cue` y sus pistas `.bin` en la misma
+     * lista. */
+    const files = event.dataTransfer ? Array.from(event.dataTransfer.files ?? []) : [];
+    if (files.length === 0) return;
+    chooseFiles(files);
   }
 
   function onKeyDown(event: KeyboardEvent): void {

@@ -129,4 +129,21 @@
   4. La aplicación se reinicia en la versión descargada (0.1.10).
   5. Suite de pruebas pasando al 100%.
 
+## HU-15: Soporte de Provisión Multi-archivo y Carpetas para ROMs (.cue + .bin, .gdi, directorios)
+- **Contexto de Negocio:**
+  Muchos juegos clásicos (PlayStation 1, Saturn, Sega CD, Dreamcast, PC CD-ROM) no consisten en un único archivo, sino en conjuntos multi-archivo como hojas de índice `.cue` acompañadas de una o más pistas `.bin` de datos y audio, archivos `.gdi` con múltiples pistas, o incluso carpetas completas de datos de juego y BIOS. Actualmente, el asistente de ROMs solo permite seleccionar un único archivo y el backend únicamente enlaza/copia ese archivo solitario, dejando atrás los `.bin` y provocando que el port o recompilador falle al no encontrar las pistas de audio o datos. Se requiere permitir la selección y arrastre de múltiples archivos o una carpeta completa, así como la vinculación/copia inteligente de todos los archivos asociados en la carpeta del port.
+- **Objetivo:**
+  1. Frontend: Permitir arrastrar múltiples archivos o carpetas al dropzone de ROMs, y habilitar selección múltiple (`multiple`) y selección de carpeta (`webkitdirectory`) en el diálogo de selección.
+  2. Detección Inteligente: Cuando se aportan múltiples archivos, detectar automáticamente el descriptor principal de lanzamiento (`.cue`, `.gdi`, `.m3u`, `.iso`, etc.), registrarlo como archivo principal de ROM y mostrar en la UI los archivos complementarios incluidos (ej. "+2 pistas .bin detectadas").
+  3. Backend (`linkRomForLaunch` en `api.cjs`):
+     - Si la ROM es un archivo `.cue` o `.gdi`, analizar sus pistas referenciadas (`FILE "..." BINARY`) y crear enlaces simbólicos (o copias) en `installDir` para cada pista `.bin`/datos compañera que resida en el mismo directorio.
+     - Si la entrada es un directorio, enlazar o copiar el contenido del directorio en `installDir` o registrar la carpeta.
+  4. Modo de copia: Copiar todos los archivos asociados a la carpeta del port si se elige "Copiar a la carpeta del port".
+  5. Versionado e Incremento: Actualizar la versión a v0.1.12 en `launcher/package.json`.
+- **Capa:** Frontend (`launcher/src/components/RomAssistantModal.ts`, `launcher/src/main.ts`) y Backend (`launcher/electron/api.cjs`).
+- **Criterios de Aceptación:**
+  1. El usuario puede arrastrar múltiples archivos (`.cue` + `.bin`) o una carpeta completa al asistente de ROM.
+  2. Al lanzar un port con `.cue`, tanto el `.cue` como sus archivos `.bin` asociados quedan enlazados o disponibles en el directorio de ejecución del port.
+  3. `make test` supera todas las pruebas (100% verde).
+
 

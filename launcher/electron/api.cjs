@@ -2288,8 +2288,14 @@ const ROM_FILE_EXTS = new Set([
   '.nds',
   '.bin',
   '.cue',
+  '.gdi',
+  '.m3u',
   '.iso',
   '.chd',
+  '.wbfs',
+  '.rvz',
+  '.gcm',
+  '.cdi',
   '.7z',
   '.zip',
 ]);
@@ -2345,7 +2351,7 @@ function firstUsefulLine(text) {
 }
 
 /**
- * Enlaza la ROM del usuario dentro de la carpeta del port (HU-13).
+ * Enlaza **un** fichero de ROM dentro de la carpeta del port (HU-13).
  *
  * Los ports de descompilación (`2ship.appimage`) buscan la ROM en su propio
  * `cwd`: si el usuario la tiene en `~/Descargas`, el binario arranca y se cierra
@@ -2356,9 +2362,16 @@ function firstUsefulLine(text) {
  * cosa del `romProfile`, y bloquear aquí impediría formatos que el índice aún
  * no declara.
  *
+ * Es el ladrillo que usa `linkRomForLaunch` para cada pista de un disco
+ * multifichero: aquí no se interpreta nada del contenido.
+ *
+ * @param {Record<string, unknown>} [options] `{ mode: 'link' | 'copy' }`.
+ *   En modo `copy` nunca se crea un enlace: se duplica el fichero.
  * @returns {string | null} ruta que debe recibir `{rom}`, o `null` si no hay.
  */
-function linkRomForLaunch(rawRomPath, installDir) {
+function linkSingleRomFile(rawRomPath, installDir, options) {
+  const settings = options && typeof options === 'object' ? options : {};
+  const forceCopy = settings.mode === 'copy';
   const value = String(rawRomPath || '').trim();
   if (!value) return null;
 
@@ -2446,22 +2459,26 @@ function linkRomForLaunch(rawRomPath, installDir) {
         return source;
       }
     } else if (existing.isFile()) {
-      /* Copia anterior (sistemas de ficheros sin enlaces): se reutiliza. */
-      return target;
+      /* Copia anterior (sistemas de ficheros sin enlaces): se reutiliza. En
+       * modo `copy` se sobrescribe más abajo con el contenido actual, para que
+       * cambiar de ROM con el mismo nombre no lance la versión antigua. */
+      if (!forceCopy) return target;
     } else {
       console.warn('[launch] ya existe una entrada no-archivo con el nombre de la ROM:', target);
       return source;
     }
   }
 
-  try {
-    fs.symlinkSync(source, target);
-    return target;
-  } catch (error) {
-    console.warn(
-      '[launch] no se pudo crear el enlace simbólico, se copia la ROM:',
-      error instanceof Error ? error.message : error
-    );
+  if (!forceCopy) {
+    try {
+      fs.symlinkSync(source, target);
+      return target;
+    } catch (error) {
+      console.warn(
+        '[launch] no se pudo crear el enlace simbólico, se copia la ROM:',
+        error instanceof Error ? error.message : error
+      );
+    }
   }
 
   try {
@@ -2474,6 +2491,470 @@ function linkRomForLaunch(rawRomPath, installDir) {
     );
     return source;
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* ROM multifichero: `.cue`/`.gdi` con pistas, carpetas y listas (HU-15)      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Descriptores de disco: el fichero que el emulador abre para montar el juego.
+ *
+ * `.cue`/`.gdi` declaran sus pistas; `.m3u` agrupa varios discos; `.ccd`/
+ * `.toc`/`.mds`/`.nrg` son los equivalentes de CloneCD/DiscJuggler/Alcohol.
+ */
+const ROM_DESCRIPTOR_EXTS = new Set(['.cue', '.gdi', '.m3u', '.ccd', '.toc', '.mds', '.nrg']);
+
+/** Pistas y ficheros que acompañan a un descriptor y deben viajar con él. */
+const ROM_TRACK_EXTS = new Set([
+  '.bin',
+  '.iso',
+  '.img',
+  '.raw',
+  '.wav',
+  '.mp3',
+  '.ogg',
+  '.flac',
+  '.ape',
+  '.sub',
+  '.sbi',
+  '.ecm',
+]);
+
+/** Asociados que se buscan por nombre base junto al descriptor (LibCrypt/subcanal). */
+const ROM_SIDECAR_EXTS = ['.sbi', '.sub'];
+
+/** Tope de ficheros que se enlazan de una sola vez. */
+const ROM_MAX_FILES = 4096;
+
+/** Profundidad máxima al replicar una carpeta de ROM. */
+const ROM_MAX_DEPTH = 8;
+
+/**
+ * Normaliza `rawRomPath` a una lista de rutas.
+ *
+ * El frontend puede mandar cuatro formas, y las cuatro llegan aquí:
+ *   · una ruta suelta            → `/home/yo/juego.z64`
+ *   · varias por salto de línea  → `/roms/juego.cue\n/roms/Track 1.bin`
+ *   · un array JSON serializado  → `["/roms/juego.cue","/roms/Track 1.bin"]`
+ *   · el array ya deserializado por `readJSON`
+ *
+ * @returns {string[]} rutas no vacías, en el orden recibido.
+ */
+function parseRomPathList(raw) {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((value) => String(value === null || value === undefined ? '' : value).trim())
+      .filter((value) => value !== '');
+  }
+  const value = String(raw === null || raw === undefined ? '' : raw).trim();
+  if (!value) return [];
+  if (value.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((entry) => String(entry === null || entry === undefined ? '' : entry).trim())
+          .filter((entry) => entry !== '');
+      }
+    } catch {
+      /* No era JSON válido: se trata como una ruta que empieza por `[`. */
+    }
+  }
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+}
+
+/**
+ * Nombres de pista que declara un descriptor de disco.
+ *
+ * Función **pura** (recibe el texto ya leído) para poder probarla sin disco.
+ * Devuelve las referencias tal cual las escribe el descriptor: son relativas a
+ * su carpeta, así que resolverlas es cosa de quien llama.
+ *
+ *   `.cue` → `FILE "Track 1.bin" BINARY`
+ *   `.gdi` → `1 0 4 2352 track01.bin 0`
+ *
+ * @returns {string[]} referencias sin duplicados (comparadas sin distinguir mayúsculas).
+ */
+function parseDiscReferences(text, ext) {
+  const body = String(text === null || text === undefined ? '' : text);
+  const kind = String(ext || '').toLowerCase();
+  const refs = [];
+
+  if (kind === '.cue') {
+    const pattern = /^[ \t]*FILE[ \t]+(?:"([^"]+)"|'([^']+)'|([^\s]+))/gim;
+    let match = pattern.exec(body);
+    while (match !== null) {
+      refs.push(match[1] || match[2] || match[3] || '');
+      match = pattern.exec(body);
+    }
+  } else if (kind === '.gdi') {
+    for (const line of body.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      /* `track name.bin` con espacios va entre comillas. */
+      const quoted = /^\d+[ \t]+\d+[ \t]+\d+[ \t]+\d+[ \t]+"([^"]+)"/.exec(trimmed);
+      if (quoted) {
+        refs.push(quoted[1]);
+        continue;
+      }
+      const parts = trimmed.split(/\s+/);
+      /* 1 0 4 2352 track01.bin 0 */
+      if (parts.length >= 5 && /^\d+$/.test(parts[0])) refs.push(parts[4]);
+    }
+  }
+
+  const seen = new Set();
+  const unique = [];
+  for (const ref of refs) {
+    const name = String(ref || '').trim();
+    if (!name || name === '.' || name === '..') continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(name);
+  }
+  return unique;
+}
+
+/**
+ * Elige qué fichero debe recibir `{rom}` entre varios candidatos.
+ *
+ * Prioridad: descriptor de disco (`.cue` > `.gdi` > `.m3u` > resto de
+ * descriptores) y, si no hay ninguno, el de **mayor tamaño** — la pista de
+ * datos es la grande, y un `.sbi` de 100 bytes nunca es el juego.
+ *
+ * @param {Array<{path: string, size?: number}>} entries
+ * @returns {{path: string, size?: number} | null}
+ */
+function pickMainRomFile(entries) {
+  const list = Array.isArray(entries) ? entries.filter((entry) => entry && entry.path) : [];
+  if (list.length === 0) return null;
+
+  const rank = (file) => {
+    const ext = path.extname(String(file)).toLowerCase();
+    if (ext === '.cue') return 4;
+    if (ext === '.gdi') return 3;
+    if (ext === '.m3u') return 2;
+    return ROM_DESCRIPTOR_EXTS.has(ext) ? 1 : 0;
+  };
+
+  let best = list[0];
+  let bestRank = rank(best.path);
+  let bestSize = Number(best.size || 0) || 0;
+  for (const entry of list.slice(1)) {
+    const entryRank = rank(entry.path);
+    const entrySize = Number(entry.size || 0) || 0;
+    if (entryRank > bestRank || (entryRank === bestRank && entrySize > bestSize)) {
+      best = entry;
+      bestRank = entryRank;
+      bestSize = entrySize;
+    }
+  }
+  return best;
+}
+
+/**
+ * Replica un árbol de ROM dentro de `destDir` con enlaces (o copias).
+ *
+ * Se reproduce la estructura de subcarpetas porque las referencias de un `.cue`
+ * son relativas a él: si el disco vive en `Juego/data/Track 1.bin`, el enlace
+ * tiene que quedar en la misma ruta relativa o el emulador no monta el disco.
+ *
+ * Acotado en profundidad y número de ficheros para que una carpeta gigante (o
+ * un enlace circular) no bloquee el lanzamiento.
+ *
+ * @returns {Array<{path: string, source: string, size: number, ext: string}>}
+ */
+function mirrorRomDir(sourceDir, destDir, options) {
+  const out = [];
+
+  const walk = (from, to, depth) => {
+    if (out.length >= ROM_MAX_FILES) return;
+    if (depth > ROM_MAX_DEPTH) {
+      console.warn('[launch] carpeta de ROM demasiado profunda, se ignora:', from);
+      return;
+    }
+    let entries = [];
+    try {
+      entries = fs.readdirSync(from, { withFileTypes: true });
+    } catch (error) {
+      console.warn(
+        '[launch] no se pudo leer la carpeta de ROM:',
+        from,
+        error instanceof Error ? error.message : error
+      );
+      return;
+    }
+    for (const entry of entries) {
+      if (out.length >= ROM_MAX_FILES) return;
+      const source = path.join(from, entry.name);
+      const target = path.join(to, entry.name);
+      if (entry.isDirectory()) {
+        try {
+          ensureDir(target);
+        } catch {
+          console.warn('[launch] no se pudo crear la subcarpeta de la ROM:', target);
+          continue;
+        }
+        walk(source, target, depth + 1);
+        continue;
+      }
+      let size = 0;
+      try {
+        const stat = fs.statSync(source);
+        if (!stat.isFile()) continue;
+        size = stat.size;
+      } catch {
+        continue;
+      }
+      const linkedPath = linkSingleRomFile(source, to, options);
+      if (!linkedPath) continue;
+      out.push({ path: linkedPath, source, size, ext: path.extname(entry.name).toLowerCase() });
+    }
+  };
+
+  try {
+    ensureDir(destDir);
+  } catch (error) {
+    console.warn(
+      '[launch] no se pudo crear la carpeta destino de la ROM:',
+      destDir,
+      error instanceof Error ? error.message : error
+    );
+    return out;
+  }
+  walk(sourceDir, destDir, 0);
+  return out;
+}
+
+/**
+ * Enlaza la ROM del usuario dentro de la carpeta del port (HU-15).
+ *
+ * Un juego de PlayStation o Saturn no es un fichero: es un `.cue`/`.gdi` más una
+ * o varias pistas `.bin`/`.wav`. Enlazar sólo el descriptor deja el disco roto,
+ * así que esta función:
+ *
+ *   1. Acepta una ruta, varias separadas por saltos de línea o un array JSON.
+ *   2. Si la ruta es un **descriptor** (`.cue`/`.gdi`), lee las referencias
+ *      `FILE "…"` y enlaza cada pista existente junto a él, más los asociados
+ *      de LibCrypt/subcanal (`.sbi`, `.sub`) con el mismo nombre base.
+ *   3. Si la ruta es una **carpeta**, replica su árbol en `installDir/<nombre>`
+ *      y busca dentro el descriptor principal.
+ *   4. Devuelve la ruta del descriptor (o del fichero mayor) para `{rom}`.
+ *
+ * @param {unknown} rawRomPath ruta, lista o array JSON de rutas.
+ * @param {string} installDir carpeta del port donde se dejan los enlaces.
+ * @param {'link'|'copy'} [mode] `copy` duplica en lugar de enlazar.
+ * @returns {string | null} ruta que debe recibir `{rom}`, o `null` si no hay.
+ */
+function linkRomForLaunch(rawRomPath, installDir, mode) {
+  const requested = parseRomPathList(rawRomPath);
+  if (requested.length === 0) return null;
+
+  const root = path.resolve(String(installDir || '').trim() || '.');
+  const options = { mode: String(mode || '').toLowerCase() === 'copy' ? 'copy' : 'link' };
+
+  /** Todo lo que quedó accesible dentro de `root`, en orden de aparición. */
+  const linked = [];
+  /** `realpath|destino` ya procesado: evita enlazar dos veces lo mismo. */
+  const seen = new Set();
+  /** `destino|nombre` → origen, para no pisar una pista homónima. */
+  const claimed = new Map();
+
+  /**
+   * Enlaza un fichero suelto y lo anota como candidato a `{rom}`.
+   *
+   * @returns {object | null} la entrada creada, o `null` si se descartó.
+   */
+  const adopt = (file, destDir, size) => {
+    if (linked.length >= ROM_MAX_FILES) return null;
+
+    let real = '';
+    try {
+      real = fs.realpathSync(file);
+    } catch {
+      real = path.resolve(file);
+    }
+    const key = real + '\u0000' + path.resolve(destDir);
+    if (seen.has(key)) return null;
+
+    const base = path.basename(file);
+    const slot = path.resolve(destDir) + '\u0000' + base.toLowerCase();
+    const owner = claimed.get(slot);
+    if (owner && owner !== key) {
+      console.warn('[launch] dos ficheros de ROM con el mismo nombre; se conserva el primero:', base);
+      return null;
+    }
+
+    const linkedPath = linkSingleRomFile(file, destDir, options);
+    if (!linkedPath) return null;
+
+    seen.add(key);
+    claimed.set(slot, key);
+    const entry = {
+      path: linkedPath,
+      source: file,
+      size: Number(size || 0) || 0,
+      ext: path.extname(base).toLowerCase(),
+    };
+    linked.push(entry);
+    return entry;
+  };
+
+  /**
+   * Enlaza las pistas que declara un `.cue`/`.gdi` y los asociados que viven en
+   * su misma carpeta.
+   */
+  const adoptDiscCompanions = (descriptor, destDir) => {
+    const folder = path.dirname(descriptor);
+    const kind = path.extname(descriptor).toLowerCase();
+
+    let text = '';
+    try {
+      /* Latin-1: los `.cue`/`.gdi` antiguos traen los nombres en la
+       * codificación del sistema y leerlos como UTF-8 rompería la referencia.
+       * Un `.gdi` es ASCII puro, así que aquí no se pierde nada. */
+      text = fs.readFileSync(descriptor, 'latin1');
+    } catch (error) {
+      console.warn(
+        '[launch] no se pudo leer el descriptor de disco:',
+        descriptor,
+        error instanceof Error ? error.message : error
+      );
+      return;
+    }
+
+    const references = parseDiscReferences(text, kind);
+    const bases = new Set([path.basename(descriptor, path.extname(descriptor)).toLowerCase()]);
+
+    for (const reference of references) {
+      const file = path.isAbsolute(reference) ? path.resolve(reference) : path.join(folder, reference);
+      let size = 0;
+      try {
+        const stat = fs.statSync(file);
+        if (!stat.isFile()) continue;
+        size = stat.size;
+      } catch {
+        /* Un `.cue` puede referenciar pistas que no se copiaron: se avisa y se
+         * sigue, porque el resto del disco puede ser suficiente. */
+        console.warn('[launch] la pista declarada por el descriptor no existe:', file);
+        continue;
+      }
+      bases.add(path.basename(file, path.extname(file)).toLowerCase());
+
+      /* Referencia con subcarpeta (`data/Track 1.bin`): hay que recrearla. */
+      const relativeDir = path.isAbsolute(reference) ? '.' : path.dirname(reference);
+      let targetDir = destDir;
+      if (relativeDir && relativeDir !== '.' && !relativeDir.split(/[\\/]/).includes('..')) {
+        targetDir = path.join(destDir, relativeDir);
+        try {
+          ensureDir(targetDir);
+        } catch {
+          console.warn('[launch] no se pudo crear la subcarpeta de la pista:', targetDir);
+          targetDir = destDir;
+        }
+      }
+      adopt(file, targetDir, size);
+    }
+
+    /* Asociados de LibCrypt y subcanal: `juego.sbi`, `Track 1.sbi`, `Track 1.sub`… */
+    let entries = [];
+    try {
+      entries = fs.readdirSync(folder, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!ROM_SIDECAR_EXTS.includes(ext)) continue;
+      if (!bases.has(path.basename(entry.name, ext).toLowerCase())) continue;
+      const file = path.join(folder, entry.name);
+      let size = 0;
+      try {
+        size = fs.statSync(file).size;
+      } catch {
+        continue;
+      }
+      adopt(file, destDir, size);
+    }
+  };
+
+  for (const raw of requested) {
+    let source = '';
+    try {
+      source = path.resolve(raw);
+    } catch {
+      continue;
+    }
+
+    let stat = null;
+    try {
+      stat = fs.statSync(source);
+    } catch (error) {
+      console.warn(
+        '[launch] romPath ignorado (no existe):',
+        source,
+        error instanceof Error ? error.message : error
+      );
+      continue;
+    }
+
+    if (stat.isDirectory()) {
+      /* Apuntar a la propia carpeta del port replicaría el port dentro de sí
+       * mismo; no aporta nada y puede crecer sin control. */
+      if (source === root) {
+        console.warn('[launch] la carpeta indicada es la del propio port; se ignora:', source);
+        continue;
+      }
+      const name = path.basename(source);
+      if (!name || name === '.' || name === '..') continue;
+      const mirrored = mirrorRomDir(source, path.join(root, name), options);
+      if (mirrored.length === 0) {
+        console.warn('[launch] la carpeta de ROM no contiene ficheros utilizables:', source);
+        continue;
+      }
+      for (const item of mirrored) linked.push(item);
+      continue;
+    }
+
+    if (!stat.isFile() || stat.size <= 0) {
+      console.warn('[launch] romPath ignorado (no es un archivo con contenido):', source);
+      continue;
+    }
+
+    const base = path.basename(source);
+    const ext = path.extname(base).toLowerCase();
+    if (
+      ext &&
+      !ROM_FILE_EXTS.has(ext) &&
+      !ROM_TRACK_EXTS.has(ext) &&
+      !ROM_DESCRIPTOR_EXTS.has(ext)
+    ) {
+      /* No se bloquea: hay ports con formatos propios, pero deja rastro. */
+      console.warn('[launch] la ROM declarada tiene una extensión no habitual:', base);
+    }
+
+    if (!adopt(source, root, stat.size)) continue;
+    if (ROM_DESCRIPTOR_EXTS.has(ext)) adoptDiscCompanions(source, root);
+  }
+
+  if (linked.length === 0) return null;
+
+  const main = pickMainRomFile(linked);
+  if (!main) return null;
+
+  if (linked.length > 1) {
+    console.warn(
+      `[launch] ROM multifichero preparada en ${root}: ${linked.length} ficheros; ` +
+        `principal ${path.basename(main.path)} (${options.mode}).`
+    );
+  }
+  return main.path;
 }
 
 /**
@@ -2601,7 +3082,11 @@ async function handleLaunch(req, res) {
     /* La ROM se enlaza dentro de `installDir` para que los binarios que la
      * buscan en su `cwd` la encuentren, y `{rom}` se sustituye tanto si el
      * frontend ya lo hizo (array resuelto) como si llega en crudo. */
-    const linkedRom = linkRomForLaunch(body && body.romPath, installDir);
+    const linkedRom = linkRomForLaunch(
+      body && body.romPath,
+      installDir,
+      body && body.romMode
+    );
     const rawArgs = buildLaunchArgs(body && body.args);
     /* Un perfil con `{rom}` que llega sin ROM válida no debe ejecutarse: el
      * binario recibiría el literal `{rom}` y moriría sin mensaje útil (o, peor,
@@ -3564,6 +4049,11 @@ module.exports = {
   firstUsefulLine,
   buildLaunchArgs,
   linkRomForLaunch,
+  linkSingleRomFile,
+  mirrorRomDir,
+  parseDiscReferences,
+  parseRomPathList,
+  pickMainRomFile,
   waitForEarlyExit,
   handleApiRequest,
   handleLaunch,

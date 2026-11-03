@@ -30,7 +30,7 @@ import {
 } from './services/addonProvider';
 import type { ProviderPhase, ProviderResult } from './services/addonProvider';
 import type { Game } from './ui/model';
-import { toGame, statusOf, esc, styleFor, folderOf, providerQuery, resolveLaunchArgs } from './ui/model';
+import { toGame, statusOf, esc, styleFor, folderOf, providerQuery, resolveLaunchArgs, describeRomFileSet, isRomDescriptor, type RomFileLike } from './ui/model';
 import { mediaHTML } from './ui/media';
 import { MEDIA, PLAT } from './ui/platforms';
 import { B, D, NAVMEM, R, S, setSnapshot, updateCount } from './ui/state';
@@ -126,6 +126,22 @@ let L: LayerState = null;
 
 interface RomWizardState {
   file: { name: string; size: number } | null;
+  /**
+   * Selección completa (HU-15). Un disco de PlayStation/Saturn llega como
+   * `.cue` + pistas `.bin`, así que el asistente guarda **todos** los ficheros
+   * elegidos y usa el descriptor como ruta de `{rom}`. El backend vuelve a
+   * resolver las pistas desde el `.cue`, pero aquí hacen falta para contar los
+   * acompañantes y para no perderlos al cambiar el modo.
+   */
+  files: RomFileLike[];
+  /** Cuántas pistas/acompañantes acompañan al fichero principal. */
+  companions: number;
+  /**
+   * Etiqueta legible del conjunto: `Dino Crisis 2.cue (+2 archivos de pistas)`.
+   * Es lo que se pinta en el dropzone cuando la selección trae acompañantes;
+   * con un solo fichero coincide con su nombre.
+   */
+  label: string;
   checks: Array<{ ok: boolean; t: string; v: string }>;
   ok: boolean;
   mode: RomMode;
@@ -134,6 +150,9 @@ interface RomWizardState {
 
 let W: RomWizardState = {
   file: null,
+  files: [],
+  companions: 0,
+  label: '',
   checks: [],
   ok: false,
   mode: 'link',
@@ -413,23 +432,54 @@ function fmtSize(bytes: number): string {
   return Math.max(1, Math.round(bytes / 1024)) + ' KB';
 }
 
-function validateRom(game: Game, name: string, size: number) {
+/**
+ * Extensiones que ofrece el selector nativo de archivos.
+ *
+ * Incluye los descriptores de disco (`.cue`, `.gdi`, `.m3u`) aunque el perfil
+ * del port sólo declare la extensión de las pistas: sin ellos el diálogo
+ * ocultaría justo el fichero que el usuario tiene que elegir.
+ */
+function romAccept(game: Game): string {
+  const allowed = game.rom ? game.rom.x : ['.iso', '.bin', '.rom', '.z64'];
+  return [...new Set([...allowed, '.cue', '.gdi', '.m3u'])].join(',');
+}
+
+function validateRom(game: Game, name: string, size: number, companions = 0) {
   const ext = (name.match(/\.[^.]+$/) ?? [''])[0].toLowerCase();
   const allowed = game.rom ? game.rom.x : ['.iso', '.bin', '.rom', '.z64'];
-  const okExt = allowed.includes(ext);
+  /* Un `.cue`/`.gdi`/`.m3u` no es la ROM, es su índice: el perfil declara la
+   * extensión de las pistas (`.bin`, `.iso`), así que rechazarlo por extensión
+   * impediría aportar justo el formato que los discos multi-pista necesitan. */
+  const descriptor = isRomDescriptor(name);
+  const okExt = descriptor || allowed.includes(ext);
   const checks = [
     {
       ok: okExt,
-      t: okExt ? 'Extensión reconocida' : 'Extensión no reconocida',
+      t: descriptor
+        ? 'Descriptor de disco reconocido'
+        : okExt
+          ? 'Extensión reconocida'
+          : 'Extensión no reconocida',
       v: okExt ? ext : 'se esperaba ' + allowed.join(' '),
     },
   ];
   if (okExt) {
     checks.push({ ok: true, t: 'Tamaño correcto', v: fmtSize(size) });
+    if (companions > 0) {
+      checks.push({
+        ok: true,
+        t: 'Pistas asociadas detectadas',
+        v: `${companions} ${companions === 1 ? 'archivo' : 'archivos'}`,
+      });
+    }
     checks.push({
       ok: true,
-      t: ext === '.v64' ? 'Orden de bytes: se convertirá' : 'Orden de bytes correcto',
-      v: ext === '.v64' ? 'byte-swapped' : 'big-endian',
+      t: descriptor
+        ? 'Pistas enlazadas al lanzar'
+        : ext === '.v64'
+          ? 'Orden de bytes: se convertirá'
+          : 'Orden de bytes correcto',
+      v: descriptor ? 'se leen del índice' : ext === '.v64' ? 'byte-swapped' : 'big-endian',
     });
     checks.push({
       ok: true,
@@ -443,6 +493,9 @@ function validateRom(game: Game, name: string, size: number) {
 function openRom(id: string, fromInstall = false): void {
   W = {
     file: null,
+    files: [],
+    companions: 0,
+    label: '',
     checks: [],
     ok: false,
     mode: S.settings.romMode,
@@ -457,14 +510,38 @@ function openRom(id: string, fromInstall = false): void {
   renderLayer();
 }
 
-function setFile(name: string, size: number): void {
+/**
+ * Registra la selección de ROM del asistente (HU-15).
+ *
+ * Acepta varios ficheros porque un disco de PlayStation/Saturn es un `.cue` más
+ * sus pistas `.bin`: se elige el descriptor como principal y se cuentan los
+ * acompañantes para mostrarlo en la UI. Con un solo fichero se comporta igual
+ * que antes.
+ *
+ * Recibe la lista completa (arrastrar varios ficheros, `multiple` o una carpeta
+ * con `webkitdirectory`); **nunca** se queda con el primero, que en una carpeta
+ * de disco suele ser una pista `.bin` y no el `.cue` que el emulador espera.
+ */
+function setFiles(list: readonly RomFileLike[] | null | undefined): void {
   if (!L || L.type !== 'rom') return;
   const game = S.byId.get(L.id);
   if (!game) return;
-  W.file = { name, size };
-  W.checks = validateRom(game, name, size);
-  W.ok = W.checks.every((c) => c.ok);
+  const files = (list ?? []).filter((file) => file && String(file.name ?? '').trim() !== '');
+  if (files.length === 0) return;
+  const selection = describeRomFileSet(files);
+  if (!selection.main) return;
+  W.files = files.slice();
+  W.companions = selection.companions.length;
+  W.label = selection.label;
+  W.file = { name: selection.main.name, size: selection.size };
+  W.checks = validateRom(game, selection.main.name, selection.size, W.companions);
+  W.ok = W.checks.every((check) => check.ok);
   renderLayer();
+}
+
+/** Azúcar para el botón «Usar ROM de ejemplo» y la ruta de un solo fichero. */
+function setFile(name: string, size: number): void {
+  setFiles([{ name, size }]);
 }
 
 function romDest(game: Game): string {
@@ -522,8 +599,8 @@ function renderLayer(): void {
     h = `<div class="scrim" data-act="closeL"></div><div class="modal" role="dialog" aria-modal="true" aria-label="Añadir ROM">
     <div class="mhead"><div style="width:44px;height:44px;border-radius:50%;background:var(--accent2);color:#04202B;display:grid;place-items:center;font-weight:800;font-size:20px">${W.fromInstall ? '✓' : '↑'}</div><div><h2 style="font-size:22px">${W.fromInstall ? esc(game.t) + ' se instaló' : 'Añade tu ROM de ' + esc(game.t)}</h2><div class="muted">${W.fromInstall ? 'Un último paso: falta tu ROM para poder jugar.' : 'Elige tu copia del juego.'}</div></div></div>
     <div class="mbody"><div class="drop" id="drop"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-     <b style="font-size:16px">${W.file ? esc(W.file.name) : 'Suelta aquí tu archivo de ROM'}</b><div class="muted">${game.rom ? game.rom.n + ' · ' + game.rom.x.join(' ') : 'Archivos de juego'}</div>
-     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button class="btn" data-act="pick">Elegir archivo…</button><button class="btn" data-act="sample">Usar ROM de ejemplo</button></div><input type="file" id="fpick" hidden><div class="muted" style="font-size:12px">Prototipo: solo se lee el nombre del archivo, nunca su contenido.</div></div>
+     <b style="font-size:16px">${W.file ? esc(W.label || W.file.name) : 'Suelta aquí tu archivo de ROM'}</b><div class="muted">${W.companions > 0 ? `${W.companions} ${W.companions === 1 ? 'pista asociada' : 'pistas asociadas'} · ` : ''}${game.rom ? game.rom.n + ' · ' + game.rom.x.join(' ') : 'Archivos de juego'}</div>
+     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button class="btn" data-act="pick">Elegir archivo…</button><button class="btn" data-act="pickDir">Elegir carpeta…</button><button class="btn" data-act="sample">Usar ROM de ejemplo</button></div><input type="file" id="fpick" hidden multiple accept="${esc(romAccept(game))}"><input type="file" id="fpickdir" hidden multiple webkitdirectory directory><div class="muted" style="font-size:12px">Puedes soltar el <span class="mono">.cue</span> y sus pistas <span class="mono">.bin</span> a la vez, o la carpeta del disco entera.</div></div>
     ${providerSectionHTML(game)}
     ${W.checks.length ? `<div style="display:flex;flex-direction:column;gap:8px"><div class="lbl" style="padding:0">VALIDACIÓN</div>${W.checks.map((c) => `<div class="chk ${c.ok ? '' : 'bad'}"><i>${c.ok ? '✓' : '✕'}</i><span style="flex:1">${c.t}</span><span class="mono muted" style="font-size:12px">${esc(c.v)}</span></div>`).join('')}</div>` : ''}
     <div><div class="lbl" style="padding:0;margin-bottom:10px">¿CÓMO LA USAMOS?</div><div style="display:flex;flex-wrap:wrap;gap:12px"><button class="opt" role="radio" aria-checked="${W.mode === 'link'}" data-act="wmode" data-k="link"><b>Usarla desde donde está</b><span class="muted">Se enlaza a <span class="mono" style="font-size:12px">${esc(W.file ? '~/Descargas/' + W.file.name : '~/Descargas/…')}</span>. No se mueve nada.</span></button><button class="opt" role="radio" aria-checked="${W.mode === 'copy'}" data-act="wmode" data-k="copy"><b>Copiarla a la carpeta del port</b><span class="muted">Se copia a <span class="mono" style="font-size:12px">${esc(S.settings.romDir)}/…</span></span></button></div><div class="muted" style="font-size:12px;margin-top:8px">El archivo original nunca se mueve ni se borra. Puedes cambiarlo luego en el engranaje ⚙.</div></div></div>
@@ -558,22 +635,35 @@ function renderLayer(): void {
         drop.classList.add('over');
       })
     );
-    ['dragleave', 'drop'].forEach((e) =>
-      drop.addEventListener(e, (ev) => {
-        ev.preventDefault();
-        drop.classList.remove('over');
-      })
-    );
+    drop.addEventListener('dragleave', (ev) => {
+      ev.preventDefault();
+      drop.classList.remove('over');
+    });
+    /* Un disco multifichero llega como varios ficheros a la vez: se pasan
+     * **todos** a `setFiles`, que elige el descriptor como principal. Quedarse
+     * con `files[0]` tomaría la primera pista `.bin` y rompería el lanzamiento. */
     drop.addEventListener('drop', (ev) => {
+      ev.preventDefault();
+      drop.classList.remove('over');
       const dt = (ev as DragEvent).dataTransfer;
-      const file = dt && dt.files && dt.files[0];
-      if (file) setFile(file.name, file.size);
+      const files = dt ? Array.from(dt.files ?? []) : [];
+      if (files.length > 0) setFiles(files);
     });
     const fp = $('#fpick') as HTMLInputElement | null;
     if (fp) {
       fp.addEventListener('change', () => {
-        const file = fp.files && fp.files[0];
-        if (file) setFile(file.name, file.size);
+        const files = fp.files ? Array.from(fp.files) : [];
+        if (files.length > 0) setFiles(files);
+      });
+    }
+    /* Selección de carpeta completa (`webkitdirectory`). El navegador entrega
+     * todos los ficheros del árbol con su `webkitRelativePath`, que es lo que
+     * `describeRomFileSet` usa para mostrar la ruta legible. */
+    const fpd = $('#fpickdir') as HTMLInputElement | null;
+    if (fpd) {
+      fpd.addEventListener('change', () => {
+        const files = fpd.files ? Array.from(fpd.files) : [];
+        if (files.length > 0) setFiles(files);
       });
     }
   }
@@ -2498,6 +2588,7 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   },
   rom: (d) => d.id && openRom(d.id, false),
   pick: () => $('#fpick')?.click(),
+  pickDir: () => $('#fpickdir')?.click(),
   sample: () => {
     if (!L || L.type !== 'rom') return;
     const game = S.byId.get(L.id);
