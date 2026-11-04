@@ -577,6 +577,15 @@ export interface RequiresUserFiles {
 export interface LaunchProfile {
   executable?: string | null;
   args?: string[];
+  /**
+   * Argumentos con los que el port **sugiere** lanzarlo (`--rom {rom}`).
+   *
+   * Es una pista del índice, no una imposición: el engranaje ⚙ arranca el campo
+   * «Argumentos» con este valor y el usuario puede borrarlo por completo para
+   * dejar el campo vacío (un port que no necesita argumentos). `args` es lo que
+   * el usuario guardó; `defaultArgs` lo que propone el proyecto.
+   */
+  defaultArgs?: string[];
   workingDir?: string | null;
   env?: Record<string, string>;
   runner?: string | null;

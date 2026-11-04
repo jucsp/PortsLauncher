@@ -955,7 +955,14 @@ export function toGame(
     dir: saved?.installDir || `${settings.installDir}/${folderOf(port.name)}`,
     romPath: saved?.romPath ?? '',
     romMode: saved?.romMode ?? settings.romMode,
-    args: (saved?.launchProfile?.args ?? []).join(' ') || '--rom {rom}',
+    /* Argumentos **opcionales**: si el usuario no guardó ninguno se usa lo que
+     * sugiera el port (`launch.defaultArgs`) y, si tampoco hay nada, cadena
+     * vacía. Antes se forzaba `--rom {rom}` para todos los ports, lo que metía
+     * un argumento inventado a los que no reciben ninguno y hacía imposible
+     * dejarlos sin argumentos desde el engranaje ⚙. */
+    args: saved?.launchProfile?.args
+      ? saved.launchProfile.args.join(' ')
+      : (port.launch?.defaultArgs?.join(' ') ?? ''),
     runner: saved?.launchProfile?.runner || 'Nativo',
     exe: saved?.launchProfile?.executable || `./${folderOf(port.name)}`,
     played: 0,

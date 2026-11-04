@@ -2838,6 +2838,130 @@ function findMainExecutable(dir, hint) {
   return { file: best.file, relative: path.relative(dir, best.file) };
 }
 
+/**
+ * Ejecutables candidatos de un port, ordenados por `launchScore` descendente.
+ *
+ * Es la versión «lista» de `findMainExecutable`: el engranaje ⚙ ofrece un
+ * desplegable con los binarios detectados para que el usuario no tenga que
+ * teclear la ruta a mano. Se escanean la raíz del port (2 niveles) y las
+ * carpetas de build habituales, exactamente igual que hace el lanzador, para
+ * que lo que se elige en la UI sea lo mismo que se encuentra al jugar.
+ *
+ * @param {string} dir    carpeta del port (absoluta).
+ * @param {string} [hint] ejecutable ya declarado: sube al primer puesto.
+ * @returns {Array<{ name: string, relative: string, file: string, score: number }>}
+ *          Lista vacía si la carpeta no existe o no hay nada lanzable.
+ */
+function listPortExecutables(dir, hint) {
+  const result = [];
+  if (!dir) return result;
+  try {
+    if (!fs.statSync(dir).isDirectory()) return result;
+  } catch {
+    return result;
+  }
+
+  const files = [];
+  collectFiles(dir, 2, files);
+
+  // Mismas carpetas de build secundarias que `findMainExecutable`.
+  const secondaryBuildDirs = ['build-release', 'build', 'Build-Release', 'Build'];
+  for (const b of secondaryBuildDirs) {
+    const sub = path.join(dir, b);
+    try {
+      if (fs.existsSync(sub) && fs.statSync(sub).isDirectory()) {
+        const buildFiles = [];
+        collectFiles(sub, 2, buildFiles);
+        for (const bf of buildFiles) {
+          if (!files.includes(bf)) files.push(bf);
+        }
+      }
+    } catch {}
+  }
+
+  const scored = [];
+  for (const file of files) {
+    const score = launchScore(file, dir, hint);
+    if (score < 0) continue;
+    scored.push({
+      name: path.basename(file),
+      /* Ruta relativa con barras normales (`./sub/bin`): el mismo formato que
+       * guarda `launchProfile.executable` y que entiende `POST /api/launch` en
+       * cualquier sistema operativo. */
+      relative: './' + path.relative(dir, file).replace(/\\/g, '/'),
+      file,
+      score,
+    });
+  }
+
+  scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  return scored;
+}
+
+/**
+ * `GET /api/port-executables` → ejecutables detectados en la carpeta del port.
+ *
+ * Acepta `installDir` (ruta absoluta, la que guarda la biblioteca) o
+ * `folderName` (se resuelve contra `PORTS_DIR`). Una carpeta inexistente no es
+ * un error: el port puede no estar instalado todavía y se responde una lista
+ * vacía con 200 para que la UI simplemente no muestre el desplegable.
+ */
+async function handlePortExecutables(req, res) {
+  if (req.method !== 'GET') {
+    sendJSON(res, 405, { ok: false, error: 'Usa GET.' });
+    return;
+  }
+
+  let params;
+  try {
+    params = new URL(req.url || '', 'http://127.0.0.1').searchParams;
+  } catch {
+    params = new URLSearchParams();
+  }
+
+  const installDir = String(params.get('installDir') || '').trim();
+  const folderName = String(params.get('folderName') || '').trim();
+
+  let targetDir = '';
+  if (installDir) {
+    try {
+      targetDir = path.resolve(installDir);
+    } catch {
+      targetDir = '';
+    }
+  } else if (folderName) {
+    try {
+      targetDir = path.join(PORTS_DIR, safeFolder(folderName));
+    } catch {
+      sendJSON(res, 400, { ok: false, error: 'folderName no válido.' });
+      return;
+    }
+  }
+
+  if (!targetDir) {
+    sendJSON(res, 200, { ok: true, installDir: '', executables: [] });
+    return;
+  }
+
+  let isDir = false;
+  try {
+    isDir = fs.existsSync(targetDir) && fs.statSync(targetDir).isDirectory();
+  } catch {
+    isDir = false;
+  }
+  if (!isDir) {
+    sendJSON(res, 200, { ok: true, installDir: targetDir, executables: [] });
+    return;
+  }
+
+  const hint = String(params.get('hint') || '').trim();
+  sendJSON(res, 200, {
+    ok: true,
+    installDir: targetDir,
+    executables: listPortExecutables(targetDir, hint),
+  });
+}
+
 /** Marcador que los perfiles de lanzamiento usan para la ruta de la ROM. */
 const ROM_PLACEHOLDER = '{rom}';
 
@@ -4549,6 +4673,10 @@ async function handleApiRequest(req, res) {
     await handlePluginProvision(req, res);
     return true;
   }
+  if (url === '/api/port-executables') {
+    await handlePortExecutables(req, res);
+    return true;
+  }
   if (url.startsWith(STEAMGRID_PREFIX)) {
     await steamgridProxy(req, res);
     return true;
@@ -4581,6 +4709,7 @@ function createApiMiddleware() {
       url === '/api/plugins/dir' ||
       url === '/api/plugins/search' ||
       url === '/api/plugins/provision' ||
+      url === '/api/port-executables' ||
       url === '/api/health' ||
       url.startsWith(STEAMGRID_PREFIX);
     if (!isApi) {
@@ -4646,12 +4775,14 @@ module.exports = {
   handlePluginSearch,
   handlePlugins,
   handlePluginsDir,
+  handlePortExecutables,
   handleReportError,
   handleSelfUpdate,
   handleSteamgridSaveKey,
   installPort,
   isWritable,
   listPlugins,
+  listPortExecutables,
   looksExecutable,
   openInSystem,
   parseDesktopExec,

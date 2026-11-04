@@ -251,6 +251,11 @@ describe('toGame', () => {
     expect(game.pr).toBe('Harbour Masters');
     expect(game.pr).not.toContain('{');
   });
+
+  it('no impone --rom {rom} por defecto si el port o biblioteca no declaran argumentos', () => {
+    const game = toGame(portWith(), {}, settings);
+    expect(game.args).toBe('');
+  });
 });
 
 /* -------------------------------------------------------------------------- */

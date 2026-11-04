@@ -590,6 +590,159 @@ function romDisclaimerHTML(game: Game): string {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* Engranaje ⚙ · elegir el ejecutable del port                                */
+/* -------------------------------------------------------------------------- */
+
+/** Ejecutable detectado, tal y como lo devuelve `GET /api/port-executables`. */
+interface PortExecutable {
+  name: string;
+  relative: string;
+  file: string;
+  score: number;
+}
+
+/**
+ * Barras normales en cualquier sistema operativo.
+ *
+ * El formato canónico de `launchProfile.executable` es `./sub/bin` con `/`
+ * (HU: ejecutable elegible), así que toda ruta que entre o salga de la UI se
+ * normaliza aquí: Windows entrega `C:\…\juego.exe` y esa barra invertida no
+ * debe acabar guardada ni pintada.
+ */
+function normalizeSlashes(value: string): string {
+  return String(value ?? '').replace(/\\/g, '/');
+}
+
+/**
+ * ¿`full` está dentro de `dir`?
+ *
+ * Se exige el separador tras la raíz para que `…/Juego2` no cuente como hijo de
+ * `…/Juego`. En rutas de Windows (`C:/…`) la comparación ignora mayúsculas,
+ * porque la ruta que entrega Electron y la guardada en la biblioteca pueden
+ * diferir en la caja de la unidad.
+ */
+function isInsidePort(full: string, dir: string): boolean {
+  const target = normalizeSlashes(full).replace(/\/+$/, '');
+  const root = normalizeSlashes(dir).replace(/\/+$/, '');
+  if (!root || !target) return false;
+  const windowsPath = /^[A-Za-z]:\//.test(root);
+  const left = windowsPath ? target.toLowerCase() : target;
+  const right = windowsPath ? root.toLowerCase() : root;
+  return left === right || left.startsWith(right + '/');
+}
+
+/**
+ * Ruta que se guarda en `game.exe` a partir del archivo elegido a mano.
+ *
+ * - Dentro de la carpeta del port → relativa normalizada (`./sub/juego`), para
+ *   que la configuración siga siendo válida si el port se mueve de carpeta.
+ * - Fuera del port → la ruta absoluta tal cual (el usuario sabe lo que hace).
+ * - Sin `path` (navegador puro, sin Electron) → sólo el nombre, o la ruta
+ *   relativa que ya traiga el propio selector.
+ */
+function relativeExecutable(file: File, installDir: string): string {
+  const withPath = file as File & { path?: string };
+  const full = typeof withPath.path === 'string' ? withPath.path.trim() : '';
+  const dir = String(installDir ?? '').trim();
+  const name = normalizeSlashes(String(file.name ?? '').trim());
+
+  if (full && isInsidePort(full, dir)) {
+    const root = normalizeSlashes(dir).replace(/\/+$/, '');
+    const relative = normalizeSlashes(full)
+      .replace(/\/+$/, '')
+      .slice(root.length)
+      .replace(/^\/+/, '');
+    if (relative) return `./${relative}`;
+  }
+  if (full) return full;
+  if (!name) return '';
+  return `./${name.replace(/^\.?\/*/, '')}`;
+}
+
+/**
+ * Ejecutables que el backend detecta en la carpeta del port.
+ *
+ * Nunca lanza: en una build servida sin la API local devuelve lista vacía y el
+ * campo de texto sigue siendo utilizable.
+ */
+async function fetchPortExecutables(game: Game): Promise<PortExecutable[]> {
+  if (typeof fetch !== 'function') return [];
+  const params = new URLSearchParams();
+  const folder = folderOf(game.t);
+  if (folder) params.set('folderName', folder);
+  if (game.dir) params.set('installDir', game.dir);
+  if (game.exe) params.set('hint', game.exe);
+
+  try {
+    const res = await fetch(`/api/port-executables?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { ok?: boolean; executables?: unknown } | null;
+    if (!data || data.ok === false || !Array.isArray(data.executables)) return [];
+    return (data.executables as PortExecutable[]).filter(
+      (item) => !!item && typeof item.relative === 'string' && item.relative.length > 0
+    );
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Conecta el bloque AVANZADO del engranaje ⚙.
+ *
+ * - El desplegable de ejecutables detectados sólo aparece cuando el backend
+ *   encuentra algo; se pide al abrir el drawer y se marca la opción vigente.
+ * - «Examinar…» (acción `pickExe`) abre el `<input type="file">` oculto; al
+ *   elegir un archivo se normaliza a `./rel` si está dentro del port.
+ *
+ * `renderLayer` sustituye el drawer entero en cada repintado, así que los
+ * listeners se enganchan siempre sobre nodos recién creados.
+ */
+function wireGearExecutablePicker(game: Game): void {
+  const exeInput = document.getElementById('g-exe') as HTMLInputElement | null;
+  const select = document.getElementById('g-exe-select') as HTMLSelectElement | null;
+  const picker = document.getElementById('fpickexe') as HTMLInputElement | null;
+
+  const apply = (value: string): void => {
+    if (!value) return;
+    game.exe = value;
+    if (exeInput) exeInput.value = value;
+    saveState();
+  };
+
+  if (picker) {
+    picker.addEventListener('change', () => {
+      const file = picker.files && picker.files[0];
+      if (!file) return;
+      const chosen = relativeExecutable(file, game.dir);
+      if (!chosen) return;
+      apply(chosen);
+      toast('Ejecutable: ' + chosen);
+    });
+  }
+
+  if (!select) return;
+
+  select.addEventListener('change', () => {
+    if (select.value) apply(select.value);
+  });
+
+  void fetchPortExecutables(game).then((items) => {
+    /* El drawer pudo cerrarse mientras se esperaba la respuesta. */
+    if (items.length === 0 || !select.isConnected) return;
+    const current = (exeInput?.value ?? game.exe ?? '').trim();
+    select.innerHTML =
+      `<option value="">-- Seleccionar ejecutable detectado (${items.length}) --</option>` +
+      items
+        .map((item) => `<option value="${esc(item.relative)}">${esc(item.relative)}</option>`)
+        .join('');
+    select.value = items.some((item) => item.relative === current) ? current : '';
+    select.style.display = 'block';
+  });
+}
+
 function renderLayer(): void {
   const el = $('#layer');
   if (!el) return;
@@ -641,13 +794,33 @@ function renderLayer(): void {
     <section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">ACTUALIZACIONES</div>
      <div class="chk" style="justify-content:space-between"><span>Actualizar automáticamente</span><button class="tog" role="switch" aria-checked="${game.auto}" data-act="gtog" data-k="auto" aria-label="Actualizar automáticamente"><i></i></button></div>
      <div class="chk" style="justify-content:space-between"><span>Fijar versión <span class="mono warn" style="color:var(--warn)">v${game.v ?? game.lv}</span></span><button class="tog" role="switch" aria-checked="${game.pin}" data-act="gtog" data-k="pin" aria-label="Fijar versión"><i></i></button></div></section>
-    <section style="display:flex;flex-direction:column;gap:10px"><div class="lbl" style="padding:0">AVANZADO</div><label class="muted">Ejecutable<input class="in-txt" data-g="exe" value="${esc(game.exe || './' + game.t.replace(/[^A-Za-z0-9]+/g, '') + '.exe')}"></label><label class="muted">Argumentos<input class="in-txt" data-g="args" value="${esc(game.args)}"></label><label class="muted">Ejecutar con<br><select class="sel" data-g="runner" style="margin-top:6px"><option ${game.runner === 'Nativo' ? 'selected' : ''}>Nativo</option><option ${game.runner === 'Proton' ? 'selected' : ''}>Proton</option></select></label></section>
+    <section style="display:flex;flex-direction:column;gap:10px">
+     <div class="lbl" style="padding:0">AVANZADO</div>
+     <label class="muted">Ejecutable
+      <div style="display:flex;gap:8px;margin-top:4px;align-items:center">
+       <input class="in-txt" style="flex:1;min-width:0" data-g="exe" id="g-exe" value="${esc(game.exe || './' + game.t.replace(/[^A-Za-z0-9]+/g, '') + '.exe')}" aria-label="Ejecutable del port" spellcheck="false" autocomplete="off">
+       <button type="button" class="btn sm" data-act="pickExe" title="Elegir el ejecutable con el explorador del sistema">Examinar…</button>
+      </div>
+     </label>
+     <select class="sel" id="g-exe-select" style="margin-top:-4px;display:none" aria-label="Ejecutables detectados en la carpeta del port"></select>
+     <input type="file" id="fpickexe" hidden>
+     <div class="muted" style="font-size:12px">Puedes escribir la ruta, elegir un ejecutable detectado o buscarlo con el explorador del sistema.</div>
+     <label class="muted">Argumentos <span style="font-size:11px;opacity:0.7">(opcional)</span>
+      <input class="in-txt" data-g="args" value="${esc(game.args)}" placeholder="Opcional (ej: --rom {rom})" aria-label="Argumentos de lanzamiento" spellcheck="false" autocomplete="off">
+     </label>
+     <div class="muted" style="font-size:12px">Si el port no necesita argumentos, deja el campo vacío.</div>
+     <label class="muted">Ejecutar con<br><select class="sel" data-g="runner" style="margin-top:6px"><option ${game.runner === 'Nativo' ? 'selected' : ''}>Nativo</option><option ${game.runner === 'Proton' ? 'selected' : ''}>Proton</option></select></label>
+    </section>
     <div style="margin-top:auto;display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between"><button class="btn dng" data-act="unins">Desinstalar (conservar partidas)</button><button class="btn pri" data-act="closeL">Listo</button></div></aside>`;
   } else if (L.type === 'launch') {
     h = `<div class="launch"><div class="spin"></div><h2 style="font-size:30px">Iniciando ${esc(game.t)}…</h2><div class="muted">${esc(game.pr)} · ${game.runner} · buscando el ejecutable</div><button class="btn" data-act="closeL">Cancelar</button></div>`;
   }
 
   el.innerHTML = h;
+
+  /* Engranaje ⚙ → AVANZADO: desplegable de ejecutables detectados y botón
+   * «Examinar…». Se engancha aquí porque `renderLayer` reconstruye el drawer. */
+  if (L.type === 'gear') wireGearExecutablePicker(game);
 
   const drop = $('#drop');
   if (drop) {
@@ -2761,6 +2934,9 @@ const ACT: Record<string, (d: Record<string, string | undefined>) => void> = {
   },
   rom: (d) => d.id && openRom(d.id, false),
   pick: () => $('#fpick')?.click(),
+  /* Engranaje ⚙ → AVANZADO: abre el selector nativo de archivos para elegir el
+   * ejecutable del port (sustituye a teclear la ruta a mano). */
+  pickExe: () => $('#fpickexe')?.click(),
   pickDir: () => $('#fpickdir')?.click(),
   sample: () => {
     if (!L || L.type !== 'rom') return;

@@ -224,3 +224,24 @@
   1. El paquete se instala de forma no interactiva con `pkcon` y, en caso de fallo, reintenta con `pkexec`.
   2. Toda la salida y códigos de error se registran detalladamente en `~/PortsLauncher/logs/self-update.log`.
   3. La suite de pruebas pasa al 100% (417 tests).
+
+## HU-20: Selector y Explorador de Ejecutable Multiplataforma y Argumentos Opcionales
+- **Contexto de Negocio:**
+  En la configuración avanzada del port (drawer del engranaje ⚙), los usuarios debían escribir manualmente la ruta del binario ejecutable (ej. `./DinoCrisis`). Para mejorar la experiencia de usuario y evitar errores tipográficos en cualquier sistema operativo (Linux, Windows, macOS), se requiere poder seleccionar el ejecutable directamente desde una lista de binarios detectados en la carpeta del port o abrir el explorador de archivos nativo mediante un botón «Examinar…». Asimismo, el campo de argumentos debe ser explícitamente opcional (sin forzar `--rom {rom}` cuando el juego no lo requiere).
+- **Objetivo:**
+  1. Backend (`launcher/electron/api.cjs`):
+     - Implementar `listPortExecutables(dir, hint)` con soporte para carpetas secundarias de compilación (`build-release/`, `build/`).
+     - Exponer endpoint `GET /api/port-executables` para devolver la lista de binarios candidatos detectados ordenados por relevancia.
+  2. Frontend (`launcher/src/main.ts` y `launcher/src/ui/model.ts`):
+     - En `toGame`: no forzar `--rom {rom}` por defecto; dejar `args` vacío si el port o biblioteca no especifican argumentos.
+     - En el drawer de configuración ⚙: añadir botón «Examinar…» que activa el selector de archivos del SO, normaliza la ruta a formato relativo multiplataforma `./rel/path` si reside dentro de la carpeta del port, y selector desplegable para escoger entre los ejecutables detectados en el directorio.
+     - Campo de argumentos etiquetado como `(opcional)` con su correspondiente placeholder.
+  3. Pruebas:
+     - 14 nuevas pruebas unitarias en `launcher/tests/api.test.ts` y `launcher/tests/model.test.ts` cubriendo la detección de ejecutables, enrutado de la API y argumentos opcionales. Total: 431 pruebas superadas al 100%.
+  4. Versionado:
+     - Incremento de versión a `0.1.16` en `launcher/package.json`.
+- **Capa:** Backend (`launcher/electron/api.cjs`, `launcher/tests/api.test.ts`) y Frontend (`launcher/src/main.ts`, `launcher/src/ui/model.ts`, `launcher/tests/model.test.ts`).
+- **Criterios de Aceptación:**
+  1. El usuario puede escoger el ejecutable desde el desplegable de binarios detectados o con el botón «Examinar…» sin tener que escribir la ruta a mano.
+  2. Los argumentos son opcionales y no se impone `--rom {rom}` a ports que no lo necesitan.
+  3. `make test` pasa al 100% (431 tests en verde).
