@@ -20,5 +20,6 @@
 | HU-16 | Actualizador Nativo con Detección de Distro (.rpm/.deb), Progreso Visual y Auto-instalación | Completado | DeepSeek (Dev) / Gemini (PO) | v0.1.13 |
 | HU-17 | Normalización de launch y Enriquecimiento de romProfile en catalog-builder | Completado | Argón (Dev) / Gemini (PO) | v0.1.14 |
 | HU-18 | Disclaimer Informativo de Compatibilidad, Enlace a Documentación y Gestión de Ejecutables | Completado | Argón (Dev) / Gemini (PO) | v0.1.14 |
+| HU-19 | Corrección de Auto-instalador Nativo (pkcon no interactivo, captura de logs y fallback a pkexec) | Completado | DeepSeek (Dev) / Gemini (PO) | v0.1.15 |
 
 

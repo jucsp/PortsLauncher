@@ -1224,13 +1224,21 @@ function whichLinuxBinary(name) {
 /**
  * Comando que instala un paquete local (función pura).
  *
- * - `pkcon`  → `pkcon install-local --plain --allow-untrusted <ruta>`: en KDE y
- *   GNOME el demonio de PackageKit abre el diálogo de Polkit por sí solo, así
- *   que no hace falta terminal ni `pkexec`.
+ * - `pkcon`  → `pkcon -y --plain --allow-untrusted install-local <ruta>`: en
+ *   KDE y GNOME el demonio de PackageKit abre el diálogo de Polkit por sí
+ *   solo, así que no hace falta terminal ni `pkexec`.
+ *   `-y` (`--noninteractive`) **no es opcional**: el script corre desacoplado
+ *   y sin TTY, así que cualquier confirmación por stdin (`¿Quiere continuar
+ *   con las modificaciones? [N/y]`) recibe EOF y aborta la transacción.
+ *   `--plain` se conserva a propósito: sin él pkcon emite barras de progreso
+ *   con secuencias ANSI que ensucian `self-update.log`.
  * - `pkexec` → RPM con `rpm -Uvh --replacepkgs`; DEB con `apt-get install -y`
  *   (apt resuelve las dependencias de un `.deb` local, `dpkg -i` no).
  *
- * @returns `{ tool, command, args }`.
+ * @returns `{ tool, command, args, fallbackCommand, fallbackArgs }`.
+ *   `fallback*` sólo viene relleno para `pkcon`: es el comando equivalente con
+ *   `pkexec` que se intenta si PackageKit falla o el usuario cancela el
+ *   diálogo de Polkit.
  */
 function resolveInstallerCommand(input) {
   const options = input || {};
@@ -1238,17 +1246,28 @@ function resolveInstallerCommand(input) {
   const tool = String(options.tool || '').trim().toLowerCase() === 'pkcon' ? 'pkcon' : 'pkexec';
   const target = String(options.targetPath || '');
 
+  /* Mismo par de comandos en los dos caminos: sólo cambia quién pide la
+   * contraseña (el demonio de PackageKit o el agente de Polkit de `pkexec`). */
+  const rpmArgs = ['rpm', '-Uvh', '--replacepkgs', target];
+  const debArgs = ['apt-get', 'install', '-y', target];
+  const privilegedArgs = format === 'deb' ? debArgs : rpmArgs;
+
   if (tool === 'pkcon') {
     return {
       tool: 'pkcon',
       command: 'pkcon',
-      args: ['install-local', '--plain', '--allow-untrusted', target],
+      args: ['-y', '--plain', '--allow-untrusted', 'install-local', target],
+      fallbackCommand: 'pkexec',
+      fallbackArgs: privilegedArgs,
     };
   }
-  if (format === 'deb') {
-    return { tool: 'pkexec', command: 'pkexec', args: ['apt-get', 'install', '-y', target] };
-  }
-  return { tool: 'pkexec', command: 'pkexec', args: ['rpm', '-Uvh', '--replacepkgs', target] };
+  return {
+    tool: 'pkexec',
+    command: 'pkexec',
+    args: privilegedArgs,
+    fallbackCommand: '',
+    fallbackArgs: [],
+  };
 }
 
 /**
@@ -1574,16 +1593,64 @@ function buildPosixWaitScript(plan) {
     /* Instalador nativo (.rpm/.deb): `pkcon` abre el diálogo de Polkit por sí
      * solo; con `pkexec` lo abre el propio agente del escritorio al ejecutarse.
      * Toda la línea va entrecomillada porque la ruta del paquete llega de
-     * `~/Downloads` y puede tener espacios. */
-    const argv = [plan.installCommand || 'pkexec']
-      .concat(Array.isArray(plan.installArgs) ? plan.installArgs : [])
-      .map((part) => q(part))
-      .join(' ');
-    lines.push(
-      'log "update: instalando el paquete ' + String(plan.packageKind || '') + ' con ' +
-        String(plan.installerTool || 'pkexec') + '"'
+     * `~/Downloads` y puede tener espacios.
+     *
+     * Robustez (HU-16 · bug de actualización rpm que se relanzaba sin instalar):
+     *   · `stdin` se ata a `/dev/null` y `pkcon` lleva `-y`. El script corre sin
+     *     TTY, así que cualquier pregunta por stdin recibiría EOF y abortaría
+     *     en silencio; mejor un fallo inmediato y explícito que un script
+     *     colgado esperando una respuesta que nunca va a llegar.
+     *   · stdout y stderr del instalador van a `$LOG`: sin esto el motivo real
+     *     del fallo (firma, dependencia, Polkit cancelado) se perdía y el log
+     *     sólo decía «falló».
+     *   · si `pkcon` falla se reintenta con el equivalente privilegiado
+     *     (`pkexec rpm -Uvh` / `pkexec apt-get install -y`) antes de rendirse. */
+    const quoteAll = (list) => list.map((part) => q(part)).join(' ');
+    const argv = quoteAll(
+      [plan.installCommand || 'pkexec'].concat(
+        Array.isArray(plan.installArgs) ? plan.installArgs : []
+      )
     );
-    lines.push(argv + ' || log "update: la instalación del paquete falló o se canceló"');
+    /* `</dev/null` evita bloqueos por stdin; `>>"$LOG" 2>&1` conserva el error. */
+    const redirect = ' </dev/null >>"$LOG" 2>&1';
+    const tool = String(plan.installerTool || plan.installCommand || 'pkexec');
+    const kind = String(plan.packageKind || '');
+    const fallbackCommand = String(plan.fallbackCommand || '');
+    const fallbackArgs = Array.isArray(plan.fallbackArgs) ? plan.fallbackArgs : [];
+    const hasFallback = Boolean(fallbackCommand) && fallbackArgs.length > 0;
+
+    lines.push('log "update: instalando el paquete ' + kind + ' con ' + tool + '"');
+
+    if (hasFallback) {
+      const fallbackArgv = quoteAll([fallbackCommand].concat(fallbackArgs));
+      lines.push('if ' + argv + redirect + '; then');
+      lines.push('  log "update: el paquete se instaló con ' + tool + '"');
+      lines.push('else');
+      lines.push('  rc=$?');
+      lines.push(
+        '  log "update: ' +
+          tool +
+          ' falló (código $rc); se reintenta con ' +
+          fallbackCommand +
+          ' + ' +
+          String(fallbackArgs[0] || '') +
+          '"'
+      );
+      lines.push('  if ' + fallbackArgv + redirect + '; then');
+      lines.push('    log "update: el paquete se instaló con ' + fallbackCommand + '"');
+      lines.push('  else');
+      lines.push('    rc=$?');
+      lines.push('    log "update: la instalación del paquete falló o se canceló (código $rc)"');
+      lines.push('  fi');
+      lines.push('fi');
+    } else {
+      lines.push('if ' + argv + redirect + '; then');
+      lines.push('  log "update: el paquete se instaló con ' + tool + '"');
+      lines.push('else');
+      lines.push('  rc=$?');
+      lines.push('  log "update: la instalación del paquete falló o se canceló (código $rc)"');
+      lines.push('fi');
+    }
   } else if (plan.mode === 'folder') {
     if (plan.needsElevation) {
       lines.push('log "update: copiando squashfs-root con elevación (pkexec)"');
@@ -1793,6 +1860,10 @@ function buildSelfUpdatePlan(input) {
     plan.installerTool = command.tool;
     plan.installCommand = command.command;
     plan.installArgs = command.args;
+    /* Sólo `pkcon` trae plan B: se intenta si PackageKit falla o el diálogo de
+     * Polkit se cancela. Con `pkexec` ya estamos en el camino privilegiado. */
+    plan.fallbackCommand = command.fallbackCommand || '';
+    plan.fallbackArgs = Array.isArray(command.fallbackArgs) ? command.fallbackArgs : [];
   }
 
   /* Ejecutar el propio fichero que se acaba de descargar no actualiza nada. */

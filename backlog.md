@@ -204,3 +204,23 @@
   2. La ROM guardada se persiste en `~/PortsLauncher/ports.json`.
   3. `make test` supera el 100% de las pruebas (fixtures + indexador + launcher).
 
+
+## HU-19: Corrección de Auto-instalador Nativo (pkcon no interactivo, captura de logs y fallback a pkexec)
+- **Contexto de Negocio:**
+  En Fedora y otras distribuciones Linux que utilizan PackageKit (`pkcon`), el auto-actualizador fallaba silenciosamente tras descargar el paquete `.rpm`, relanzando la versión vieja. Esto ocurría porque `pkcon install-local` se ejecutaba sin `-y`, esperando confirmación por stdin en un proceso desacoplado sin terminal interactiva, provocando que `pkcon` abortara de inmediato. Además, la salida del comando no se guardaba en el log y no había un mecanismo de respaldo con `pkexec`.
+- **Objetivo:**
+  1. En `launcher/electron/api.cjs` (`resolveInstallerCommand`):
+     - Anteponer `-y`, `--plain` y `--allow-untrusted` al subcomando `install-local` para garantizar ejecución no interactiva.
+     - Configurar comandos de respaldo (`fallbackCommand` y `fallbackArgs`) para reintentar automáticamente con `pkexec rpm -Uvh --replacepkgs` (o `pkexec apt-get install -y` en Debian/Ubuntu).
+  2. En `launcher/electron/api.cjs` (`buildPosixWaitScript`):
+     - Redirigir `stdout` y `stderr` a `$LOG` (`self-update.log`) con protección `</dev/null` y registrar códigos de retorno `$rc` reales.
+     - Ejecutar el reintento de instalación con `pkexec` si `pkcon` termina con código de error.
+  3. En `launcher/tests/selfUpdate.test.ts`:
+     - Añadir y actualizar suites de prueba unitarias cubriendo las banderas no interactivas, redirecciones y secuencia de reintento.
+  4. Versionado:
+     - Bump de versión a `0.1.15` en `launcher/package.json`.
+- **Capa:** Backend (`launcher/electron/api.cjs`, `launcher/tests/selfUpdate.test.ts`, `launcher/package.json`).
+- **Criterios de Aceptación:**
+  1. El paquete se instala de forma no interactiva con `pkcon` y, en caso de fallo, reintenta con `pkexec`.
+  2. Toda la salida y códigos de error se registran detalladamente en `~/PortsLauncher/logs/self-update.log`.
+  3. La suite de pruebas pasa al 100% (417 tests).

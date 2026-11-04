@@ -46,7 +46,10 @@ interface SelfUpdateModule {
     tool: string;
     command: string;
     args: string[];
+    fallbackCommand?: string;
+    fallbackArgs?: string[];
   };
+  buildPosixWaitScript(plan: SelfUpdatePlan): string;
   handleSystemInfo(req: unknown, res: unknown): void;
   formatSseEvent(payload: unknown): string;
 }
@@ -73,6 +76,8 @@ interface SelfUpdatePlan {
   installerTool?: string;
   installCommand?: string;
   installArgs?: string[];
+  fallbackCommand?: string;
+  fallbackArgs?: string[];
 }
 
 const requireCjs = createRequire(import.meta.url) as (id: string) => SelfUpdateModule;
@@ -539,7 +544,7 @@ describe('buildSelfUpdatePlan · modo package', () => {
     expect(plan.waitScript).toContain("'pkexec' 'apt-get' 'install' '-y'");
   });
 
-  it('con pkcon disponible se instala con pkcon install-local', () => {
+  it('con pkcon disponible se instala con pkcon install-local no interactivo', () => {
     const plan = api.buildSelfUpdatePlan(
       basePlan({
         assetName: 'PortsLauncher-0.1.11.x86_64.rpm',
@@ -551,13 +556,98 @@ describe('buildSelfUpdatePlan · modo package', () => {
     expect(plan.mode).toBe('package');
     expect(plan.installerTool).toBe('pkcon');
     expect(plan.installCommand).toBe('pkcon');
+    /* `-y` es la corrección del bug: sin él pkcon pregunta «¿Quiere continuar
+     * con las modificaciones?» por stdin, el script no tiene TTY, recibe EOF y
+     * aborta; la app se relanzaba con la versión vieja. */
     expect(plan.installArgs).toEqual([
-      'install-local',
+      '-y',
       '--plain',
       '--allow-untrusted',
+      'install-local',
       '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
     ]);
-    expect(plan.waitScript).toContain("'pkcon' 'install-local' '--plain' '--allow-untrusted'");
+    expect(plan.installArgs?.[0]).toBe('-y');
+    expect(plan.waitScript).toContain(
+      "'pkcon' '-y' '--plain' '--allow-untrusted' 'install-local'"
+    );
+  });
+
+  it('pkcon deja preparado el fallback privilegiado con pkexec', () => {
+    const plan = api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: 'PortsLauncher-0.1.11.x86_64.rpm',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+        installerTool: 'pkcon',
+      })
+    );
+    expect(plan.fallbackCommand).toBe('pkexec');
+    expect(plan.fallbackArgs).toEqual([
+      'rpm',
+      '-Uvh',
+      '--replacepkgs',
+      '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+    ]);
+  });
+
+  it('con pkexec no hay fallback: ya es el camino privilegiado', () => {
+    const plan = api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: 'PortsLauncher-0.1.11.x86_64.rpm',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+      })
+    );
+    expect(plan.fallbackCommand).toBe('');
+    expect(plan.fallbackArgs).toEqual([]);
+  });
+
+  it('la salida del instalador se redirige al log (stdout y stderr)', () => {
+    const plan = api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: 'PortsLauncher-0.1.11.x86_64.rpm',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+        installerTool: 'pkcon',
+      })
+    );
+    /* Sin esto el log sólo decía «falló» y se perdía la causa real. */
+    expect(plan.waitScript).toContain('>>"$LOG" 2>&1');
+    /* El comando de pkcon aparece con la redirección en la misma línea. */
+    expect(plan.waitScript).toMatch(/'install-local' '.*rpm' <\/dev\/null >>"\$LOG" 2>&1;/);
+  });
+
+  it('stdin del instalador se ata a /dev/null para no colgarse pidiendo TTY', () => {
+    const plan = api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: 'PortsLauncher-0.1.11.x86_64.rpm',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+        installerTool: 'pkcon',
+      })
+    );
+    expect(plan.waitScript).toContain('</dev/null');
+    expect(plan.waitScript).not.toMatch(/pkcon[^\n]*<\s*&0/);
+  });
+
+  it('si pkcon falla el script reintenta con pkexec antes de rendirse', () => {
+    const plan = api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: 'PortsLauncher-0.1.11.x86_64.rpm',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm',
+        installerTool: 'pkcon',
+      })
+    );
+
+    expect(plan.waitScript).toContain('2>&1; then');
+    expect(plan.waitScript).toContain('  rc=$?');
+    expect(plan.waitScript).toContain('se reintenta con pkexec');
+    /* El fallback va después del intento con pkcon y con los mismos privilegios. */
+    expect(plan.waitScript).toContain(
+      "'pkexec' 'rpm' '-Uvh' '--replacepkgs' '/home/tester/Downloads/PortsLauncher-0.1.11.x86_64.rpm'"
+    );
+    const posPkcon = plan.waitScript.indexOf("'pkcon' '-y'");
+    const posFallback = plan.waitScript.indexOf("'pkexec' 'rpm'");
+    expect(posPkcon).toBeGreaterThan(-1);
+    expect(posFallback).toBeGreaterThan(posPkcon);
+    /* Se rinde explícitamente y con el código de salida. */
+    expect(plan.waitScript).toContain('la instalación del paquete falló o se canceló (código $rc)');
   });
 
   it('el paquete manda aunque el launcher corra desde un AppImage', () => {
@@ -582,6 +672,194 @@ describe('buildSelfUpdatePlan · modo package', () => {
     );
     expect(plan.mode).toBe('package');
     expect(plan.elevatedScript).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* HU-16 · resolveInstallerCommand (unidad)                                   */
+/* -------------------------------------------------------------------------- */
+
+describe('resolveInstallerCommand', () => {
+  const rpmPath = '/home/tester/Downloads/PortsLauncher-0.1.14.x86_64.rpm';
+  const debPath = '/home/tester/Downloads/portslauncher_0.1.14_amd64.deb';
+
+  it('pkcon siempre recibe -y como primer argumento', () => {
+    const command = api.resolveInstallerCommand({
+      format: 'rpm',
+      tool: 'pkcon',
+      targetPath: rpmPath,
+    });
+
+    expect(command.tool).toBe('pkcon');
+    expect(command.command).toBe('pkcon');
+    expect(command.args).toEqual(['-y', '--plain', '--allow-untrusted', 'install-local', rpmPath]);
+    expect(command.args[0]).toBe('-y');
+  });
+
+  it('pkcon + rpm deja el fallback pkexec rpm -Uvh --replacepkgs', () => {
+    const command = api.resolveInstallerCommand({
+      format: 'rpm',
+      tool: 'pkcon',
+      targetPath: rpmPath,
+    });
+    expect(command.fallbackCommand).toBe('pkexec');
+    expect(command.fallbackArgs).toEqual(['rpm', '-Uvh', '--replacepkgs', rpmPath]);
+  });
+
+  it('pkcon + deb deja el fallback pkexec apt-get install -y', () => {
+    const command = api.resolveInstallerCommand({
+      format: 'deb',
+      tool: 'pkcon',
+      targetPath: debPath,
+    });
+    expect(command.args).toContain('install-local');
+    expect(command.fallbackCommand).toBe('pkexec');
+    expect(command.fallbackArgs).toEqual(['apt-get', 'install', '-y', debPath]);
+  });
+
+  it('pkexec directo no declara fallback: ya es el camino privilegiado', () => {
+    const inputs: Array<Record<string, unknown>> = [
+      { format: 'rpm', tool: 'pkexec', targetPath: rpmPath },
+      { format: 'deb', tool: 'pkexec', targetPath: debPath },
+      { format: 'rpm', tool: undefined, targetPath: rpmPath },
+      { format: 'deb', tool: '', targetPath: debPath },
+      { format: 'rpm', tool: 'dnf', targetPath: rpmPath },
+    ];
+    for (const input of inputs) {
+      const command = api.resolveInstallerCommand(input);
+      expect(command.tool).toBe('pkexec');
+      expect(command.command).toBe('pkexec');
+      expect(command.fallbackCommand).toBe('');
+      expect(command.fallbackArgs).toEqual([]);
+    }
+  });
+
+  it('pkexec + deb usa apt-get install -y (dpkg no resuelve dependencias)', () => {
+    const command = api.resolveInstallerCommand({ format: 'deb', tool: 'pkexec', targetPath: debPath });
+    expect(command.args).toEqual(['apt-get', 'install', '-y', debPath]);
+    expect(command.args).not.toContain('dpkg');
+  });
+
+  it('ninguna variante de pkcon se queda sin -y (regresión del bug 0.1.14)', () => {
+    for (const format of ['rpm', 'deb', '', undefined, 'AppImage']) {
+      const command = api.resolveInstallerCommand({ format, tool: 'pkcon', targetPath: rpmPath });
+      expect(command.args).toContain('-y');
+      /* No se usa la forma larga: `-y` es la que entiende pkcon de forma estable. */
+      expect(command.args).not.toContain('--noninteractive');
+      /* Y se mantiene el orden banderas → subcomando → ruta. */
+      expect(command.args[command.args.length - 1]).toBe(rpmPath);
+      expect(command.args.indexOf('install-local')).toBeGreaterThan(command.args.indexOf('-y'));
+    }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* HU-16 · buildPosixWaitScript en modo package                               */
+/* -------------------------------------------------------------------------- */
+
+describe('buildPosixWaitScript · modo package', () => {
+  const rpmName = 'PortsLauncher-0.1.14.x86_64.rpm';
+  const rpmPath = '/home/tester/Downloads/PortsLauncher-0.1.14.x86_64.rpm';
+  const debName = 'portslauncher_0.1.14_amd64.deb';
+  const debPath = '/home/tester/Downloads/portslauncher_0.1.14_amd64.deb';
+
+  function packagePlan(overrides: Record<string, unknown> = {}): SelfUpdatePlan {
+    return api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: rpmName,
+        downloadPath: rpmPath,
+        installerTool: 'pkcon',
+        ...overrides,
+      })
+    );
+  }
+
+  /** Líneas del bloque de instalación (sin la cabecera de espera ni el relanzado). */
+  function installBlock(script: string): string[] {
+    const lines = script.split('\n');
+    const start = lines.findIndex((line) => line.includes('update: instalando el paquete'));
+    const end = lines.findIndex((line) => line.includes('update: relanzando la aplicación'));
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return lines.slice(start, end).filter((line) => line !== '');
+  }
+
+  it('pkcon + rpm: bloque exacto con -y, redirección al log y fallback pkexec', () => {
+    expect(installBlock(packagePlan().waitScript)).toEqual([
+      'log "update: instalando el paquete rpm con pkcon"',
+      "if 'pkcon' '-y' '--plain' '--allow-untrusted' 'install-local' '" +
+        rpmPath +
+        "' </dev/null >>\"$LOG\" 2>&1; then",
+      '  log "update: el paquete se instaló con pkcon"',
+      'else',
+      '  rc=$?',
+      '  log "update: pkcon falló (código $rc); se reintenta con pkexec + rpm"',
+      "  if 'pkexec' 'rpm' '-Uvh' '--replacepkgs' '" +
+        rpmPath +
+        "' </dev/null >>\"$LOG\" 2>&1; then",
+      '    log "update: el paquete se instaló con pkexec"',
+      '  else',
+      '    rc=$?',
+      '    log "update: la instalación del paquete falló o se canceló (código $rc)"',
+      '  fi',
+      'fi',
+    ]);
+  });
+
+  it('pkcon + deb: el fallback usa apt-get y no rpm', () => {
+    const script = packagePlan({ assetName: debName, downloadPath: debPath }).waitScript;
+    const block = installBlock(script);
+
+    expect(block.join('\n')).toContain("if 'pkexec' 'apt-get' 'install' '-y' '" + debPath + "'");
+    expect(block.join('\n')).not.toContain("'rpm'");
+    expect(block.join('\n')).toContain('>>"$LOG" 2>&1');
+  });
+
+  it('pkexec directo: un solo intento, sin reintento', () => {
+    const script = packagePlan({ installerTool: undefined }).waitScript;
+    const block = installBlock(script);
+
+    expect(block).toEqual([
+      'log "update: instalando el paquete rpm con pkexec"',
+      "if 'pkexec' 'rpm' '-Uvh' '--replacepkgs' '" + rpmPath + "' </dev/null >>\"$LOG\" 2>&1; then",
+      '  log "update: el paquete se instaló con pkexec"',
+      'else',
+      '  rc=$?',
+      '  log "update: la instalación del paquete falló o se canceló (código $rc)"',
+      'fi',
+    ]);
+    expect(block.join('\n')).not.toContain('se reintenta');
+  });
+
+  it('es determinista: regenerar el script produce el mismo texto', () => {
+    const plan = packagePlan();
+    expect(api.buildPosixWaitScript(plan)).toBe(plan.waitScript);
+  });
+
+  it('los bloques if/fi del script quedan equilibrados', () => {
+    const script = packagePlan().waitScript;
+    const thens = (script.match(/\bthen\b/g) || []).length;
+    const fis = (script.match(/\bfi\b/g) || []).length;
+    expect(thens).toBeGreaterThan(0);
+    expect(fis).toBe(thens);
+  });
+
+  it('una ruta con espacios se entrecomilla en los dos intentos', () => {
+    const spacedPath = '/home/tester/Descargas/Mis paquetes/PortsLauncher 0.1.14.x86_64.rpm';
+    const plan = packagePlan({
+      assetName: 'PortsLauncher 0.1.14.x86_64.rpm',
+      downloadPath: spacedPath,
+    });
+    const quoted = "'" + spacedPath + "'";
+    expect(plan.waitScript.split(quoted).length - 1).toBe(2);
+  });
+
+  it('el resto del script no cambia: sigue esperando al PID y relanzando', () => {
+    const script = packagePlan().waitScript;
+    expect(script.startsWith('#!/bin/sh')).toBe(true);
+    expect(script).toContain('set -u');
+    expect(script).toContain('while kill -0 "$PID" 2>/dev/null; do');
+    expect(script).toContain('nohup "$RELAUNCH" >/dev/null 2>&1 &');
   });
 });
 
