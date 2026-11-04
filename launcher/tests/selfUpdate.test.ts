@@ -50,6 +50,15 @@ interface SelfUpdateModule {
     fallbackArgs?: string[];
   };
   buildPosixWaitScript(plan: SelfUpdatePlan): string;
+  /* HU-16 · arranque desacoplado fuera del árbol de no_new_privs */
+  resolveDetachedLaunch(
+    scriptPath: string,
+    platform: string,
+    options?: {
+      probe?: (name: string) => string;
+      env?: Record<string, string | undefined>;
+    }
+  ): { bin: string; args: string[]; windowsHide: boolean; runner: string };
   handleSystemInfo(req: unknown, res: unknown): void;
   formatSseEvent(payload: unknown): string;
 }
@@ -860,6 +869,251 @@ describe('buildPosixWaitScript · modo package', () => {
     expect(script).toContain('set -u');
     expect(script).toContain('while kill -0 "$PID" 2>/dev/null; do');
     expect(script).toContain('nohup "$RELAUNCH" >/dev/null 2>&1 &');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* HU-16 · entorno de sesión exportado por el script POSIX                     */
+/* -------------------------------------------------------------------------- */
+
+describe('buildPosixWaitScript · entorno de sesión', () => {
+  /* El script ya no se ejecuta como hijo de Electron sino como unidad
+   * transitoria de `systemd --user` (ver `resolveDetachedLaunch`), así que el
+   * entorno gráfico no llega heredado: se exporta desde el propio script. */
+  const SESSION_VARS = ['DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR'];
+
+  /** Script de cada modo aplicable en Linux. */
+  function everyMode(): Array<{ mode: string; script: string }> {
+    const rpmPath = '/home/tester/Downloads/PortsLauncher-0.1.15.x86_64.rpm';
+    const plans: Array<{ mode: string; input: Record<string, unknown> }> = [
+      { mode: 'folder', input: {} },
+      {
+        mode: 'appimage',
+        input: { appImage: '/home/tester/Apps/PortsLauncher-0.1.14.AppImage' },
+      },
+      {
+        mode: 'appimage (con elevación)',
+        input: {
+          appImage: '/opt/PortsLauncher/PortsLauncher.AppImage',
+          needsElevation: true,
+        },
+      },
+      {
+        mode: 'package',
+        input: {
+          assetName: 'PortsLauncher-0.1.15.x86_64.rpm',
+          downloadPath: rpmPath,
+          installerTool: 'pkcon',
+        },
+      },
+    ];
+    return plans.map((entry) => ({
+      mode: entry.mode,
+      script: api.buildSelfUpdatePlan(basePlan(entry.input)).waitScript,
+    }));
+  }
+
+  it('exporta DISPLAY, WAYLAND_DISPLAY y XDG_RUNTIME_DIR', () => {
+    const script = api.buildSelfUpdatePlan(basePlan()).waitScript;
+    expect(script).toContain('export DISPLAY="${DISPLAY:-:0}"');
+    expect(script).toContain('export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"');
+    expect(script).toContain('export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"');
+  });
+
+  it('cada export usa la forma ${VAR:-default}, segura bajo set -u', () => {
+    const script = api.buildSelfUpdatePlan(basePlan()).waitScript;
+    for (const name of SESSION_VARS) {
+      const line = script.split('\n').find((item) => item.startsWith('export ' + name + '='));
+      expect(line).toBeDefined();
+      /* Sin `:-` una variable ausente abortaría el script con `set -u`. */
+      expect(line).toContain('${' + name + ':-');
+    }
+  });
+
+  it('se exportan en todos los modos de Linux (el script es compartido)', () => {
+    for (const entry of everyMode()) {
+      expect(entry.script, entry.mode).toContain('export DISPLAY=');
+      expect(entry.script, entry.mode).toContain('export WAYLAND_DISPLAY=');
+      expect(entry.script, entry.mode).toContain('export XDG_RUNTIME_DIR=');
+    }
+  });
+
+  it('los exports van antes de esperar al PID y del bloque de instalación', () => {
+    const script = api.buildSelfUpdatePlan(
+      basePlan({
+        assetName: 'PortsLauncher-0.1.15.x86_64.rpm',
+        downloadPath: '/home/tester/Downloads/PortsLauncher-0.1.15.x86_64.rpm',
+        installerTool: 'pkcon',
+      })
+    ).waitScript;
+
+    const posExport = script.indexOf('export XDG_RUNTIME_DIR=');
+    const posWait = script.indexOf('while kill -0 "$PID"');
+    const posInstall = script.indexOf('update: instalando el paquete');
+
+    expect(posExport).toBeGreaterThan(-1);
+    expect(posExport).toBeLessThan(posWait);
+    expect(posExport).toBeLessThan(posInstall);
+  });
+
+  it('la cabecera del script no se altera: shebang y set -u siguen primero', () => {
+    const script = api.buildSelfUpdatePlan(basePlan()).waitScript;
+    const lines = script.split('\n');
+    expect(lines[0]).toBe('#!/bin/sh');
+    /* `set -u` va antes que cualquier expansión de variable. */
+    expect(lines.indexOf('set -u')).toBeGreaterThan(0);
+    expect(lines.indexOf('set -u')).toBeLessThan(
+      lines.findIndex((line) => line.startsWith('export '))
+    );
+    /* Sólo se añaden `export`: los `if`/`fi` siguen equilibrados. */
+    const thens = (script.match(/\bthen\b/g) || []).length;
+    const fis = (script.match(/\bfi\b/g) || []).length;
+    expect(fis).toBe(thens);
+  });
+
+  it('el relanzado de la app no depende de una terminal', () => {
+    const script = api.buildSelfUpdatePlan(basePlan()).waitScript;
+    /* `nohup` aislado de la sesión gráfica heredada: si no, cerrar el
+     * actualizador arrastraría a la app recién abierta. */
+    expect(script).toContain('nohup "$RELAUNCH" >/dev/null 2>&1 &');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* HU-16 · resolveDetachedLaunch (unidad)                                     */
+/* -------------------------------------------------------------------------- */
+
+describe('resolveDetachedLaunch', () => {
+  const script = '/home/tester/.cache/portslauncher/update-staging/0.1.15/apply-update.sh';
+  const withSystemdRun = (name: string) => (name === 'systemd-run' ? '/usr/bin/systemd-run' : '');
+  const withoutSystemdRun = () => '';
+  /* Sesión gráfica normal de Fedora/GNOME/KDE: pam_systemd deja
+   * XDG_RUNTIME_DIR para todo el árbol de la sesión. */
+  const sessionEnv = { XDG_RUNTIME_DIR: '/run/user/1000' };
+
+  it('en Linux con systemd-run usa una unidad transitoria de usuario', () => {
+    const launch = api.resolveDetachedLaunch(script, 'linux', {
+      probe: withSystemdRun,
+      env: sessionEnv,
+    });
+
+    expect(launch.bin).toBe('systemd-run');
+    /* `--user` es imprescindible: una unidad de sistema necesitaría root para
+     * arrancarla y no tendría la sesión del usuario. */
+    expect(launch.args).toEqual([
+      '--user',
+      '--description=PortsLauncher Update',
+      '/bin/sh',
+      script,
+    ]);
+    expect(launch.windowsHide).toBe(false);
+    expect(launch.runner).toBe('systemd-run --user');
+  });
+
+  it('nunca usa --scope ni --wait (seguiría colgando de Electron)', () => {
+    const launch = api.resolveDetachedLaunch(script, 'linux', {
+      probe: withSystemdRun,
+      env: sessionEnv,
+    });
+    /* `--scope` heredaría `no_new_privs` de Chromium y el bug seguiría ahí;
+     * `--wait` bloquearía el script antes de que la app se cierre. */
+    expect(launch.args).not.toContain('--scope');
+    expect(launch.args).not.toContain('--wait');
+    expect(launch.args.join(' ')).not.toContain('no-block');
+  });
+
+  it('acepta DBUS_SESSION_BUS_ADDRESS como prueba de sesión', () => {
+    const launch = api.resolveDetachedLaunch(script, 'linux', {
+      probe: withSystemdRun,
+      env: { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' },
+    });
+    expect(launch.bin).toBe('systemd-run');
+  });
+
+  it('sin systemd-run cae a /bin/sh directo', () => {
+    const launch = api.resolveDetachedLaunch(script, 'linux', {
+      probe: withoutSystemdRun,
+      env: sessionEnv,
+    });
+    expect(launch.bin).toBe('/bin/sh');
+    expect(launch.args).toEqual([script]);
+    expect(launch.runner).toBe('/bin/sh');
+  });
+
+  it('sin bus de sesión no arriesga: cae a /bin/sh aunque exista systemd-run', () => {
+    /* Un `systemd-run --user` que no encuentra el bus aborta al instante y el
+     * script no llegaría a ejecutarse: peor que el `sh` directo. */
+    const launch = api.resolveDetachedLaunch(script, 'linux', {
+      probe: withSystemdRun,
+      env: {},
+    });
+    expect(launch.bin).toBe('/bin/sh');
+    expect(launch.args).toEqual([script]);
+  });
+
+  it('una sonda que lanza excepción no rompe el lanzamiento', () => {
+    const launch = api.resolveDetachedLaunch(script, 'linux', {
+      probe: () => {
+        throw new Error('ENOENT');
+      },
+      env: sessionEnv,
+    });
+    expect(launch.bin).toBe('/bin/sh');
+  });
+
+  it('la sonda sólo se consulta cuando hay algo que decidir', () => {
+    const seen: string[] = [];
+    api.resolveDetachedLaunch(script, 'linux', {
+      probe: (name: string) => {
+        seen.push(name);
+        return '';
+      },
+      env: sessionEnv,
+    });
+    expect(seen).toEqual(['systemd-run']);
+  });
+
+  it('en Windows sigue siendo PowerShell, con su ventana oculta', () => {
+    const launch = api.resolveDetachedLaunch('C:\\Temp\\apply-update.ps1', 'win32', {
+      probe: () => '',
+      env: {},
+    });
+    expect(launch.bin).toBe('powershell.exe');
+    expect(launch.args).toEqual([
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      'C:\\Temp\\apply-update.ps1',
+    ]);
+    expect(launch.windowsHide).toBe(true);
+  });
+
+  it('en Windows no se consulta la sonda de binarios de Linux', () => {
+    let probes = 0;
+    api.resolveDetachedLaunch('C:\\Temp\\apply-update.ps1', 'win32', {
+      probe: () => {
+        probes += 1;
+        return '/usr/bin/systemd-run';
+      },
+      env: sessionEnv,
+    });
+    expect(probes).toBe(0);
+  });
+
+  it('una ruta con espacios viaja como un único argumento', () => {
+    const spaced = '/home/tester/Mis scripts/apply-update.sh';
+    for (const probe of [withSystemdRun, withoutSystemdRun]) {
+      const launch = api.resolveDetachedLaunch(spaced, 'linux', { probe, env: sessionEnv });
+      expect(launch.args[launch.args.length - 1]).toBe(spaced);
+    }
+  });
+
+  it('es determinista', () => {
+    const options = { probe: withSystemdRun, env: sessionEnv };
+    expect(api.resolveDetachedLaunch(script, 'linux', options)).toEqual(
+      api.resolveDetachedLaunch(script, 'linux', options)
+    );
   });
 });
 

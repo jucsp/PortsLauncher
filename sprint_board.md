@@ -22,5 +22,6 @@
 | HU-18 | Disclaimer Informativo de Compatibilidad, Enlace a Documentación y Gestión de Ejecutables | Completado | Argón (Dev) / Gemini (PO) | v0.1.14 |
 | HU-19 | Corrección de Auto-instalador Nativo (pkcon no interactivo, captura de logs y fallback a pkexec) | Completado | DeepSeek (Dev) / Gemini (PO) | v0.1.15 |
 | HU-20 | Selector y Explorador de Ejecutable Multiplataforma y Argumentos Opcionales | Completado | DeepSeek (Dev) / Gemini (PO) | v0.1.16 |
+| HU-21 | Desacoplamiento de Sandbox en Auto-actualizador con systemd-run --user y Preservación de Sesión Gráfica | Completado | DeepSeek (Dev) / Gemini (PO) | v0.1.17 |
 
 

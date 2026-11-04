@@ -245,3 +245,19 @@
   1. El usuario puede escoger el ejecutable desde el desplegable de binarios detectados o con el botón «Examinar…» sin tener que escribir la ruta a mano.
   2. Los argumentos son opcionales y no se impone `--rom {rom}` a ports que no lo necesitan.
   3. `make test` pasa al 100% (431 tests en verde).
+
+## HU-21: Desacoplamiento de Sandbox en Auto-actualizador con systemd-run --user y Preservación de Sesión Gráfica
+- **Contexto de Negocio:**
+  Al actualizar PortsLauncher desde la interfaz de la aplicación en Linux, el proceso fallaba con `Error grave: Failed to obtain authentication` (en `pkcon`) y `pkexec must be setuid root` (código 127). Esto ocurría porque Electron/Chromium aplica a su propio proceso la bandera del kernel Linux `PR_SET_NO_NEW_PRIVS = 1`, la cual es heredada por cualquier subproceso creado con `spawn()`. Bajo `no_new_privs`, el kernel bloquea la elevación setuid de `pkexec` y PolicyKit rechaza la autenticación.
+- **Objetivo:**
+  1. Backend (`launcher/electron/api.cjs`):
+     - En `spawnDetached`: en entornos Linux con `systemd-run` disponible, desacoplar el lanzamiento delegándolo al gestor de sesión del usuario con `systemd-run --user --description="PortsLauncher Update" /bin/sh <scriptPath>`, escapando del árbol de procesos de Electron y de `no_new_privs`.
+     - En `buildPosixWaitScript`: exportar explícitamente `DISPLAY`, `WAYLAND_DISPLAY` y `XDG_RUNTIME_DIR` con valores seguros (`${VAR:-...}`) para que los agentes gráficos de PolicyKit (ej. `polkit-kde-authentication-agent-1`) puedan mostrar el diálogo de autenticación en la pantalla del usuario.
+  2. Pruebas:
+     - 17 nuevas pruebas unitarias en `launcher/tests/selfUpdate.test.ts` validando la resolución de `resolveDetachedLaunch` y los encabezados de entorno en `buildPosixWaitScript`. Total: 448 pruebas superadas al 100%.
+  3. Versionado:
+     - Incremento de versión a `0.1.17` en `launcher/package.json`.
+- **Capa:** Backend (`launcher/electron/api.cjs`, `launcher/tests/selfUpdate.test.ts`, `launcher/package.json`).
+- **Criterios de Aceptación:**
+  1. `systemd-run --user` ejecuta el script de actualización fuera del sandbox de Electron, permitiendo la elevación con `pkexec` y `pkcon`.
+  2. `make test` supera el 100% de las pruebas (448 tests en verde).

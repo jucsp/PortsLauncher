@@ -79,11 +79,11 @@ test-builder: ## Ejecuta las pruebas del indexador (106 tests, unittest)
 	@printf '\n $(CYAN)$(BOLD)▶ test-builder$(RST) $(DIM)106 tests$(RST)\n\n'
 	@$(PYTHON) -m unittest discover -s catalog-builder/tests -v
 
-test-launcher: ## Ejecuta las pruebas del launcher (291 tests, vitest)
-	@printf '\n $(CYAN)$(BOLD)▶ test-launcher$(RST) $(DIM)291 tests$(RST)\n\n'
+test-launcher: ## Ejecuta las pruebas del launcher (308 tests, vitest)
+	@printf '\n $(CYAN)$(BOLD)▶ test-launcher$(RST) $(DIM)308 tests$(RST)\n\n'
 	@$(NPM) --prefix $(LAUNCHER_DIR) test
 
-test: ## Ejecuta las 3 suites (431 tests) y muestra un reporte unificado
+test: ## Ejecuta las 3 suites (448 tests) y muestra un reporte unificado
 	@printf '\n $(PINK)$(BOLD)════════════════════════════════════════════════════════════$(RST)\n'
 	@printf ' $(PINK)$(BOLD)  PORTSHUB$(RST) $(DIM)· suite completa de pruebas$(RST)\n'
 	@printf ' $(PINK)$(BOLD)════════════════════════════════════════════════════════════$(RST)\n'
@@ -94,7 +94,7 @@ test: ## Ejecuta las 3 suites (431 tests) y muestra un reporte unificado
 	@printf '\n $(BOLD)[2/3] Indexador catalog-builder$(RST) $(DIM)(unittest · 106 tests)$(RST)\n'
 	@$(PYTHON) -m unittest discover -s catalog-builder/tests -v > $(TEST_OUT)/2-builder.log 2>&1 && printf 1 > $(TEST_OUT)/2-builder.ok || printf 0 > $(TEST_OUT)/2-builder.ok
 	@tail -n 4 $(TEST_OUT)/2-builder.log | sed 's/^/       /'
-	@printf '\n $(BOLD)[3/3] Launcher$(RST) $(DIM)(vitest · 291 tests)$(RST)\n'
+	@printf '\n $(BOLD)[3/3] Launcher$(RST) $(DIM)(vitest · 308 tests)$(RST)\n'
 	@$(NPM) --prefix $(LAUNCHER_DIR) test > $(TEST_OUT)/3-launcher.log 2>&1 && printf 1 > $(TEST_OUT)/3-launcher.ok || printf 0 > $(TEST_OUT)/3-launcher.ok
 	@tail -n 6 $(TEST_OUT)/3-launcher.log | sed 's/^/       /'
 	@printf '\n $(PINK)$(BOLD)────────────────────────────────────────────────────────────$(RST)\n'
@@ -111,12 +111,12 @@ test: ## Ejecuta las 3 suites (431 tests) y muestra un reporte unificado
 	 st() { if [ "$$1" -eq 1 ]; then printf '\033[32mPASS\033[0m'; else printf '\033[31mFAIL\033[0m'; fi; }; \
 	 printf '   %-26s %5s   %s\n' 'Fixtures (esperado 9)'   "$$f_n" "$$(st $$f_ok)"; \
 	 printf '   %-26s %5s   %s\n' 'Indexador (esperado 106)' "$$b_n" "$$(st $$b_ok)"; \
-	 printf '   %-26s %5s   %s\n' 'Launcher (esperado 291)' "$$l_n" "$$(st $$l_ok)"; \
-	 printf '   %-26s %5s\n'       'TOTAL (esperado 431)'   "$$total"; \
-	 if [ "$$total" -eq 431 ]; then \
-	   printf '\n   \033[32m✔ 431 tests contabilizados\033[0m\n'; \
+	 printf '   %-26s %5s   %s\n' 'Launcher (esperado 308)' "$$l_n" "$$(st $$l_ok)"; \
+	 printf '   %-26s %5s\n'       'TOTAL (esperado 448)'   "$$total"; \
+	 if [ "$$total" -eq 448 ]; then \
+	   printf '\n   \033[32m✔ 448 tests contabilizados\033[0m\n'; \
 	 else \
-	   printf '\n   \033[33m⚠ esperados 431 tests, contabilizados %s\033[0m\n' "$$total"; \
+	   printf '\n   \033[33m⚠ esperados 448 tests, contabilizados %s\033[0m\n' "$$total"; \
 	 fi; \
 	 if [ "$$f_ok" -eq 1 ] && [ "$$b_ok" -eq 1 ] && [ "$$l_ok" -eq 1 ]; then rc=0; printf '\n   \033[32m✔ toda la suite en verde\033[0m\n\n'; else rc=1; printf '\n   \033[31m✖ hay suites con fallos — logs en %s/\033[0m\n\n' '$(TEST_OUT)'; fi; \
 	 exit $$rc

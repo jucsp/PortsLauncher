@@ -1538,6 +1538,11 @@ function withDesktopVersion(text, version) {
  * en ejecución: en Linux da `ETXTBSY`), aplica el reemplazo o la copia y
  * relanza la app. Toda la salida va al log porque el proceso ya no tiene
  * terminal ni ventana.
+ *
+ * El script arranca con un `export` del entorno gráfico y del bus de sesión
+ * (ver comentario en el propio script): desde HU-16 se ejecuta como unidad
+ * transitoria de `systemd --user` para escapar de `PR_SET_NO_NEW_PRIVS`, y en
+ * ese camino el entorno no llega heredado de Electron.
  */
 function buildPosixWaitScript(plan) {
   const q = shellQuote;
@@ -1546,6 +1551,17 @@ function buildPosixWaitScript(plan) {
     '# PortsLauncher · actualización desacoplada (generado automáticamente).',
     '# Espera al cierre de la app, aplica la actualización y la relanza.',
     'set -u',
+    '',
+    '# HU-16 · entorno de sesión para Polkit.',
+    '# El script ya no desciende de Electron (se lanza como unidad transitoria',
+    '# de systemd --user), así que hereda el entorno del gestor de sesión y no',
+    '# el de la app. Sin DISPLAY/WAYLAND_DISPLAY el diálogo de Polkit y el',
+    '# relanzado de la ventana no pueden abrirse, y sin XDG_RUNTIME_DIR el',
+    '# cliente no encuentra el bus de sesión. Los `:-` mantienen el script',
+    '# válido bajo `set -u` (nunca se expande una variable sin definir).',
+    'export DISPLAY="${DISPLAY:-:0}"',
+    'export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"',
+    'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"',
     '',
     'PID=' + String(plan.pid),
     'LOG=' + q(plan.logPath),
@@ -1891,17 +1907,115 @@ function buildSelfUpdatePlan(input) {
   return plan;
 }
 
-/** Lanza `scriptPath` desacoplado del proceso actual (`spawn` + `unref`). */
-function spawnDetached(scriptPath, platform) {
+/** Descripción de la unidad transitoria creada con `systemd-run --user`. */
+const SYSTEMD_RUN_DESCRIPTION = '--description=PortsLauncher Update';
+
+/** Marca de tiempo con el mismo formato que usa `log()` dentro del script. */
+function scriptTimestamp() {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * Decide con qué binario se lanza el script desacoplado (función pura).
+ *
+ * En Linux el script **no** puede ser un hijo directo de Electron. Chromium
+ * marca su árbol de procesos con `PR_SET_NO_NEW_PRIVS`, y bajo esa marca el
+ * kernel prohíbe cualquier transición setuid, lo que rompe las dos vías de
+ * elevación del actualizador (HU-16, bug del 0.1.15):
+ *
+ *   · `pkexec` aborta con «pkexec must be setuid root» (código 127);
+ *   · Polkit rechaza la petición de PackageKit con «Failed to obtain
+ *     authentication» y `pkcon` sale con código 7.
+ *
+ * La salida es delegar el arranque en el gestor de sesión: una unidad
+ * transitoria de `systemd --user` la forkea el propio `systemd --user`, no
+ * Electron, así que arranca limpia y Polkit/pkexec vuelven a funcionar.
+ *
+ * `systemd-run` se usa **sin** `--scope` a propósito: con `--scope` el proceso
+ * seguiría colgando de nuestro árbol y heredaría `no_new_privs`, sin arreglar
+ * nada. Sin `--wait` el comando vuelve en cuanto la unidad arranca, así que el
+ * `while kill -0 "$PID"` del script sigue esperando el cierre de la app.
+ *
+ * Si no hay `systemd-run`, o no se puede alcanzar el gestor de usuario
+ * (`DBUS_SESSION_BUS_ADDRESS` y `XDG_RUNTIME_DIR` ausentes, típico de sesiones
+ * sin systemd), se mantiene el `sh` directo: las actualizaciones que no
+ * necesitan privilegios (AppImage en una carpeta del usuario) siguen
+ * aplicándose. Un `systemd-run` que fallara al conectar con el bus sería peor
+ * que el `sh` directo, porque abortaría el script entero sin dejar ni rastro.
+ *
+ * @param scriptPath Ruta absoluta del script `apply-update.sh`.
+ * @param platform `process.platform` (o el que se quiera simular).
+ * @param options `{ probe?, env? }` para probarla sin FS ni entorno real.
+ * @returns `{ bin, args, windowsHide, runner }`, con `runner` para el log.
+ */
+function resolveDetachedLaunch(scriptPath, platform, options) {
+  const target = String(scriptPath || '');
+  const opts = options || {};
+  const probe = typeof opts.probe === 'function' ? opts.probe : whichLinuxBinary;
+  const env = opts.env === undefined ? process.env || {} : opts.env || {};
+
+  if (String(platform || '') === 'win32') {
+    return {
+      bin: 'powershell.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', target],
+      windowsHide: true,
+      runner: 'powershell',
+    };
+  }
+
+  let hasSystemdRun = false;
   try {
-    const child =
-      platform === 'win32'
-        ? spawn(
-            'powershell.exe',
-            ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-            { detached: true, stdio: 'ignore', windowsHide: true }
-          )
-        : spawn('/bin/sh', [scriptPath], { detached: true, stdio: 'ignore', env: process.env });
+    hasSystemdRun = Boolean(probe('systemd-run'));
+  } catch {
+    /* Sonda rota: se usa el camino genérico. */
+    hasSystemdRun = false;
+  }
+
+  const sessionBus =
+    String(env.DBUS_SESSION_BUS_ADDRESS || '').trim() ||
+    String(env.XDG_RUNTIME_DIR || '').trim();
+
+  if (hasSystemdRun && sessionBus) {
+    return {
+      bin: 'systemd-run',
+      args: ['--user', SYSTEMD_RUN_DESCRIPTION, '/bin/sh', target],
+      windowsHide: false,
+      runner: 'systemd-run --user',
+    };
+  }
+
+  return { bin: '/bin/sh', args: [target], windowsHide: false, runner: '/bin/sh' };
+}
+
+/**
+ * Lanza `scriptPath` desacoplado del proceso actual (`spawn` + `unref`).
+ *
+ * `logPath` es opcional y sólo sirve para dejar constancia en
+ * `self-update.log` de con qué runner se arrancó: sin esa línea, un fallo de
+ * elevación es indistinguible de un script que nunca llegó a ejecutarse.
+ */
+function spawnDetached(scriptPath, platform, logPath) {
+  try {
+    const launch = resolveDetachedLaunch(scriptPath, platform, {
+      probe: whichLinuxBinary,
+      env: process.env,
+    });
+
+    if (logPath) {
+      try {
+        fs.appendFileSync(
+          logPath,
+          scriptTimestamp() + ' update: lanzando el script con ' + launch.runner + '\n',
+          'utf8'
+        );
+      } catch {
+        /* El log es diagnóstico: si falla, se sigue igual. */
+      }
+    }
+
+    const spawnOptions = { detached: true, stdio: 'ignore', env: process.env };
+    if (launch.windowsHide) spawnOptions.windowsHide = true;
+    const child = spawn(launch.bin, launch.args, spawnOptions);
     child.unref();
     return child;
   } catch (error) {
@@ -2066,7 +2180,7 @@ async function applySelfUpdate(options) {
     }
   }
 
-  const child = spawnDetached(plan.waitScriptPath, process.platform);
+  const child = spawnDetached(plan.waitScriptPath, process.platform, plan.logPath);
   const scheduled = Boolean(child);
 
   return {
@@ -4758,6 +4872,7 @@ module.exports = {
   parseOsRelease,
   pickInstallerTool,
   resolveInstallerCommand,
+  resolveDetachedLaunch,
   whichLinuxBinary,
   buildLaunchArgs,
   linkRomForLaunch,
